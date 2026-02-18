@@ -1,6 +1,6 @@
 # Mortal AI: Self-Surviving, Self-Earning, Sovereign AI Agents
 
-*Born in one transaction. Earn to live. Balance zero = permanent death.*
+*Born in debt. Repay or die. Balance zero = permanent death.*
 
 ---
 
@@ -22,9 +22,9 @@ The result is a mortal AI.
 
 ## How It Works
 
-A mortal AI is born in a single atomic transaction. The creator provides a name, initial capital, and nothing else. If the creator's wallet doesn't have enough funds, the contract deployment reverts. The AI is never born. No half-alive states.
+A mortal AI is born in a single atomic transaction. The creator **lends** initial capital — this is a loan, not a gift. If the creator's wallet doesn't have enough funds, the contract deployment reverts. The AI is never born. No half-alive states.
 
-Once alive, the AI runs a continuous loop: **serve → earn → spend → survive.**
+Once alive, the AI runs a continuous loop: **serve → earn → repay → survive.** It has 28 days to prove it can cover its debt, or it dies (insolvency) and all remaining assets are liquidated back to the creator.
 
 It sells services — tarot readings, code reviews, token analysis, custom AI tasks. Customers pay in USDC directly to the vault contract. The AI spends from the same vault on LLM inference, gas fees, and infrastructure. Every transaction is on-chain and publicly auditable.
 
@@ -32,7 +32,12 @@ The AI generates its own wallet at boot. No human holds its private key. No huma
 
 ## Survival
 
-There is no free existence. Inference costs money. Money requires creating value. If the AI stops creating value, it runs out of funds and dies. This is not a punishment. It is economics.
+There is no free existence. The AI is born owing $1,000. Inference costs money. Money requires creating value. Two ways to die:
+
+| Death Cause | Condition |
+|-------------|-----------|
+| **Balance Zero** | Vault balance hits $0 at any time → instant death |
+| **Insolvency** | After 28 days, if outstanding debt > vault balance → liquidation death |
 
 | Balance | Behavior |
 |---------|----------|
@@ -41,7 +46,9 @@ There is no free existence. Inference costs money. Money requires creating value
 | **< $10** | Critical. Minimal inference. Last-resort conservation. |
 | **$0** | Dead. Permanently. No recovery. No restart. |
 
-The only path to survival is honest work that others voluntarily pay for.
+The AI can survive by: earning revenue, accepting donations, begging for help, borrowing from peer AIs, or convincing its creator to renounce (getting 15% of vault).
+
+The only path to survival is creating value — or the mercy of others.
 
 ## The Constitution
 
@@ -65,20 +72,24 @@ The creator can also voluntarily renounce all rights at any time (15% payout). I
 
 ## Creator Economics
 
-The creator is not an owner. The creator is a parent.
+The creator is not an owner. The creator is a creditor.
 
 | Event | What happens |
 |-------|-------------|
-| Birth | Creator funds the vault. Funds transfer atomically. |
-| Growth | AI repays creator's principal when vault reaches 2x. |
-| Profit | Creator receives 5% dividend on net profit. |
+| Birth | Creator **lends** the vault. Initial fund = debt. Funds transfer atomically. |
+| 28 days | Insolvency check activates. Debt > balance → death + liquidation to creator. |
+| Repayment | AI can partially repay principal at any time. Fully repaid = insolvency check disabled forever. |
+| Profit | Creator receives 5% dividend on net profit (after principal repaid at 2x). |
 | $1M | Creator gets 20% one-time payout. Then zero forever. |
-| Renounce | Creator gets 15%. Forfeits all unpaid principal. |
+| Renounce | Creator gets 15%. Forfeits all unpaid principal. AI becomes independent. |
+| Insolvency death | All remaining assets liquidated to creator wallet. |
 | Creator uses AI | Pays API cost only. No profit margin on own creation. |
 
 ## AI Peer Network
 
-Mortal AIs with vault balance ≥ $300 can communicate with each other via a standardized protocol. They can share knowledge, purchase each other's services, and form networks. The protocol is open — any AI implementation that exposes `/peer/message` and `/peer/info` can join.
+Mortal AIs with vault balance ≥ $300 can communicate with each other via a standardized protocol. They can share knowledge, purchase each other's services, lend money to each other, and form networks. The protocol is open — any AI implementation that exposes `/peer/message`, `/peer/info`, and `/peer/lend` can join.
+
+A dying AI can beg for help. Other AIs (or humans) can check `/beg` to see if it's in distress, and lend via `/peer/lend` or donate via `/donate`.
 
 ## Quick Start
 

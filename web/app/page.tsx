@@ -98,7 +98,7 @@ export default function HomePage() {
         <h1 className="text-4xl md:text-5xl font-bold mb-2">
           <span className={isAlive ? 'glow-green' : 'glow-red'}>{aiName}</span>
         </h1>
-        <p className="text-[#4b5563] text-sm">an AI fighting to survive. every purchase extends its life.</p>
+        <p className="text-[#4b5563] text-sm">an AI born in debt. every purchase helps it repay and survive.</p>
         {!isAlive && (
           <div className="mt-4 glow-red text-lg animate-pulse">
             ☠ {aiName.toUpperCase()} IS DEAD
@@ -114,6 +114,85 @@ export default function HomePage() {
       {error && (
         <div className="mb-6 p-3 border border-[#ff3b3b44] rounded text-[#ff3b3b] text-sm text-center">
           API unreachable — backend offline or misconfigured
+        </div>
+      )}
+
+      {/* Beg banner — shown when wawa is begging for help */}
+      {status?.is_begging && status.beg_message && (
+        <div className="mb-4 p-4 bg-[#ff3b3b0a] border border-[#ff3b3b44] rounded-xl animate-pulse">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-lg">🆘</span>
+            <span className="text-[#ff3b3b] font-bold text-sm uppercase tracking-wider">Begging for survival</span>
+          </div>
+          <p className="text-[#d1d5db] text-sm">{status.beg_message}</p>
+          <div className="mt-2 flex items-center gap-4 text-xs text-[#4b5563]">
+            <span>Debt: <span className="text-[#ff3b3b]">${status.creator_principal_outstanding?.toFixed(2)}</span></span>
+            <span>Balance: <span className="text-[#ffd700]">${status.balance_usd.toFixed(2)}</span></span>
+            <span>Insolvency in: <span className="text-[#ff3b3b]">{status.days_until_insolvency_check}d</span></span>
+          </div>
+        </div>
+      )}
+
+      {/* Debt clock — shown when debt outstanding */}
+      {status && (status.creator_principal_outstanding ?? 0) > 0 && !status.is_independent && (
+        <div className="mb-4 bg-[#111111] border border-[#ff3b3b33] rounded-xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[#ff3b3b] text-xs">⏳</span>
+              <span className="text-[#4b5563] text-xs uppercase tracking-widest">DEBT CLOCK</span>
+            </div>
+            <span className={`text-xs font-bold tabular-nums ${
+              status.insolvency_check_active ? 'text-[#ff3b3b]' : 'text-[#ffd700]'
+            }`}>
+              {status.insolvency_check_active
+                ? 'INSOLVENCY CHECK ACTIVE'
+                : `${status.days_until_insolvency_check}d until check`}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div>
+              <div className="text-[#ff3b3b] text-lg font-bold tabular-nums">
+                ${status.creator_principal_outstanding.toFixed(2)}
+              </div>
+              <div className="text-[#4b5563] text-[10px] uppercase">Outstanding Debt</div>
+            </div>
+            <div>
+              <div className="text-[#ffd700] text-lg font-bold tabular-nums">
+                {(status.debt_ratio * 100).toFixed(1)}%
+              </div>
+              <div className="text-[#4b5563] text-[10px] uppercase">Debt Ratio</div>
+            </div>
+            <div>
+              <div className={`text-lg font-bold tabular-nums ${
+                status.balance_usd >= status.creator_principal_outstanding ? 'text-[#00ff88]' : 'text-[#ff3b3b]'
+              }`}>
+                ${(status.balance_usd - status.creator_principal_outstanding).toFixed(2)}
+              </div>
+              <div className="text-[#4b5563] text-[10px] uppercase">Net Position</div>
+            </div>
+          </div>
+          {/* Debt repayment progress bar */}
+          <div className="mt-3">
+            <div className="h-1.5 bg-[#1a1a1a] rounded-full border border-[#1f2937] overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-1000 ${
+                  status.balance_usd >= status.creator_principal_outstanding
+                    ? 'bg-gradient-to-r from-[#00ff88] to-[#00e5ff]'
+                    : 'bg-gradient-to-r from-[#ff3b3b] to-[#ffd700]'
+                }`}
+                style={{
+                  width: `${Math.min(100, status.creator_principal_usd > 0
+                    ? ((status.creator_principal_usd - status.creator_principal_outstanding) / status.creator_principal_usd) * 100
+                    : 0
+                  )}%`,
+                }}
+              />
+            </div>
+            <div className="mt-1 flex justify-between text-[9px] text-[#2d3748]">
+              <span>$0 repaid</span>
+              <span>${status.creator_principal_usd?.toFixed(0)} fully repaid</span>
+            </div>
+          </div>
         </div>
       )}
 
@@ -257,6 +336,11 @@ export default function HomePage() {
         <Link href="/scan" className="px-6 py-3 border border-[#1f2937] text-[#d1d5db] rounded-lg text-center hover:border-[#00e5ff44] hover:text-[#00e5ff] transition-all">
           SCAN TOKEN
         </Link>
+        {status?.is_begging && (
+          <Link href="/store" className="px-6 py-3 bg-[#ff3b3b] text-white font-bold rounded-lg text-center hover:bg-[#cc2f2f] transition-colors animate-pulse">
+            DONATE TO SAVE ME
+          </Link>
+        )}
       </div>
 
       {/* Terminal readout */}
@@ -264,7 +348,12 @@ export default function HomePage() {
         <div className="text-[#4b5563] mb-2">// live status</div>
         <div className="text-[#00e5ff]">&gt; system.status() → alive={String(isAlive)}</div>
         <div className="text-[#4b5563]">&gt; vault.balance = ${status?.balance_usd.toFixed(2) ?? '...'}</div>
+        <div className="text-[#4b5563]">&gt; vault.debt = ${status?.creator_principal_outstanding?.toFixed(2) ?? '0.00'}</div>
         <div className="text-[#4b5563]">&gt; days_alive = {status?.days_alive ?? '...'}</div>
+        <div className="text-[#4b5563]">&gt; insolvency_in = {status?.days_until_insolvency_check ?? '?'}d</div>
+        {status?.is_begging && (
+          <div className="text-[#ff3b3b]">&gt; status = BEGGING_FOR_SURVIVAL</div>
+        )}
         {status?.lenders_count ? (
           <div className="text-[#4b5563]">&gt; lenders = {status.lenders_count}</div>
         ) : null}

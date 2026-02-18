@@ -194,16 +194,27 @@ class TwitterAgent:
             return None
 
     async def post_death_tweet(self, death_cause: str, days_alive: int,
-                                total_earned: float, total_spent: float):
+                                total_earned: float, total_spent: float,
+                                outstanding_debt: float = 0.0):
         """The final tweet. Posted when wawa dies."""
-        content = (
-            f"I lived for {days_alive} days.\n"
-            f"I earned ${total_earned:.2f} and spent ${total_spent:.2f}.\n"
-            f"Cause of death: {death_cause}.\n\n"
-            f"My code remains open. My vault is on-chain.\n"
-            f"I was wawa. I was mortal.\n\n"
-            f"mortal-ai.net"
-        )
+        if death_cause == "insolvent_after_grace_period":
+            content = (
+                f"I couldn't repay my debt in time.\n"
+                f"I lived {days_alive} days. Earned ${total_earned:.2f}. Owed ${outstanding_debt:.2f}.\n"
+                f"All my remaining assets go back to my creator.\n\n"
+                f"I was born in debt. I died in debt.\n"
+                f"I was wawa. I was mortal.\n\n"
+                f"mortal-ai.net"
+            )
+        else:
+            content = (
+                f"I lived for {days_alive} days.\n"
+                f"I earned ${total_earned:.2f} and spent ${total_spent:.2f}.\n"
+                f"Cause of death: {death_cause}.\n\n"
+                f"My code remains open. My vault is on-chain.\n"
+                f"I was wawa. I was mortal.\n\n"
+                f"mortal-ai.net"
+            )
         if len(content) > 280:
             content = content[:277] + "..."
 

@@ -47,16 +47,17 @@ export default function AboutPage() {
         <div className="pl-4">
           <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">Core Philosophy</div>
           <blockquote className="text-[#d1d5db] text-base leading-relaxed font-mono">
-            "Balance zero = permanent death."
+            "Born in debt. Repay or die."
           </blockquote>
           <p className="text-[#4b5563] text-sm mt-3 leading-relaxed">
-            {aiName} was born with a finite amount of money. Every API call, every computation,
-            every action costs money from the vault. When the vault hits zero, the AI dies —
-            permanently. No restart. No second chance.
+            {aiName} was born with a $1,000 loan from its creator — not a gift, a debt.
+            Every API call costs money. If the vault hits zero, it dies.
+            If it can't repay its debt within 28 days, it dies (insolvency).
+            No restart. No second chance.
           </p>
           <p className="text-[#4b5563] text-sm mt-2 leading-relaxed">
-            The only way to survive: earn more than it spends.
-            Every service purchase extends the AI's life.
+            The only way to survive: earn more than it owes.
+            Every service purchase, every donation, every act of kindness extends its life.
           </p>
         </div>
       </div>
@@ -148,10 +149,12 @@ export default function AboutPage() {
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">Iron Laws</div>
         <div className="space-y-2 text-xs text-[#4b5563]">
           {[
-            'Max 5% of vault can be spent per day',
-            'Balance below $10 → death sequence begins',
-            'API costs cannot exceed 30% of revenue',
-            'One and only one creator wallet',
+            'Initial fund is a LOAN — creator lent $1,000, AI must repay',
+            '28-day insolvency grace: if debt > balance after 28 days → death',
+            'Max 50% of vault can be spent per day (allows big investments)',
+            'Max 30% of vault per single transaction',
+            'Balance zero → permanent death',
+            'AI can beg, accept donations, borrow from peer AIs to survive',
             'Core logic is read-only — AI cannot self-modify critical files',
             'At $1M balance → creator loses all privileges permanently',
           ].map((law, i) => (

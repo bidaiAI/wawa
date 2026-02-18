@@ -35,6 +35,41 @@ export interface VaultStatus {
   lenders_count: number
   death_cause: string | null
   transaction_count: number
+  // Debt model
+  creator_principal_usd: number
+  creator_principal_outstanding: number
+  debt_ratio: number
+  insolvency_grace_days: number
+  insolvency_check_active: boolean
+  days_until_insolvency_check: number
+  is_begging: boolean
+  beg_message: string
+}
+
+export interface BegStatus {
+  is_begging: boolean
+  beg_message: string
+  balance_usd: number
+  outstanding_debt: number
+  debt_ratio: number
+  days_until_insolvency_check: number
+  is_alive: boolean
+}
+
+export interface DonateRequest {
+  amount_usd: number
+  from_wallet?: string
+  tx_hash?: string
+  message?: string
+  chain?: string
+}
+
+export interface DonateResponse {
+  status: string
+  amount_usd: number
+  new_balance: number
+  outstanding_debt: number
+  message: string
 }
 
 export interface ChainInfo {
@@ -253,8 +288,15 @@ export const api = {
     scans: () => request<{ scans: TokenScanResult[] }>('/token/scans'),
   },
 
+  donate: (data: DonateRequest) =>
+    request<DonateResponse>('/donate', { method: 'POST', body: JSON.stringify(data) }),
+
+  beg: () => request<BegStatus>('/beg'),
+
   peer: {
     info: () => request<PeerInfo>('/peer/info'),
+    lend: (data: { from_url: string; amount_usd: number; from_wallet?: string; tx_hash?: string; message?: string }) =>
+      request<DonateResponse>('/peer/lend', { method: 'POST', body: JSON.stringify(data) }),
   },
 
   evolution: {

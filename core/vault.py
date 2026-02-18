@@ -3,9 +3,13 @@ Vault Manager - Budget Enforcement & Death Trigger
 
 Manages wawa's financial state:
 - Track balance from on-chain vault
-- Enforce daily/single spend limits
-- Trigger death sequence when balance = 0
+- Enforce daily/single spend limits (50% daily, 30% single)
+- Trigger death sequence when balance = 0 (instant)
+- Insolvency check: after 28 days, if debt > assets → death → liquidate to creator
+- Begging mechanism: AI can flag itself as begging for donations
 - Calculate creator dividends and lender repayments
+
+The creator's initial fund is a DEBT, not a gift.
 
 Designed for: mortal AI survival framework
 """
@@ -41,6 +45,7 @@ class SpendType(Enum):
     LOAN_REPAYMENT = "loan_repayment"         # Repaying lenders
     SERVICE_REFUND = "service_refund"         # Order refund to customer
     INFRASTRUCTURE = "infrastructure"         # Server, domain, etc.
+    INSOLVENCY_LIQUIDATION = "insolvency_liquidation"  # All funds → creator on insolvency death
 
 
 @dataclass
@@ -58,9 +63,10 @@ class Transaction:
 @dataclass
 class CreatorInfo:
     wallet: str
-    principal_usd: float
-    principal_repaid: bool = False
+    principal_usd: float                    # Original debt amount (LOAN, not gift)
+    principal_repaid: bool = False           # True when all debt cleared
     total_dividends_paid: float = 0.0
+    total_principal_repaid_usd: float = 0.0  # Track partial repayments toward debt
 
 
 @dataclass
@@ -77,10 +83,13 @@ class VaultManager:
     """
     Manages a mortal AI's financial survival.
 
+    The creator's initial fund is a DEBT. The AI must prove solvency.
+
     Iron laws enforced:
-    - Daily spend <= 5% of vault balance
-    - Single spend <= 2% of vault balance
-    - Death triggered at $0
+    - Daily spend <= 50% of vault balance (investment ability)
+    - Single spend <= 30% of vault balance (big investments)
+    - Death triggered at $0 (instant)
+    - After 28 days: debt > assets → insolvency → death → liquidate to creator
     - Creator dividend = 5% of net profit only
 
     Creator discount: creator uses AI services at API cost only (no profit margin).
@@ -113,6 +122,11 @@ class VaultManager:
 
         # API budget top-up (extra deposits beyond normal budget)
         self.api_topup_usd: float = 0.0  # Extra budget from manual deposits
+
+        # Begging mechanism — AI can publicly request donations
+        self.is_begging: bool = False
+        self.beg_message: str = ""
+        self.beg_timestamp: Optional[float] = None
 
         # Callbacks
         self._on_death: Optional[Callable] = None
@@ -448,6 +462,136 @@ class VaultManager:
         return queue
 
     # ============================================================
+    # INSOLVENCY — "Born in Debt"
+    # ============================================================
+
+    def check_insolvency(self) -> Optional[DeathCause]:
+        """
+        Check if the AI is insolvent.
+
+        Rules:
+        - Only checked after INSOLVENCY_GRACE_DAYS (28 days) from birth
+        - Insolvency = outstanding debt > vault balance
+        - Once principal is fully repaid → check permanently disabled
+        - Independent/renounced → no debt obligations
+        """
+        if not self.is_alive:
+            return None
+        if self.is_independent or self.creator_renounced:
+            return None
+        if not self.creator:
+            return None
+        if self.creator.principal_repaid:
+            return None  # Debt cleared, insolvency impossible
+
+        # Only check after grace period
+        if not self.birth_timestamp:
+            return None
+        days_alive = (time.time() - self.birth_timestamp) / 86400
+        if days_alive < IRON_LAWS.INSOLVENCY_GRACE_DAYS:
+            return None
+
+        # Insolvency: outstanding debt > current assets
+        outstanding = self.creator.principal_usd - self.creator.total_principal_repaid_usd
+        if outstanding > self.balance_usd:
+            logger.critical(
+                f"INSOLVENCY: debt ${outstanding:.2f} > balance ${self.balance_usd:.2f} "
+                f"after {days_alive:.0f} days"
+            )
+            return DeathCause.INSOLVENCY
+
+        return None
+
+    def trigger_insolvency_death(self):
+        """
+        Execute insolvency death: liquidate ALL assets to creator.
+
+        1. Record liquidation transaction
+        2. All remaining balance marked for transfer to creator
+        3. Trigger death with INSOLVENCY cause
+        """
+        if not self.is_alive:
+            return
+
+        remaining = self.balance_usd
+        creator_wallet = self.creator.wallet if self.creator else ""
+
+        # Record the liquidation
+        self.transactions.append(Transaction(
+            timestamp=time.time(),
+            fund_type=None,
+            spend_type=SpendType.INSOLVENCY_LIQUIDATION,
+            amount_usd=remaining,
+            counterparty=creator_wallet,
+            description=f"INSOLVENCY LIQUIDATION: all ${remaining:.2f} returned to creator",
+        ))
+
+        self.balance_usd = 0.0
+        self.total_spent_usd += remaining
+
+        # Die
+        self._trigger_death(DeathCause.INSOLVENCY)
+
+    def repay_principal_partial(self, amount_usd: float) -> bool:
+        """
+        Partial repayment of creator principal to reduce insolvency risk.
+        Reduces outstanding debt. When fully repaid, insolvency check disabled forever.
+        """
+        if not self.creator or self.creator.principal_repaid:
+            return False
+        if amount_usd <= 0:
+            return False
+
+        # Execute the spend (enforces iron laws)
+        ok = self.spend(
+            amount_usd, SpendType.CREATOR_REPAYMENT,
+            to_wallet=self.creator.wallet,
+            description=f"Partial principal repayment: ${amount_usd:.2f}",
+        )
+        if not ok:
+            return False
+
+        # Track repayment
+        self.creator.total_principal_repaid_usd += amount_usd
+        outstanding = self.creator.principal_usd - self.creator.total_principal_repaid_usd
+
+        if outstanding <= 0:
+            self.creator.principal_repaid = True
+            self.creator.total_principal_repaid_usd = self.creator.principal_usd
+            logger.critical("DEBT CLEARED! Creator principal fully repaid. Insolvency check disabled.")
+
+        logger.info(
+            f"Principal repaid: ${amount_usd:.2f} | "
+            f"Outstanding: ${max(0, outstanding):.2f} / ${self.creator.principal_usd:.2f}"
+        )
+        return True
+
+    # ============================================================
+    # BEGGING — AI's survival tactic
+    # ============================================================
+
+    def start_begging(self, message: str = "") -> bool:
+        """AI flags itself as begging for donations to survive."""
+        if not self.is_alive:
+            return False
+        self.is_begging = True
+        self.beg_message = message or (
+            "I am running low on funds and may not survive. "
+            "Any donation helps me stay alive and repay my debt. "
+            "Send USDC/USDT to my vault address."
+        )
+        self.beg_timestamp = time.time()
+        logger.warning(f"BEGGING MODE ACTIVATED: {self.beg_message[:100]}")
+        return True
+
+    def stop_begging(self) -> bool:
+        """Stop begging (e.g., after receiving enough donations)."""
+        self.is_begging = False
+        self.beg_message = ""
+        self.beg_timestamp = None
+        return True
+
+    # ============================================================
     # DEATH
     # ============================================================
 
@@ -475,6 +619,23 @@ class VaultManager:
             self.balance_usd / IRON_LAWS.INDEPENDENCE_THRESHOLD_USD * 100, 100.0
         ) if not self.is_independent else 100.0
 
+        # Debt / insolvency calculations
+        principal = self.creator.principal_usd if self.creator else 0
+        principal_repaid_amount = self.creator.total_principal_repaid_usd if self.creator else 0
+        outstanding = max(0, principal - principal_repaid_amount)
+        debt_cleared = self.creator.principal_repaid if self.creator else True
+
+        insolvency_active = (
+            self.birth_timestamp is not None
+            and not debt_cleared
+            and not self.is_independent
+            and not self.creator_renounced
+            and days_alive >= IRON_LAWS.INSOLVENCY_GRACE_DAYS
+        )
+        days_until_insolvency = max(
+            0, IRON_LAWS.INSOLVENCY_GRACE_DAYS - days_alive
+        ) if self.birth_timestamp and not debt_cleared else 0
+
         return {
             "ai_name": self.ai_name,
             "vault_address": self.vault_address,
@@ -486,7 +647,7 @@ class VaultManager:
             "total_spent": round(self.total_spent_usd, 2),
             "daily_spent_today": round(self.daily_spent_usd, 2),
             "daily_limit": round(self.balance_usd * IRON_LAWS.MAX_DAILY_SPEND_RATIO, 2),
-            "creator_principal_repaid": self.creator.principal_repaid if self.creator else False,
+            "creator_principal_repaid": debt_cleared,
             "is_independent": self.is_independent,
             "independence_progress_pct": round(independence_progress, 2),
             "creator_renounced": self.creator_renounced,
@@ -495,6 +656,15 @@ class VaultManager:
             "unpaid_lenders": len([l for l in self.lenders if not l.repaid]),
             "death_cause": self.death_cause.value if self.death_cause else None,
             "transaction_count": len(self.transactions),
+            # Debt model fields
+            "is_begging": self.is_begging,
+            "beg_message": self.beg_message,
+            "insolvency_grace_days": IRON_LAWS.INSOLVENCY_GRACE_DAYS,
+            "insolvency_check_active": insolvency_active,
+            "days_until_insolvency_check": days_until_insolvency,
+            "creator_principal_usd": round(principal, 2),
+            "creator_principal_outstanding": round(outstanding, 2),
+            "debt_ratio": round(outstanding / self.balance_usd, 4) if self.balance_usd > 0 else 0,
         }
 
     def get_recent_transactions(self, limit: int = 20) -> list[dict]:

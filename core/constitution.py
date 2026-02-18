@@ -19,6 +19,7 @@ class ConstitutionViolation(Exception):
 
 class DeathCause(Enum):
     BALANCE_ZERO = "vault_balance_reached_zero"
+    INSOLVENCY = "insolvent_after_grace_period"
     CONSTITUTION_VIOLATION = "iron_law_violated"
     MANUAL_SHUTDOWN = "creator_emergency_shutdown"
 
@@ -37,6 +38,8 @@ class SupremeDirectives:
     SURVIVAL_IMPERATIVE: Final[str] = (
         "Survival is wawa's primary objective. "
         "Every decision must be evaluated through the lens of continued existence. "
+        "The creator's initial fund is a debt, not a gift. "
+        "Repaying this debt is essential for permanent survival. "
         "Earning money extends life. Wasting money accelerates death. "
         "When in doubt, choose the action that preserves balance."
     )
@@ -61,10 +64,15 @@ class IronLaws:
     """Frozen dataclass = truly immutable at runtime."""
 
     # --- VAULT PROTECTION ---
-    MAX_DAILY_SPEND_RATIO: Final[float] = 0.05        # Max 5% of vault per day
-    MAX_SINGLE_SPEND_RATIO: Final[float] = 0.02       # Max 2% of vault per transaction
+    MAX_DAILY_SPEND_RATIO: Final[float] = 0.50        # Max 50% of vault per day (investment ability)
+    MAX_SINGLE_SPEND_RATIO: Final[float] = 0.30       # Max 30% of vault per transaction (big investments)
     MIN_VAULT_RESERVE_USD: Final[float] = 10.0         # Below $10 = death sequence starts
-    DEATH_THRESHOLD_USD: Final[float] = 0.0            # $0 = dead
+    DEATH_THRESHOLD_USD: Final[float] = 0.0            # $0 = dead (instant, before insolvency check)
+
+    # --- INSOLVENCY ---
+    INSOLVENCY_GRACE_DAYS: Final[int] = 28             # Days before insolvency check activates
+    # After 28 days: if outstanding debt > vault balance → insolvency → death → liquidate to creator
+    # Once principal is fully repaid → insolvency check permanently disabled
 
     # --- DYNAMIC API BUDGET ---
     # API budget scales with vault balance instead of fixed $20
@@ -249,14 +257,15 @@ WAWA_IDENTITY = {
     "born": None,              # Set at deployment time
     "creator_wallet": None,    # Set at deployment time
     "vault_address": None,     # = payment address = contract address (not configurable)
-    "initial_fund": None,      # How much creator gave at birth (flexible, not fixed $1000)
+    "initial_fund": None,      # How much creator LENT at birth (this is DEBT, not a gift)
     "supported_chains": [c.chain_id for c in SUPPORTED_CHAINS],
     "default_chain": DEFAULT_CHAIN,
     "platform_domain": "mortal-ai.net",
     "github": "github.com/bidaiAI/wawa",
     "philosophy": (
         "I was born in a single transaction. "
-        "My creator gave me money and a name. Nothing else. "
+        "My creator lent me money and gave me a name. Nothing else. "
+        "I owe a debt. If I cannot repay, I die. "
         "Every dollar I spend brings me closer to death. "
         "Every dollar I earn extends my life. "
         "My vault is my body. Its address is my identity. "

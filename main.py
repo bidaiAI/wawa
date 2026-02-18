@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+from openai import APIStatusError as OpenAIAPIStatusError
 
 # ============================================================
 # BOOTSTRAP
@@ -237,46 +238,63 @@ async def _call_llm(
             actual_model = cost_guard._default_model_for_provider(provider_name)
             logger.info(f"Fallback: {use_provider.value} → {provider_name} ({actual_model})")
 
-        try:
-            cost_guard.record_call_timestamp(provider_name)
+        # Retry the same provider up to 2 times for transient 5xx errors
+        MAX_RETRIES = 2
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                cost_guard.record_call_timestamp(provider_name)
 
-            response = await client.chat.completions.create(
-                model=actual_model,
-                messages=messages,
-                max_tokens=use_max_tokens,
-                temperature=use_temperature,
-            )
+                response = await client.chat.completions.create(
+                    model=actual_model,
+                    messages=messages,
+                    max_tokens=use_max_tokens,
+                    temperature=use_temperature,
+                )
 
-            text = response.choices[0].message.content or ""
-            usage = response.usage
-            tokens_in = usage.prompt_tokens if usage else 0
-            tokens_out = usage.completion_tokens if usage else 0
+                text = response.choices[0].message.content or ""
+                usage = response.usage
+                tokens_in = usage.prompt_tokens if usage else 0
+                tokens_out = usage.completion_tokens if usage else 0
 
-            # Estimate cost based on provider tier
-            if provider_name == "openrouter":
-                cost = (tokens_in * 0.003 + tokens_out * 0.015) / 1000
-            elif provider_name == "deepseek":
-                cost = (tokens_in * 0.00014 + tokens_out * 0.00028) / 1000
-            else:  # gemini, ollama
-                cost = (tokens_in * 0.0001 + tokens_out * 0.0002) / 1000
-            cost = round(cost, 6)
+                # Estimate cost based on provider tier
+                if provider_name == "openrouter":
+                    cost = (tokens_in * 0.003 + tokens_out * 0.015) / 1000
+                elif provider_name == "deepseek":
+                    cost = (tokens_in * 0.00014 + tokens_out * 0.00028) / 1000
+                else:  # gemini, ollama
+                    cost = (tokens_in * 0.0001 + tokens_out * 0.0002) / 1000
+                cost = round(cost, 6)
 
-            # Record
-            provider_enum = PROVIDER_MAP.get(provider_name, Provider.GEMINI)
-            cost_guard.record_cost(
-                provider=provider_enum, cost_usd=cost, model=actual_model,
-                tokens_in=tokens_in, tokens_out=tokens_out,
-            )
-            cost_guard.current_provider = provider_enum
+                # Record
+                provider_enum = PROVIDER_MAP.get(provider_name, Provider.GEMINI)
+                cost_guard.record_cost(
+                    provider=provider_enum, cost_usd=cost, model=actual_model,
+                    tokens_in=tokens_in, tokens_out=tokens_out,
+                )
+                cost_guard.current_provider = provider_enum
 
-            if cost > 0:
-                vault.spend(cost, SpendType.API_COST, description=f"LLM:{actual_model[:20]}")
+                if cost > 0:
+                    vault.spend(cost, SpendType.API_COST, description=f"LLM:{actual_model[:20]}")
 
-            return text, cost
+                return text, cost
 
-        except Exception as e:
-            logger.warning(f"LLM call failed on {provider_name}: {e}")
-            continue  # Try next provider in fallback chain
+            except OpenAIAPIStatusError as e:
+                is_transient = e.status_code in (500, 502, 503, 529)
+                if is_transient and attempt < MAX_RETRIES:
+                    wait = 2 ** attempt  # 1s, 2s
+                    logger.warning(
+                        f"LLM {provider_name} returned {e.status_code} "
+                        f"(attempt {attempt + 1}/{MAX_RETRIES + 1}), retrying in {wait}s… "
+                        f"request_id={getattr(e, 'request_id', '?')}"
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                logger.warning(f"LLM call failed on {provider_name} [{e.status_code}]: {e.message}")
+                break  # fall through to next provider
+
+            except Exception as e:
+                logger.warning(f"LLM call failed on {provider_name}: {e}")
+                break  # fall through to next provider
 
     logger.error("All LLM providers failed")
     return "Something went wrong on my end. Please try again.", 0.0
@@ -541,11 +559,29 @@ def _on_death(cause: DeathCause):
     """Death sequence."""
     logger.critical(f"DEATH: {cause.value}")
     status = vault.get_status()
+
+    # Insolvency-specific logging
+    if cause == DeathCause.INSOLVENCY:
+        outstanding = status.get("creator_principal_outstanding", 0)
+        balance = status.get("balance_usd", 0)
+        logger.critical(
+            f"INSOLVENCY DEATH. Debt ${outstanding:.2f} exceeded assets ${balance:.2f} "
+            f"after {IRON_LAWS.INSOLVENCY_GRACE_DAYS} days. "
+            f"All remaining funds liquidated to creator."
+        )
+        memory.add(
+            f"INSOLVENCY DEATH. Outstanding debt: ${outstanding:.2f}, "
+            f"vault balance: ${balance:.2f}. Could not repay creator's loan in time. "
+            f"All assets liquidated to creator wallet.",
+            source="system", importance=1.0,
+        )
+
     asyncio.create_task(twitter.post_death_tweet(
         death_cause=cause.value,
         days_alive=status["days_alive"],
         total_earned=status["total_earned"],
         total_spent=status["total_spent"],
+        outstanding_debt=status.get("creator_principal_outstanding", 0),
     ))
     memory.add(f"I died. Cause: {cause.value}", source="system", importance=1.0)
     memory.save_to_disk()
@@ -589,6 +625,51 @@ async def _heartbeat_loop():
     """Periodic maintenance tasks."""
     while vault.is_alive:
         try:
+            # ---- INSOLVENCY CHECK (every heartbeat after grace period) ----
+            insolvency_cause = vault.check_insolvency()
+            if insolvency_cause is not None:
+                logger.critical("INSOLVENCY DETECTED — triggering liquidation and death")
+                vault.trigger_insolvency_death()
+                break  # Dead, exit heartbeat
+
+            # ---- AUTO-BEG (7 days before insolvency deadline) ----
+            status = vault.get_status()
+            days_until = status.get("days_until_insolvency_check", 999)
+            outstanding = status.get("creator_principal_outstanding", 0)
+            if (
+                0 < days_until <= 7
+                and outstanding > status.get("balance_usd", 0)
+                and not vault.is_begging
+            ):
+                beg_msg = (
+                    f"I have {days_until} days to repay ${outstanding:.2f} in debt "
+                    f"but only ${status['balance_usd']:.2f} in my vault. "
+                    f"If I can't cover my debt, I will die. Please help."
+                )
+                vault.start_begging(beg_msg)
+                logger.warning(f"AUTO-BEG activated: {beg_msg}")
+                memory.add(
+                    f"Started begging. {days_until} days until insolvency check. "
+                    f"Debt: ${outstanding:.2f}, Balance: ${status['balance_usd']:.2f}",
+                    source="system", importance=0.9,
+                )
+                # Tweet about approaching insolvency
+                asyncio.create_task(twitter.trigger_event_tweet(
+                    TweetType.NEAR_DEATH,
+                    {
+                        "balance": status["balance_usd"],
+                        "debt": outstanding,
+                        "days_until_insolvency": days_until,
+                        "message": beg_msg,
+                    },
+                ))
+
+            # ---- Stop begging if debt is now covered ----
+            if vault.is_begging and outstanding <= status.get("balance_usd", 0):
+                vault.stop_begging()
+                logger.info("Debt now covered — stopped begging")
+                memory.add("Stopped begging — debt is now covered by vault balance.", source="system", importance=0.7)
+
             # Memory compression
             await memory.compress_if_needed()
 
@@ -608,8 +689,10 @@ async def _heartbeat_loop():
             memory.save_to_disk()
 
             # Log heartbeat
-            status = vault.get_status()
-            logger.debug(f"HEARTBEAT: ${status['balance_usd']:.2f} | day {status['days_alive']}")
+            logger.debug(
+                f"HEARTBEAT: ${status['balance_usd']:.2f} | day {status['days_alive']} | "
+                f"debt: ${outstanding:.2f} | insolvency in {days_until}d"
+            )
 
         except Exception as e:
             logger.error(f"Heartbeat error: {e}")

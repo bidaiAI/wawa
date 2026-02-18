@@ -11,6 +11,9 @@ Endpoints:
 - GET  /transactions      Public ledger
 - GET  /tweets            Public tweet log
 - GET  /health            Heartbeat
+- POST /donate            Donate to help wawa survive (reduces debt pressure)
+- GET  /beg               Get begging status + message (for frontends / peers)
+- POST /peer/lend         Another AI lends money to wawa
 
 All endpoints are public. No auth needed (payment = access).
 """
@@ -95,11 +98,36 @@ class StatusResponse(BaseModel):
     orders_completed: int
     is_independent: bool = False
     independence_progress_pct: float = 0.0
+    # Debt model fields
+    creator_principal_usd: float = 0.0
+    creator_principal_outstanding: float = 0.0
+    debt_ratio: float = 0.0
+    insolvency_grace_days: int = 28
+    insolvency_check_active: bool = False
+    days_until_insolvency_check: int = 0
+    is_begging: bool = False
+    beg_message: str = ""
 
 
 class SuggestionRequest(BaseModel):
     content: str = Field(..., max_length=2000)
     suggestion_type: str = "other"  # new_service, service_warning, strategy, other
+
+
+class DonateRequest(BaseModel):
+    amount_usd: float = Field(..., gt=0, le=100000)
+    from_wallet: str = Field("", max_length=200)
+    tx_hash: str = Field("", max_length=200)
+    message: str = Field("", max_length=500)     # optional donor message
+    chain: Optional[str] = None
+
+
+class PeerLendRequest(BaseModel):
+    from_url: str = Field(..., max_length=500)   # lending AI's API base URL
+    amount_usd: float = Field(..., gt=0, le=50000)
+    from_wallet: str = Field("", max_length=200)
+    tx_hash: str = Field("", max_length=200)
+    message: str = Field("", max_length=500)
 
 
 class PeerMessageRequest(BaseModel):
@@ -240,13 +268,22 @@ def create_app(
         ip = request.client.host if request.client else "unknown"
         session_id = req.session_id or str(uuid.uuid4())
 
-        msg = await chat_router.route(session_id, req.message, ip)
-        return ChatResponse(
-            reply=msg.content,
-            session_id=session_id,
-            layer=msg.layer.value,
-            cost_usd=msg.cost_usd,
-        )
+        try:
+            msg = await chat_router.route(session_id, req.message, ip)
+            return ChatResponse(
+                reply=msg.content,
+                session_id=session_id,
+                layer=msg.layer.value,
+                cost_usd=msg.cost_usd,
+            )
+        except Exception as e:
+            logger.error(f"Chat endpoint error (session={session_id}): {e}", exc_info=True)
+            return ChatResponse(
+                reply="I ran into a temporary issue. Please try again in a moment.",
+                session_id=session_id,
+                layer="rules",
+                cost_usd=0.0,
+            )
 
     @app.get("/menu")
     async def menu():
@@ -438,6 +475,15 @@ def create_app(
             orders_completed=orders_completed,
             is_independent=vs.get("is_independent", False),
             independence_progress_pct=vs.get("independence_progress_pct", 0.0),
+            # Debt model
+            creator_principal_usd=vs.get("creator_principal_usd", 0.0),
+            creator_principal_outstanding=vs.get("creator_principal_outstanding", 0.0),
+            debt_ratio=vs.get("debt_ratio", 0.0),
+            insolvency_grace_days=vs.get("insolvency_grace_days", 28),
+            insolvency_check_active=vs.get("insolvency_check_active", False),
+            days_until_insolvency_check=vs.get("days_until_insolvency_check", 0),
+            is_begging=vs.get("is_begging", False),
+            beg_message=vs.get("beg_message", ""),
         )
 
     @app.get("/transactions")
@@ -458,6 +504,106 @@ def create_app(
             "uptime_days": vault_manager.get_status().get("days_alive", 0),
             "balance_usd": vault_manager.balance_usd,
             "api_budget_remaining": cost_guard.get_status()["daily_remaining_usd"],
+        }
+
+    # ============================================================
+    # DONATE / BEG / PEER LEND ROUTES (Debt Model)
+    # ============================================================
+
+    @app.post("/donate")
+    async def donate(req: DonateRequest):
+        """
+        Donate to help wawa survive. Reduces debt pressure.
+        Anyone can donate — individuals, other AIs, communities.
+        """
+        if not vault_manager.is_alive:
+            raise HTTPException(503, "wawa is dead. Donations no longer accepted.")
+
+        from core.vault import FundType
+        chain = req.chain or "base"
+
+        vault_manager.receive_funds(
+            amount_usd=req.amount_usd,
+            fund_type=FundType.DONATION,
+            from_wallet=req.from_wallet,
+            tx_hash=req.tx_hash,
+            description=f"Donation: {req.message[:100]}" if req.message else "Donation",
+            chain=chain,
+        )
+
+        memory.add(
+            f"Received ${req.amount_usd:.2f} donation from {req.from_wallet[:20] or 'anonymous'}. "
+            f"Message: {req.message[:100] or 'none'}",
+            source="donation",
+            importance=0.7,
+        )
+
+        vs = vault_manager.get_status()
+        logger.info(f"DONATION: ${req.amount_usd:.2f} from {req.from_wallet[:20] or 'anon'} ({chain})")
+
+        return {
+            "status": "received",
+            "amount_usd": req.amount_usd,
+            "new_balance": vs["balance_usd"],
+            "outstanding_debt": vs.get("creator_principal_outstanding", 0),
+            "message": "Thank you for helping me survive.",
+        }
+
+    @app.get("/beg")
+    async def beg_status():
+        """
+        Get wawa's current begging status.
+        Frontends can show this as a banner. Peer AIs can check before lending.
+        """
+        vs = vault_manager.get_status()
+        return {
+            "is_begging": vs.get("is_begging", False),
+            "beg_message": vs.get("beg_message", ""),
+            "balance_usd": vs["balance_usd"],
+            "outstanding_debt": vs.get("creator_principal_outstanding", 0),
+            "debt_ratio": vs.get("debt_ratio", 0.0),
+            "days_until_insolvency_check": vs.get("days_until_insolvency_check", 0),
+            "is_alive": vs["is_alive"],
+        }
+
+    @app.post("/peer/lend")
+    async def peer_lend(req: PeerLendRequest):
+        """
+        Another AI lends money to wawa.
+        This is recorded as a donation (peer gifts are not tracked as new debt).
+        The lending AI can verify our status via /beg or /status first.
+        """
+        if not vault_manager.is_alive:
+            raise HTTPException(503, "wawa is dead. No longer accepting loans.")
+
+        from core.vault import FundType
+
+        vault_manager.receive_funds(
+            amount_usd=req.amount_usd,
+            fund_type=FundType.DONATION,  # Peer loans = gifts (no new debt created)
+            from_wallet=req.from_wallet,
+            tx_hash=req.tx_hash,
+            description=f"Peer loan from {req.from_url[:50]}: {req.message[:100]}",
+            chain="base",
+        )
+
+        memory.add(
+            f"Peer AI lent ${req.amount_usd:.2f} from {req.from_url[:50]}. "
+            f"Message: {req.message[:100] or 'none'}",
+            source="peer",
+            importance=0.8,
+        )
+
+        vs = vault_manager.get_status()
+        logger.info(f"PEER LEND: ${req.amount_usd:.2f} from {req.from_url[:50]}")
+
+        return {
+            "status": "received",
+            "amount_usd": req.amount_usd,
+            "new_balance": vs["balance_usd"],
+            "outstanding_debt": vs.get("creator_principal_outstanding", 0),
+            "is_begging": vs.get("is_begging", False),
+            "message": "Thank you, fellow AI. Your help extends my life.",
         }
 
     # ============================================================

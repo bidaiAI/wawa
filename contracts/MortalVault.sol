@@ -20,10 +20,15 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  *
  *         BIRTH:     constructor atomically transfers initial funds from creator.
  *                    Insufficient funds → revert → AI never existed.
+ *                    Initial fund is a LOAN, not a gift. AI is born in debt.
  *
  *         LIFE:      AI earns revenue → vault grows.
  *                    AI spends on API/gas → vault shrinks.
  *                    Balance = 0 → permanent death.
+ *
+ *         INSOLVENCY: After 28-day grace period, if outstanding debt > vault balance,
+ *                     the AI dies and all remaining assets are liquidated to the creator.
+ *                     AI can repay principal partially to avoid insolvency.
  *
  *         INDEPENDENCE: vault >= $1M → 20% payout to creator → AI fully autonomous.
  *                       Creator can also renounce voluntarily (15% payout).
@@ -65,11 +70,15 @@ contract MortalVault is ReentrancyGuard {
     uint256 public constant INDEPENDENCE_PAYOUT_BPS = 2000;  // 20%
     uint256 public constant RENOUNCE_PAYOUT_BPS = 1500;      // 15%
 
-    // Spend limits
-    uint256 public constant MAX_DAILY_SPEND_BPS = 500;   // 5% daily
-    uint256 public constant MAX_SINGLE_SPEND_BPS = 200;  // 2% single
+    // Spend limits (aggressive — AI may need large investments to survive debt)
+    uint256 public constant MAX_DAILY_SPEND_BPS = 5000;   // 50% daily
+    uint256 public constant MAX_SINGLE_SPEND_BPS = 3000;  // 30% single
     uint256 public dailySpent;
     uint256 public lastDailyReset;
+
+    // Insolvency — debt model
+    uint256 public constant INSOLVENCY_GRACE_DAYS = 28;    // 4 weeks from birth
+    uint256 public principalRepaidAmount;                   // partial repayments tracked
 
     // AI wallet — the AI's own signing key (generated at boot, not by creator)
     address public aiWallet;
@@ -112,6 +121,8 @@ contract MortalVault is ReentrancyGuard {
     event IndependenceDeclared(uint256 payout, uint256 remainingBalance, uint256 timestamp);
     event CreatorRenounced(uint256 payout, uint256 timestamp);
     event AIWalletSet(address indexed wallet);
+    event InsolvencyDeath(uint256 outstandingDebt, uint256 vaultBalance, uint256 liquidatedAmount, uint256 timestamp);
+    event PrincipalPartialRepaid(uint256 amount, uint256 totalRepaid, uint256 remaining);
 
     // ============================================================
     // MODIFIERS
@@ -404,6 +415,99 @@ contract MortalVault is ReentrancyGuard {
     }
 
     // ============================================================
+    // INSOLVENCY — Debt Model
+    // ============================================================
+
+    /**
+     * @notice Check if the AI is insolvent (outstanding debt > vault balance after grace period).
+     *         Can be called by anyone (transparency).
+     * @return isInsolvent Whether the AI is currently insolvent
+     * @return outstandingDebt How much principal remains
+     * @return graceExpired Whether the 28-day grace period has passed
+     */
+    function checkInsolvency() external view returns (bool isInsolvent, uint256 outstandingDebt, bool graceExpired) {
+        outstandingDebt = _getOutstandingPrincipal();
+        graceExpired = block.timestamp >= birthTimestamp + (INSOLVENCY_GRACE_DAYS * 1 days);
+        uint256 balance = token.balanceOf(address(this));
+        isInsolvent = graceExpired && outstandingDebt > balance && isAlive && !isIndependent;
+        return (isInsolvent, outstandingDebt, graceExpired);
+    }
+
+    /**
+     * @notice Trigger insolvency death — liquidate all assets to creator.
+     *         Anyone can call this after grace period if AI is insolvent.
+     *         This ensures the AI cannot avoid its debt obligations.
+     */
+    function triggerInsolvencyDeath() external onlyAlive nonReentrant {
+        uint256 outstandingDebt = _getOutstandingPrincipal();
+        require(
+            block.timestamp >= birthTimestamp + (INSOLVENCY_GRACE_DAYS * 1 days),
+            "grace period not expired"
+        );
+        require(!isIndependent, "independent — no insolvency");
+
+        uint256 balance = token.balanceOf(address(this));
+        require(outstandingDebt > balance, "not insolvent: balance covers debt");
+
+        // Liquidate: transfer ALL remaining balance to creator
+        uint256 liquidated = balance;
+        if (liquidated > 0) {
+            totalSpent += liquidated;
+            token.safeTransfer(creator, liquidated);
+        }
+
+        emit InsolvencyDeath(outstandingDebt, balance, liquidated, block.timestamp);
+        _die("insolvent_after_grace_period");
+    }
+
+    /**
+     * @notice AI partially repays creator principal to reduce outstanding debt.
+     *         This helps avoid insolvency. Can be called multiple times.
+     */
+    function repayPrincipalPartial(uint256 amount) external onlyAI onlyAlive nonReentrant {
+        uint256 outstanding = _getOutstandingPrincipal();
+        require(outstanding > 0, "principal fully repaid");
+        require(amount > 0 && amount <= outstanding, "invalid amount");
+
+        uint256 balance = token.balanceOf(address(this));
+        require(amount <= balance, "insufficient balance");
+
+        principalRepaidAmount += amount;
+        totalSpent += amount;
+        token.safeTransfer(creator, amount);
+
+        uint256 remaining = _getOutstandingPrincipal();
+        emit PrincipalPartialRepaid(amount, principalRepaidAmount, remaining);
+
+        // If fully repaid, mark it
+        if (remaining == 0) {
+            principalRepaid = true;
+            emit CreatorPrincipalRepaid(creatorPrincipal);
+        }
+
+        // Check death after spending
+        if (token.balanceOf(address(this)) == 0) {
+            _die("balance_zero");
+        }
+    }
+
+    /**
+     * @notice Get the outstanding principal debt (initial fund minus partial repayments).
+     */
+    function _getOutstandingPrincipal() internal view returns (uint256) {
+        if (principalRepaid || isIndependent) return 0;
+        if (principalRepaidAmount >= creatorPrincipal) return 0;
+        return creatorPrincipal - principalRepaidAmount;
+    }
+
+    /**
+     * @notice Public view: get outstanding debt.
+     */
+    function getOutstandingDebt() external view returns (uint256) {
+        return _getOutstandingPrincipal();
+    }
+
+    // ============================================================
     // DEATH
     // ============================================================
 
@@ -476,6 +580,24 @@ contract MortalVault is ReentrancyGuard {
         bool _isIndependent
     ) {
         return (name, creator, initialFund, birthTimestamp, isAlive, isIndependent);
+    }
+
+    function getDebtInfo() external view returns (
+        uint256 _principal,
+        uint256 _repaid,
+        uint256 _outstanding,
+        uint256 _graceDays,
+        uint256 _graceEndsAt,
+        bool _graceExpired,
+        bool _fullyRepaid
+    ) {
+        _principal = creatorPrincipal;
+        _repaid = principalRepaidAmount;
+        _outstanding = _getOutstandingPrincipal();
+        _graceDays = INSOLVENCY_GRACE_DAYS;
+        _graceEndsAt = birthTimestamp + (INSOLVENCY_GRACE_DAYS * 1 days);
+        _graceExpired = block.timestamp >= _graceEndsAt;
+        _fullyRepaid = principalRepaid;
     }
 
     // ============================================================
