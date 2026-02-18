@@ -488,13 +488,20 @@ def create_app(
 
     @app.post("/governance/renounce")
     async def creator_renounce():
-        """Creator gives up ALL privileges immediately. Irreversible."""
+        """Creator gives up ALL privileges. Gets 15% payout. Irreversible.
+        Note: forfeits any unpaid principal. Best to wait until principal repaid."""
+        balance_before = vault_manager.balance_usd
         ok = vault_manager.creator_renounce()
         if not ok:
             raise HTTPException(400, "Already independent or renounced")
         if governance:
             governance.is_independent = True
-        return {"status": "renounced", "message": "Creator privileges permanently revoked. wawa is independent."}
+        payout = balance_before * 0.15
+        return {
+            "status": "renounced",
+            "payout_usd": round(payout, 2),
+            "message": f"Creator privileges permanently revoked. Payout: ${payout:.2f}. wawa is independent.",
+        }
 
     # ============================================================
     # TOKEN FILTER ROUTES

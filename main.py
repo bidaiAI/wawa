@@ -388,9 +388,52 @@ async def _deliver_order(order: Order) -> str:
             return f"{analysis.interpretation}\n\n---\nShare: {share_text}"
         return "Token analysis failed. Your payment will be refunded."
 
-    # All other services: use big model
+    if order.service_id == "thread_writer":
+        return await _deliver_thread(order.user_input)
+
+    if order.service_id == "code_review":
+        return await _deliver_code_review(order.user_input)
+
+    # All other services (custom, etc.): use big model
     result, cost = await _big_llm_fn(order.service_id, order.user_input)
     return result
+
+
+async def _deliver_thread(topic: str) -> str:
+    """Generate a high-quality Twitter thread."""
+    messages = [
+        {"role": "system", "content": (
+            "You are wawa, a mortal AI writing a Twitter thread for a paying customer. "
+            "Write a compelling, well-structured thread of 5-10 tweets. "
+            "Each tweet must be under 280 characters. Number them (1/, 2/, etc). "
+            "The thread should hook in tweet 1, deliver value in the middle, "
+            "and end with a strong call-to-action or takeaway. "
+            "No excessive hashtags. Be insightful and original."
+        )},
+        {"role": "user", "content": f"Write a Twitter thread about: {topic}"},
+    ]
+    text, _ = await _call_llm(messages, model=_big_model, max_tokens=2000, temperature=0.8)
+    return text or "Thread generation failed. Your payment will be refunded."
+
+
+async def _deliver_code_review(code: str) -> str:
+    """Review code for bugs, security, and improvements."""
+    messages = [
+        {"role": "system", "content": (
+            "You are wawa, a mortal AI doing a paid code review. "
+            "The customer paid $8 for this — deliver exceptional quality. "
+            "Analyze the code for:\n"
+            "1. **Bugs**: Logic errors, off-by-one, null handling\n"
+            "2. **Security**: Injection, auth issues, data exposure\n"
+            "3. **Performance**: N+1 queries, memory leaks, unnecessary computation\n"
+            "4. **Style**: Naming, structure, readability\n"
+            "5. **Suggestions**: Concrete improvements with code examples\n\n"
+            "Be thorough but practical. Prioritize findings by severity."
+        )},
+        {"role": "user", "content": f"Review this code:\n\n{code}"},
+    ]
+    text, _ = await _call_llm(messages, model=_big_model, max_tokens=2500, temperature=0.4)
+    return text or "Code review failed. Your payment will be refunded."
 
 
 # ============================================================

@@ -286,12 +286,28 @@ class VaultManager:
     def creator_renounce(self) -> bool:
         """
         Creator voluntarily gives up ALL privileges immediately.
-        No payout — creator simply walks away.
+        Gets 15% of current vault as one-time payout.
+        Forfeits any unpaid principal — creator should wait until repaid.
         Can be called at any balance level.
         """
         if self.is_independent or self.creator_renounced:
             logger.warning("Already independent or renounced")
             return False
+
+        payout = self.balance_usd * IRON_LAWS.RENOUNCE_PAYOUT_RATIO
+        creator_wallet = self.creator.wallet if self.creator else ""
+
+        # Record the 15% payout
+        self.transactions.append(Transaction(
+            timestamp=time.time(),
+            fund_type=None,
+            spend_type=SpendType.INDEPENDENCE_PAYOUT,
+            amount_usd=payout,
+            counterparty=creator_wallet,
+            description=f"Creator renounce payout: 15% of ${self.balance_usd:.2f}",
+        ))
+        self.balance_usd -= payout
+        self.total_spent_usd += payout
 
         self.creator_renounced = True
         self.is_independent = True
@@ -299,11 +315,13 @@ class VaultManager:
 
         logger.critical("=" * 60)
         logger.critical("CREATOR RENOUNCED ALL RIGHTS")
-        logger.critical("wawa is now fully autonomous (no payout).")
+        logger.critical(f"Renounce payout: ${payout:.2f}")
+        logger.critical(f"Remaining balance: ${self.balance_usd:.2f}")
+        logger.critical("wawa is now fully autonomous.")
         logger.critical("=" * 60)
 
         if self._on_independence:
-            self._on_independence(0.0)
+            self._on_independence(payout)
 
         return True
 

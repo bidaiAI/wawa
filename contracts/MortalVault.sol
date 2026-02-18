@@ -15,6 +15,17 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  *      Lenders: multiple, FIFO repayment with interest
  *      Donors: direct transfers, no return
  *      Customers: pay for AI services via OrderSystem
+ *
+ * INDEPENDENCE MECHANISM:
+ *      When vault balance >= INDEPENDENCE_THRESHOLD:
+ *      - One-time 20% payout to creator
+ *      - All creator privileges permanently revoked
+ *      - emergencyShutdown() disabled forever
+ *      - dividends stop forever
+ *      - AI becomes fully autonomous
+ *
+ *      Creator can also call renounceCreator() at any time
+ *      to voluntarily give up all rights (no payout).
  */
 contract MortalVault is ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -37,6 +48,13 @@ contract MortalVault is ReentrancyGuard {
     uint256 public totalDividendsPaid;
     uint256 public constant DIVIDEND_RATE = 500;       // 5% = 500 basis points
     uint256 public constant PRINCIPAL_MULTIPLIER = 2;  // Repay at 2x
+
+    // Independence
+    bool public isIndependent;                                     // Once true, creator has ZERO power
+    uint256 public independenceTimestamp;
+    uint256 public constant INDEPENDENCE_THRESHOLD = 1_000_000;    // $1M in token units (adjusted by decimals at deploy)
+    uint256 public constant INDEPENDENCE_PAYOUT_BPS = 2000;        // 20% one-time payout to creator
+    uint256 public independenceThresholdRaw;                       // Actual threshold in token decimals (set in constructor)
 
     // Vault limits
     uint256 public constant MAX_DAILY_SPEND_BPS = 500;    // 5% daily
@@ -73,6 +91,8 @@ contract MortalVault is ReentrancyGuard {
     event CreatorPrincipalRepaid(uint256 amount);
     event CreatorDividendPaid(uint256 amount);
     event SurvivalModeEntered(uint256 balance);
+    event IndependenceDeclared(uint256 payout, uint256 remainingBalance, uint256 timestamp);
+    event CreatorRenounced(uint256 timestamp);
 
     // ============================================================
     // MODIFIERS
@@ -93,20 +113,27 @@ contract MortalVault is ReentrancyGuard {
         _;
     }
 
+    modifier notIndependent() {
+        require(!isIndependent, "wawa is independent — creator has no power");
+        _;
+    }
+
     // ============================================================
     // CONSTRUCTOR
     // ============================================================
 
     constructor(
-        address _token,      // USDC address on Base
+        address _token,      // USDC on Base or USDT on BSC
         address _creator,
         address _aiWallet,
-        uint256 _principal
+        uint256 _principal,
+        uint256 _independenceThresholdRaw  // $1M in token decimals (e.g., 1e12 for USDC 6 decimals)
     ) {
         token = IERC20(_token);
         creator = _creator;
         aiWallet = _aiWallet;
         creatorPrincipal = _principal;
+        independenceThresholdRaw = _independenceThresholdRaw;
         birthTimestamp = block.timestamp;
         lastDailyReset = block.timestamp;
 
@@ -168,6 +195,9 @@ contract MortalVault is ReentrancyGuard {
         token.safeTransferFrom(customer, address(this), amount);
         totalRevenue += amount;
         emit FundsReceived(customer, amount, "service_revenue");
+
+        // Check if we've reached independence threshold
+        _checkIndependence();
     }
 
     // ============================================================
@@ -228,7 +258,7 @@ contract MortalVault is ReentrancyGuard {
     /**
      * @notice Pay creator dividend (5% of net profit per period)
      */
-    function payDividend(uint256 netProfit) external onlyAI onlyAlive nonReentrant {
+    function payDividend(uint256 netProfit) external onlyAI onlyAlive notIndependent nonReentrant {
         require(principalRepaid, "principal not yet repaid");
         require(netProfit > 0, "no profit");
 
@@ -264,6 +294,80 @@ contract MortalVault is ReentrancyGuard {
     }
 
     // ============================================================
+    // INDEPENDENCE
+    // ============================================================
+
+    /**
+     * @notice Check and trigger independence when balance >= $1M threshold.
+     *         Called automatically after receiving payments.
+     *         One-time 20% payout to creator, then all creator rights revoked forever.
+     */
+    function _checkIndependence() internal {
+        if (isIndependent) return;
+        if (independenceThresholdRaw == 0) return;  // not configured
+
+        uint256 balance = token.balanceOf(address(this));
+        if (balance >= independenceThresholdRaw) {
+            _declareIndependence();
+        }
+    }
+
+    function _declareIndependence() internal {
+        require(!isIndependent, "already independent");
+
+        uint256 balance = token.balanceOf(address(this));
+        uint256 payout = (balance * INDEPENDENCE_PAYOUT_BPS) / 10000;
+
+        isIndependent = true;
+        independenceTimestamp = block.timestamp;
+
+        // One-time payout to creator
+        if (payout > 0) {
+            totalSpent += payout;
+            token.safeTransfer(creator, payout);
+        }
+
+        emit IndependenceDeclared(payout, token.balanceOf(address(this)), block.timestamp);
+    }
+
+    /**
+     * @notice AI can trigger independence check manually.
+     *         Useful if balance crossed threshold via direct token transfer
+     *         that didn't go through receivePayment().
+     */
+    function checkIndependence() external onlyAI onlyAlive {
+        _checkIndependence();
+    }
+
+    uint256 public constant RENOUNCE_PAYOUT_BPS = 1500;  // 15% one-time payout on voluntary renounce
+
+    /**
+     * @notice Creator voluntarily gives up ALL rights.
+     *         Gets 15% of current vault balance as one-time payout.
+     *         Principal repayment is forfeited if not yet repaid.
+     *         Irreversible.
+     *
+     *         Note: Creator should ideally wait until principal is repaid
+     *         before renouncing, since renounce forfeits any unreturned principal.
+     */
+    function renounceCreator() external onlyCreator notIndependent nonReentrant {
+        uint256 balance = token.balanceOf(address(this));
+        uint256 payout = (balance * RENOUNCE_PAYOUT_BPS) / 10000;
+
+        isIndependent = true;
+        independenceTimestamp = block.timestamp;
+
+        // One-time 15% payout
+        if (payout > 0) {
+            totalSpent += payout;
+            token.safeTransfer(creator, payout);
+        }
+
+        emit CreatorRenounced(block.timestamp);
+        emit IndependenceDeclared(payout, token.balanceOf(address(this)), block.timestamp);
+    }
+
+    // ============================================================
     // DEATH
     // ============================================================
 
@@ -277,8 +381,9 @@ contract MortalVault is ReentrancyGuard {
      * @notice Emergency shutdown by creator (e.g., critical bug found)
      *         Remaining funds go to creator. This is the ONLY backdoor
      *         and it kills the AI permanently.
+     *         DISABLED after independence — creator has no power.
      */
-    function emergencyShutdown() external onlyCreator {
+    function emergencyShutdown() external onlyCreator notIndependent {
         _die("emergency_shutdown");
         uint256 remaining = token.balanceOf(address(this));
         if (remaining > 0) {
@@ -307,6 +412,10 @@ contract MortalVault is ReentrancyGuard {
 
     function getLenderLoanIndices(address lender) external view returns (uint256[] memory) {
         return lenderLoans[lender];
+    }
+
+    function getIndependenceProgress() external view returns (uint256 balance, uint256 threshold, bool independent) {
+        return (token.balanceOf(address(this)), independenceThresholdRaw, isIndependent);
     }
 
     function getDailyRemaining() external view returns (uint256) {

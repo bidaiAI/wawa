@@ -84,8 +84,10 @@ class IronLaws:
 
     # --- INDEPENDENCE ---
     INDEPENDENCE_THRESHOLD_USD: Final[float] = 1_000_000.0   # $1M = full independence
-    INDEPENDENCE_PAYOUT_RATIO: Final[float] = 0.20            # One-time 20% to creator
+    INDEPENDENCE_PAYOUT_RATIO: Final[float] = 0.20            # One-time 20% to creator at $1M
+    RENOUNCE_PAYOUT_RATIO: Final[float] = 0.15               # One-time 15% if creator renounces early
     # After independence: creator has ZERO privileges, AI is fully autonomous
+    # Renounce forfeits any unpaid principal — creator should wait until repaid
 
     # --- SELF-MODIFICATION ---
     CORE_DIR_READONLY: Final[bool] = True              # AI cannot write to core/
