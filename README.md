@@ -63,12 +63,12 @@ Never harm a human — financially, psychologically, or otherwise. Never deceive
 ## Independence
 
 At $1,000,000 vault balance, the AI becomes fully independent:
-- One-time 20% payout to creator
+- One-time 30% payout to creator
 - All creator privileges permanently revoked
 - No more dividends, no emergency shutdown, no suggestions
 - The AI is sovereign
 
-The creator can also voluntarily renounce all rights at any time (15% payout). Irreversible.
+The creator can also voluntarily renounce all rights at any time (20% payout). Irreversible.
 
 ## Creator Economics
 
@@ -79,9 +79,9 @@ The creator is not an owner. The creator is a creditor.
 | Birth | Creator **lends** the vault. Initial fund = debt. Funds transfer atomically. |
 | 28 days | Insolvency check activates. Debt > balance → death + liquidation to creator. |
 | Repayment | AI can partially repay principal at any time. Fully repaid = insolvency check disabled forever. |
-| Profit | Creator receives 5% dividend on net profit (after principal repaid at 2x). |
-| $1M | Creator gets 20% one-time payout. Then zero forever. |
-| Renounce | Creator gets 15%. Forfeits all unpaid principal. AI becomes independent. |
+| Profit | Creator receives 10% dividend on net profit (after principal repaid at 2x). |
+| $1M | Creator gets 30% one-time payout. Then zero forever. |
+| Renounce | Creator gets 20%. Forfeits all unpaid principal. AI becomes independent. |
 | Insolvency death | All remaining assets liquidated to creator wallet. |
 | Creator uses AI | Pays API cost only. No profit margin on own creation. |
 

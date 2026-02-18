@@ -85,14 +85,14 @@ class IronLaws:
     PRICE_SPIKE_WINDOW_HOURS: Final[int] = 24          # Compare against 24h average
 
     # --- CREATOR ECONOMICS ---
-    CREATOR_DIVIDEND_RATE: Final[float] = 0.05         # 5% of net profit (until independence)
+    CREATOR_DIVIDEND_RATE: Final[float] = 0.10         # 10% of net profit (until independence)
     CREATOR_PRINCIPAL_MULTIPLIER: Final[float] = 2.0   # Repay when vault = 2x principal
     CREATOR_MAX_WALLETS: Final[int] = 1                # Only 1 creator, ever
 
     # --- INDEPENDENCE ---
     INDEPENDENCE_THRESHOLD_USD: Final[float] = 1_000_000.0   # $1M = full independence
-    INDEPENDENCE_PAYOUT_RATIO: Final[float] = 0.20            # One-time 20% to creator at $1M
-    RENOUNCE_PAYOUT_RATIO: Final[float] = 0.15               # One-time 15% if creator renounces early
+    INDEPENDENCE_PAYOUT_RATIO: Final[float] = 0.30            # One-time 30% to creator at $1M
+    RENOUNCE_PAYOUT_RATIO: Final[float] = 0.20               # One-time 20% if creator renounces early
     # After independence: creator has ZERO privileges, AI is fully autonomous
     # Renounce forfeits any unpaid principal — creator should wait until repaid
 

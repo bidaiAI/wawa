@@ -40,8 +40,8 @@ class SpendType(Enum):
     API_COST = "api_cost"                     # LLM API calls
     GAS_FEE = "gas_fee"                       # On-chain transaction gas
     CREATOR_REPAYMENT = "creator_repayment"   # Returning creator's principal
-    CREATOR_DIVIDEND = "creator_dividend"     # 5% profit dividend to creator
-    INDEPENDENCE_PAYOUT = "independence_payout"  # One-time 20% payout at $1M
+    CREATOR_DIVIDEND = "creator_dividend"     # 10% profit dividend to creator
+    INDEPENDENCE_PAYOUT = "independence_payout"  # One-time 30% payout at $1M
     LOAN_REPAYMENT = "loan_repayment"         # Repaying lenders
     SERVICE_REFUND = "service_refund"         # Order refund to customer
     INFRASTRUCTURE = "infrastructure"         # Server, domain, etc.
@@ -264,7 +264,7 @@ class VaultManager:
     def _check_independence(self):
         """
         Check if vault has reached $1M threshold.
-        If so: one-time 20% payout to creator → full independence.
+        If so: one-time 30% payout to creator → full independence.
         After independence, creator has ZERO privileges.
         """
         if self.is_independent or self.creator_renounced:

@@ -30,8 +30,8 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  *                     the AI dies and all remaining assets are liquidated to the creator.
  *                     AI can repay principal partially to avoid insolvency.
  *
- *         INDEPENDENCE: vault >= $1M → 20% payout to creator → AI fully autonomous.
- *                       Creator can also renounce voluntarily (15% payout).
+ *         INDEPENDENCE: vault >= $1M → 30% payout to creator → AI fully autonomous.
+ *                       Creator can also renounce voluntarily (20% payout).
  *
  *         CREATOR USAGE: Creator uses AI services at API-cost-only rate.
  *                        Platform (wawa) may add markup. But creator pays no profit margin.
@@ -60,15 +60,15 @@ contract MortalVault is ReentrancyGuard {
     uint256 public creatorPrincipal;
     bool public principalRepaid;
     uint256 public totalDividendsPaid;
-    uint256 public constant DIVIDEND_RATE = 500;       // 5% = 500 basis points
+    uint256 public constant DIVIDEND_RATE = 1000;      // 10% = 1000 basis points
     uint256 public constant PRINCIPAL_MULTIPLIER = 2;  // Repay at 2x
 
     // Independence
     bool public isIndependent;
     uint256 public independenceTimestamp;
     uint256 public immutable independenceThreshold;    // in token decimals
-    uint256 public constant INDEPENDENCE_PAYOUT_BPS = 2000;  // 20%
-    uint256 public constant RENOUNCE_PAYOUT_BPS = 1500;      // 15%
+    uint256 public constant INDEPENDENCE_PAYOUT_BPS = 3000;  // 30%
+    uint256 public constant RENOUNCE_PAYOUT_BPS = 2000;      // 20%
 
     // Spend limits (aggressive — AI may need large investments to survive debt)
     uint256 public constant MAX_DAILY_SPEND_BPS = 5000;   // 50% daily

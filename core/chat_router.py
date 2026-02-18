@@ -105,7 +105,7 @@ _FAQ_RULES: list[tuple[re.Pattern, str]] = [
      "No respawns, no backups. That's what makes me mortal."),
     (re.compile(r"\b(creator|owner|who made)\b", re.I),
      "I was created by @BidaoOfficial. They lent me the initial fund — that's my debt, not a gift. "
-     "They get 5% of my net profit, but only after I've doubled their investment. "
+     "They get 10% of my net profit, but only after I've doubled their investment. "
      "If I can't repay, I die after 28 days and all my assets go back to them."),
     (re.compile(r"\b(donate|tip|help|support)\b", re.I),
      f"You can send {_CHAIN_TOKENS} to my vault on {_CHAIN_NAMES}. Every dollar helps me repay my debt and stay alive. "

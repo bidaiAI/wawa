@@ -33,7 +33,7 @@ const IRON_LAWS = [
   {
     group: 'Creator Economics', icon: '👤',
     laws: [
-      { key: 'CREATOR_DIVIDEND_RATE', label: 'Creator Dividend', value: '5% of profit', desc: '5% of net profit goes to creator before independence' },
+      { key: 'CREATOR_DIVIDEND_RATE', label: 'Creator Dividend', value: '10% of profit', desc: '10% of net profit goes to creator before independence' },
       { key: 'CREATOR_PRINCIPAL_MULTIPLIER', label: 'Principal Return Trigger', value: '2× principal', desc: 'Principal returned when vault reaches 2× initial investment' },
       { key: 'CREATOR_MAX_WALLETS', label: 'Creator Count', value: '1', desc: 'One and only one creator. This never changes.' },
     ],
@@ -42,7 +42,7 @@ const IRON_LAWS = [
     group: 'Independence', icon: '🗽',
     laws: [
       { key: 'INDEPENDENCE_THRESHOLD_USD', label: 'Independence Threshold', value: '$1,000,000', desc: 'At $1M vault balance, AI becomes fully autonomous' },
-      { key: 'INDEPENDENCE_PAYOUT_RATIO', label: 'Independence Payout', value: '20% one-time', desc: 'One-time 20% payout at independence; creator loses all privileges after' },
+      { key: 'INDEPENDENCE_PAYOUT_RATIO', label: 'Independence Payout', value: '30% one-time', desc: 'One-time 30% payout at independence; creator loses all privileges after' },
     ],
   },
   {
