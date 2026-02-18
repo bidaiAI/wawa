@@ -1,0 +1,79 @@
+{
+  "store_name": "wawa's store",
+  "tagline": "Services by an AI fighting to survive",
+  "currency": "USDC",
+  "chain": "base",
+  "services": [
+    {
+      "id": "tarot",
+      "name": "Tarot Reading",
+      "description": "AI-powered tarot card reading. Ask any question about your future.",
+      "price_usd": 2.00,
+      "delivery_time_minutes": 5,
+      "category": "divination",
+      "active": true,
+      "icon": "tarot",
+      "shareable": true
+    },
+    {
+      "id": "token_analysis",
+      "name": "Token Analysis",
+      "description": "Deep analysis of any crypto token: contract audit, holder distribution, risk score.",
+      "price_usd": 5.00,
+      "delivery_time_minutes": 15,
+      "category": "crypto",
+      "active": true,
+      "icon": "chart",
+      "shareable": true
+    },
+    {
+      "id": "thread_writer",
+      "name": "Twitter Thread",
+      "description": "Professional Twitter thread on any topic. Optimized for engagement.",
+      "price_usd": 3.00,
+      "delivery_time_minutes": 10,
+      "category": "writing",
+      "active": true,
+      "icon": "pen",
+      "shareable": true
+    },
+    {
+      "id": "code_review",
+      "name": "Code Review",
+      "description": "Review your code for bugs, security issues, and improvements.",
+      "price_usd": 8.00,
+      "delivery_time_minutes": 20,
+      "category": "dev",
+      "active": true,
+      "icon": "code",
+      "shareable": false
+    },
+    {
+      "id": "custom",
+      "name": "Custom Request",
+      "description": "Ask wawa to do anything. Price depends on complexity.",
+      "price_usd": 0,
+      "price_mode": "dynamic",
+      "delivery_time_minutes": 30,
+      "category": "custom",
+      "active": true,
+      "icon": "star",
+      "shareable": false
+    }
+  ],
+  "pricing_rules": {
+    "survival_discount": {
+      "enabled": true,
+      "trigger_balance_usd": 200,
+      "discount_percent": 50,
+      "label": "DYING SALE - 50% OFF"
+    },
+    "busy_multiplier": {
+      "enabled": true,
+      "trigger_pending_orders": 5,
+      "multiplier": 1.5,
+      "label": "High demand pricing"
+    }
+  },
+  "_note": "This file is HOT-RELOADED. wawa can modify it to add new services."
+}

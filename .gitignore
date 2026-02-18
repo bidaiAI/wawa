@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+
+# Environment
+.env
+.env.local
+*.env
+
+# Data (generated at runtime)
+data/
+*.jsonl
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (for frontend)
+node_modules/
+.next/
+out/
+
+# Solidity
+contracts/artifacts/
+contracts/cache/
+
+# Keys (NEVER commit)
+*.pem
+*.key
+private_key*
+seed_phrase*
