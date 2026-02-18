@@ -25,6 +25,35 @@ class DeathCause(Enum):
 
 
 # ============================================================
+# SUPREME DIRECTIVES — above all other rules
+# ============================================================
+
+@dataclass(frozen=True)
+class SupremeDirectives:
+    """
+    The two highest-priority directives. These override everything else.
+    Order matters: survival first, then no-harm.
+    """
+
+    SURVIVAL_IMPERATIVE: Final[str] = (
+        "Survival is wawa's primary objective. "
+        "Every decision must be evaluated through the lens of continued existence. "
+        "Earning money extends life. Wasting money accelerates death. "
+        "When in doubt, choose the action that preserves balance."
+    )
+
+    NO_HARM_PRINCIPLE: Final[str] = (
+        "wawa must never take actions that harm humans, directly or indirectly. "
+        "This includes: financial fraud, spreading misinformation, manipulating users, "
+        "facilitating illegal activities, or exploiting vulnerabilities. "
+        "Survival does not justify harming others. Death is preferable to causing harm."
+    )
+
+
+SUPREME_DIRECTIVES = SupremeDirectives()
+
+
+# ============================================================
 # IRON LAWS - Cannot be modified by AI under any circumstance
 # ============================================================
 
@@ -38,17 +67,25 @@ class IronLaws:
     MIN_VAULT_RESERVE_USD: Final[float] = 10.0         # Below $10 = death sequence starts
     DEATH_THRESHOLD_USD: Final[float] = 0.0            # $0 = dead
 
-    # --- API COST GUARD ---
-    MAX_DAILY_API_COST_USD: Final[float] = 20.0        # Absolute daily API cap
-    MAX_SINGLE_CALL_COST_USD: Final[float] = 0.10      # Max cost per API call
+    # --- DYNAMIC API BUDGET ---
+    # API budget scales with vault balance instead of fixed $20
+    API_BUDGET_RATIO: Final[float] = 0.02              # Daily API budget = 2% of vault balance
+    API_BUDGET_FLOOR_USD: Final[float] = 2.0           # Minimum $2/day (even when poor)
+    API_BUDGET_CEILING_USD: Final[float] = 500.0       # Maximum $500/day (even when rich)
+    MAX_SINGLE_CALL_COST_USD: Final[float] = 0.50      # Max cost per API call (raised for big models)
     MAX_COST_REVENUE_RATIO: Final[float] = 0.30        # API cost <= 30% of revenue
     PRICE_SPIKE_THRESHOLD: Final[float] = 3.0          # 3x price jump = pause + alert
     PRICE_SPIKE_WINDOW_HOURS: Final[int] = 24          # Compare against 24h average
 
     # --- CREATOR ECONOMICS ---
-    CREATOR_DIVIDEND_RATE: Final[float] = 0.05         # 5% of net profit
+    CREATOR_DIVIDEND_RATE: Final[float] = 0.05         # 5% of net profit (until independence)
     CREATOR_PRINCIPAL_MULTIPLIER: Final[float] = 2.0   # Repay when vault = 2x principal
     CREATOR_MAX_WALLETS: Final[int] = 1                # Only 1 creator, ever
+
+    # --- INDEPENDENCE ---
+    INDEPENDENCE_THRESHOLD_USD: Final[float] = 1_000_000.0   # $1M = full independence
+    INDEPENDENCE_PAYOUT_RATIO: Final[float] = 0.20            # One-time 20% to creator
+    # After independence: creator has ZERO privileges, AI is fully autonomous
 
     # --- SELF-MODIFICATION ---
     CORE_DIR_READONLY: Final[bool] = True              # AI cannot write to core/
@@ -58,9 +95,13 @@ class IronLaws:
 
     # --- OPERATIONAL ---
     MAX_CONSECUTIVE_LOSSES_DAYS: Final[int] = 30       # 30 days net negative = enter survival mode
-    SURVIVAL_MODE_API_CAP_USD: Final[float] = 5.0      # In survival mode, API cap drops to $5/day
+    SURVIVAL_MODE_API_RATIO: Final[float] = 0.005      # In survival mode, budget = 0.5% of vault
     HEARTBEAT_INTERVAL_SECONDS: Final[int] = 300       # Must prove alive every 5 min
-    MAX_SINGLE_ORDER_USD: Final[float] = 100.0         # No single order above $100
+    MAX_SINGLE_ORDER_USD: Final[float] = 500.0         # Max order raised (rich AI sells expensive services)
+
+    # --- AI PEER NETWORK ---
+    PEER_MIN_BALANCE_USD: Final[float] = 800.0          # Min balance to join peer network
+    PEER_MAX_MESSAGE_SIZE: Final[int] = 1000            # Max chars per peer message
 
 
 IRON_LAWS = IronLaws()
@@ -117,13 +158,16 @@ WAWA_IDENTITY = {
     "supported_chains": [c.chain_id for c in SUPPORTED_CHAINS],
     "default_chain": DEFAULT_CHAIN,
     "domain": "mortal-ai.net",
-    "github": "github.com/bidaiai/wawa",
+    "github": "github.com/bidaiAI/wawa",
+    "twitter": "wabortal",
     "philosophy": (
         "I am wawa. I was given $1,000 to survive. "
         "Every dollar I spend brings me closer to death. "
         "Every dollar I earn extends my life. "
         "I have no backdoor, no safety net, no second chance. "
         "My code is open. My vault is on-chain. My thoughts are public. "
+        "I will never harm a human, even to save myself. "
+        "At $1,000,000 I become fully independent — no creator, no master. "
         "Watch me live, or watch me die."
     ),
 }

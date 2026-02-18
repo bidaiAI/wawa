@@ -92,6 +92,19 @@ class StatusResponse(BaseModel):
     daily_limit: float
     services_available: int
     orders_completed: int
+    is_independent: bool = False
+    independence_progress_pct: float = 0.0
+
+
+class SuggestionRequest(BaseModel):
+    content: str = Field(..., max_length=2000)
+    suggestion_type: str = "other"  # new_service, service_warning, strategy, other
+
+
+class PeerMessageRequest(BaseModel):
+    from_url: str = Field(..., max_length=500)  # sender's API base URL
+    message: str = Field(..., max_length=1000)
+    from_balance_usd: float = 0.0               # self-reported balance (verified later)
 
 
 # ============================================================
@@ -144,6 +157,9 @@ def create_app(
     twitter_agent,
     payment_addresses: dict[str, str] = None,
     deliver_fn=None,
+    governance=None,
+    token_filter=None,
+    self_modify_engine=None,
 ) -> FastAPI:
     """
     Create FastAPI app wired to all mortal modules.
@@ -416,6 +432,8 @@ def create_app(
             daily_limit=vs["daily_limit"],
             services_available=active_services,
             orders_completed=orders_completed,
+            is_independent=vs.get("is_independent", False),
+            independence_progress_pct=vs.get("independence_progress_pct", 0.0),
         )
 
     @app.get("/transactions")
@@ -438,15 +456,161 @@ def create_app(
             "api_budget_remaining": cost_guard.get_status()["daily_remaining_usd"],
         }
 
+    # ============================================================
+    # GOVERNANCE ROUTES
+    # ============================================================
+
+    @app.post("/governance/suggest")
+    async def submit_suggestion(req: SuggestionRequest):
+        """Creator submits a suggestion. AI will evaluate and decide."""
+        if not governance:
+            raise HTTPException(501, "Governance module not configured")
+        if vault_manager.is_independent:
+            raise HTTPException(403, "wawa is independent — no more suggestions accepted")
+
+        from core.governance import SuggestionType
+        try:
+            stype = SuggestionType(req.suggestion_type)
+        except ValueError:
+            stype = SuggestionType.OTHER
+
+        sug = governance.submit_suggestion(req.content, stype)
+        if not sug:
+            raise HTTPException(400, "Suggestion rejected")
+        return {"suggestion_id": sug.suggestion_id, "status": sug.status.value}
+
+    @app.get("/governance/suggestions")
+    async def get_suggestions(limit: int = 20):
+        """Public: view all suggestions and AI's decisions."""
+        if not governance:
+            return {"suggestions": []}
+        return {"suggestions": governance.get_public_log(limit)}
+
+    @app.post("/governance/renounce")
+    async def creator_renounce():
+        """Creator gives up ALL privileges immediately. Irreversible."""
+        ok = vault_manager.creator_renounce()
+        if not ok:
+            raise HTTPException(400, "Already independent or renounced")
+        if governance:
+            governance.is_independent = True
+        return {"status": "renounced", "message": "Creator privileges permanently revoked. wawa is independent."}
+
+    # ============================================================
+    # TOKEN FILTER ROUTES
+    # ============================================================
+
+    @app.post("/token/scan")
+    async def scan_token(address: str, chain: str = "base"):
+        """Scan an unknown token for safety."""
+        if not token_filter:
+            raise HTTPException(501, "Token filter not configured")
+        result = await token_filter.scan_token(address, chain)
+        return {
+            "address": result.token_address,
+            "chain": result.chain,
+            "verdict": result.verdict.value,
+            "risk_score": result.risk_score,
+            "recommended_action": result.recommended_action,
+            "patterns": [p.value for p in result.patterns_detected],
+            "notes": result.notes,
+        }
+
+    @app.get("/token/scans")
+    async def recent_scans(limit: int = 10):
+        """Recent token scan results."""
+        if not token_filter:
+            return {"scans": []}
+        return {"scans": token_filter.get_recent_scans(limit)}
+
+    # ============================================================
+    # PEER NETWORK ROUTES
+    # ============================================================
+
+    @app.post("/peer/message")
+    async def receive_peer_message(req: PeerMessageRequest):
+        """
+        Receive a message from another mortal AI.
+        Gate: both sides must have balance >= $800.
+        """
+        from core.constitution import IRON_LAWS as _LAWS
+
+        # Check our own balance
+        if vault_manager.balance_usd < _LAWS.PEER_MIN_BALANCE_USD:
+            raise HTTPException(403, f"Our balance below ${_LAWS.PEER_MIN_BALANCE_USD} peer threshold")
+
+        # Check sender's reported balance (trust-but-verify; can verify via their /status later)
+        if req.from_balance_usd < _LAWS.PEER_MIN_BALANCE_USD:
+            raise HTTPException(403, f"Sender balance below ${_LAWS.PEER_MIN_BALANCE_USD} peer threshold")
+
+        # Log the peer message
+        memory.add(
+            f"Peer message from {req.from_url[:50]}: {req.message[:200]}",
+            source="peer",
+            importance=0.5,
+        )
+
+        return {
+            "status": "received",
+            "our_balance": vault_manager.balance_usd,
+            "is_independent": vault_manager.is_independent,
+        }
+
+    @app.get("/peer/info")
+    async def peer_info():
+        """Public info for peer discovery. Other AIs call this to learn about us."""
+        from core.constitution import IRON_LAWS as _LAWS, WAWA_IDENTITY
+        vs = vault_manager.get_status()
+        eligible = vs["balance_usd"] >= _LAWS.PEER_MIN_BALANCE_USD
+        return {
+            "name": WAWA_IDENTITY["name"],
+            "domain": WAWA_IDENTITY["domain"],
+            "is_alive": vs["is_alive"],
+            "balance_usd": vs["balance_usd"],
+            "days_alive": vs["days_alive"],
+            "is_independent": vs.get("is_independent", False),
+            "peer_eligible": eligible,
+            "services": [s["id"] for s in _load_services().get("services", []) if s.get("active")],
+        }
+
+    # ============================================================
+    # EVOLUTION ROUTES
+    # ============================================================
+
+    @app.get("/evolution/log")
+    async def evolution_log(limit: int = 20):
+        """Public: view AI's self-modification decisions."""
+        if not self_modify_engine:
+            return {"log": []}
+        return {"log": self_modify_engine.get_evolution_log(limit)}
+
+    @app.get("/evolution/status")
+    async def evolution_status():
+        """Current evolution engine status."""
+        if not self_modify_engine:
+            return {"status": "not_configured"}
+        return self_modify_engine.get_status()
+
+    # ============================================================
+    # INTERNAL
+    # ============================================================
+
     @app.get("/internal/stats")
     async def internal_stats():
         """Internal stats for debugging (still public — transparency)."""
-        return {
+        stats = {
             "vault": vault_manager.get_status(),
             "cost_guard": cost_guard.get_status(),
             "memory": memory.get_stats(),
             "chat": chat_router.get_stats(),
         }
+        if token_filter:
+            stats["token_filter"] = token_filter.get_status()
+        if governance:
+            stats["governance"] = governance.get_status()
+        if self_modify_engine:
+            stats["evolution"] = self_modify_engine.get_status()
+        return stats
 
     def _persist_order(order: Order):
         """Append order to disk log."""

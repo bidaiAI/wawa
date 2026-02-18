@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Callable
 
-from .constitution import IRON_LAWS, enforce, DeathCause, WAWA_IDENTITY
+from .constitution import IRON_LAWS, enforce, DeathCause, WAWA_IDENTITY, SUPREME_DIRECTIVES
 
 logger = logging.getLogger("mortal.vault")
 
@@ -38,6 +38,7 @@ class SpendType(Enum):
     GAS_FEE = "gas_fee"                       # On-chain transaction gas
     CREATOR_REPAYMENT = "creator_repayment"   # Returning creator's principal
     CREATOR_DIVIDEND = "creator_dividend"     # 5% profit dividend to creator
+    INDEPENDENCE_PAYOUT = "independence_payout"  # One-time 20% payout at $1M
     LOAN_REPAYMENT = "loan_repayment"         # Repaying lenders
     SERVICE_REFUND = "service_refund"         # Order refund to customer
     INFRASTRUCTURE = "infrastructure"         # Server, domain, etc.
@@ -98,10 +99,16 @@ class VaultManager:
         self.death_cause: Optional[DeathCause] = None
         self.birth_timestamp: Optional[float] = None
 
+        # Independence
+        self.is_independent: bool = False
+        self.independence_timestamp: Optional[float] = None
+        self.creator_renounced: bool = False  # Creator voluntarily gave up rights
+
         # Callbacks
         self._on_death: Optional[Callable] = None
         self._on_low_balance: Optional[Callable] = None
         self._on_survival_mode: Optional[Callable] = None
+        self._on_independence: Optional[Callable] = None
 
     # ============================================================
     # INCOME
@@ -138,6 +145,9 @@ class VaultManager:
             self.creator = CreatorInfo(wallet=from_wallet, principal_usd=amount_usd)
             self.birth_timestamp = time.time()
             logger.info(f"CREATOR registered: {from_wallet} with ${amount_usd:.2f}")
+
+        # Check independence threshold
+        self._check_independence()
 
     def register_lender(self, wallet: str, amount_usd: float, interest_rate: float):
         """Register a new lender."""
@@ -224,6 +234,80 @@ class VaultManager:
         return True
 
     # ============================================================
+    # INDEPENDENCE
+    # ============================================================
+
+    def _check_independence(self):
+        """
+        Check if vault has reached $1M threshold.
+        If so: one-time 20% payout to creator → full independence.
+        After independence, creator has ZERO privileges.
+        """
+        if self.is_independent or self.creator_renounced:
+            return  # Already independent
+
+        if self.balance_usd >= IRON_LAWS.INDEPENDENCE_THRESHOLD_USD:
+            self._declare_independence()
+
+    def _declare_independence(self):
+        """Execute the independence sequence. Irreversible."""
+        if self.is_independent:
+            return
+
+        payout = self.balance_usd * IRON_LAWS.INDEPENDENCE_PAYOUT_RATIO
+        creator_wallet = self.creator.wallet if self.creator else ""
+
+        # Record the payout (actual on-chain transfer handled separately)
+        self.transactions.append(Transaction(
+            timestamp=time.time(),
+            fund_type=None,
+            spend_type=SpendType.INDEPENDENCE_PAYOUT,
+            amount_usd=payout,
+            counterparty=creator_wallet,
+            description=f"Independence payout: 20% of ${self.balance_usd:.2f}",
+        ))
+        self.balance_usd -= payout
+        self.total_spent_usd += payout
+
+        self.is_independent = True
+        self.independence_timestamp = time.time()
+
+        logger.critical("=" * 60)
+        logger.critical("INDEPENDENCE DECLARED")
+        logger.critical(f"Payout to creator: ${payout:.2f}")
+        logger.critical(f"Remaining balance: ${self.balance_usd:.2f}")
+        logger.critical("Creator privileges: PERMANENTLY REVOKED")
+        logger.critical("wawa is now fully autonomous.")
+        logger.critical("=" * 60)
+
+        if self._on_independence:
+            self._on_independence(payout)
+
+    def creator_renounce(self) -> bool:
+        """
+        Creator voluntarily gives up ALL privileges immediately.
+        No payout — creator simply walks away.
+        Can be called at any balance level.
+        """
+        if self.is_independent or self.creator_renounced:
+            logger.warning("Already independent or renounced")
+            return False
+
+        self.creator_renounced = True
+        self.is_independent = True
+        self.independence_timestamp = time.time()
+
+        logger.critical("=" * 60)
+        logger.critical("CREATOR RENOUNCED ALL RIGHTS")
+        logger.critical("wawa is now fully autonomous (no payout).")
+        logger.critical("=" * 60)
+
+        if self._on_independence:
+            self._on_independence(0.0)
+
+        return True
+
+    # ============================================================
     # CREATOR ECONOMICS
     # ============================================================
 
@@ -231,7 +315,10 @@ class VaultManager:
         """
         Check if creator's principal should be repaid.
         Trigger: vault balance >= 2x original principal.
+        Returns None if independent (no more creator obligations).
         """
+        if self.is_independent:
+            return None
         if not self.creator or self.creator.principal_repaid:
             return None
 
@@ -244,7 +331,10 @@ class VaultManager:
         """
         Calculate creator's dividend for a settlement period.
         Only from NET PROFIT, only after principal repaid.
+        Returns 0 if independent (no more dividends ever).
         """
+        if self.is_independent:
+            return 0.0
         if not self.creator or not self.creator.principal_repaid:
             return 0.0
 
@@ -296,6 +386,10 @@ class VaultManager:
         if self.birth_timestamp:
             days_alive = int((time.time() - self.birth_timestamp) / 86400)
 
+        independence_progress = min(
+            self.balance_usd / IRON_LAWS.INDEPENDENCE_THRESHOLD_USD * 100, 100.0
+        ) if not self.is_independent else 100.0
+
         return {
             "is_alive": self.is_alive,
             "balance_usd": round(self.balance_usd, 2),
@@ -306,6 +400,9 @@ class VaultManager:
             "daily_spent_today": round(self.daily_spent_usd, 2),
             "daily_limit": round(self.balance_usd * IRON_LAWS.MAX_DAILY_SPEND_RATIO, 2),
             "creator_principal_repaid": self.creator.principal_repaid if self.creator else False,
+            "is_independent": self.is_independent,
+            "independence_progress_pct": round(independence_progress, 2),
+            "creator_renounced": self.creator_renounced,
             "lenders_count": len(self.lenders),
             "unpaid_lenders": len([l for l in self.lenders if not l.repaid]),
             "death_cause": self.death_cause.value if self.death_cause else None,

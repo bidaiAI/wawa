@@ -53,8 +53,8 @@ class CostGuard:
     """
     Multi-layer API cost protection.
 
-    Layer 1: Absolute daily cap ($20/day default)
-    Layer 2: Per-call price ceiling ($0.10/call default)
+    Layer 1: Dynamic daily cap (2% of vault balance, floor $2, ceiling $500)
+    Layer 2: Per-call price ceiling ($0.50/call)
     Layer 3: Price spike detection (3x jump = pause + alert)
     Layer 4: Cost/revenue ratio check (API cost < 30% of revenue)
     Layer 5: Auto-fallback to cheaper provider
@@ -71,6 +71,11 @@ class CostGuard:
         self.current_provider: Optional[Provider] = None
         self.is_survival_mode: bool = False
         self._price_averages: dict[Provider, float] = {}
+        self._vault_balance_fn: Optional[callable] = None  # fn() -> float
+
+    def set_vault_balance_function(self, fn: callable):
+        """Set function to query current vault balance for dynamic budget."""
+        self._vault_balance_fn = fn
 
     def register_provider(self, config: ProviderConfig):
         """Register an API provider."""
@@ -78,10 +83,28 @@ class CostGuard:
         logger.info(f"Registered provider: {config.name.value} (priority={config.priority})")
 
     def get_daily_cap(self) -> float:
-        """Get current daily API cap based on mode."""
+        """
+        Dynamic daily API budget = 2% of vault balance.
+        Floor: $2/day (can still function when poor)
+        Ceiling: $500/day (no waste when rich)
+        Survival mode: 0.5% of vault balance
+        """
+        vault_balance = 1000.0  # default
+        if self._vault_balance_fn:
+            try:
+                vault_balance = self._vault_balance_fn()
+            except Exception:
+                pass
+
         if self.is_survival_mode:
-            return IRON_LAWS.SURVIVAL_MODE_API_CAP_USD
-        return IRON_LAWS.MAX_DAILY_API_COST_USD
+            budget = vault_balance * IRON_LAWS.SURVIVAL_MODE_API_RATIO
+        else:
+            budget = vault_balance * IRON_LAWS.API_BUDGET_RATIO
+
+        # Enforce floor and ceiling
+        budget = max(budget, IRON_LAWS.API_BUDGET_FLOOR_USD)
+        budget = min(budget, IRON_LAWS.API_BUDGET_CEILING_USD)
+        return round(budget, 2)
 
     def _reset_daily_if_needed(self):
         """Reset daily counter at midnight."""

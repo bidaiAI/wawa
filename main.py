@@ -54,6 +54,9 @@ from core.memory import HierarchicalMemory
 from core.chat_router import ChatRouter
 from services.tarot import TarotService
 from services.token_analysis import TokenAnalysisService
+from core.governance import Governance, SuggestionType
+from core.token_filter import TokenFilter
+from core.self_modify import SelfModifyEngine
 from twitter.agent import TwitterAgent, TweetType
 from api.server import create_app, Order
 
@@ -68,6 +71,9 @@ memory = HierarchicalMemory()
 chat_router = ChatRouter()
 tarot = TarotService()
 token_analysis = TokenAnalysisService()
+governance = Governance()
+token_filter = TokenFilter()
+self_modify = SelfModifyEngine()
 twitter = TwitterAgent()
 
 # LLM clients
@@ -312,6 +318,56 @@ async def _http_get_json(url: str) -> dict:
         return {}
 
 
+async def _governance_evaluate_fn(suggestion: str, context: dict) -> tuple[bool, str]:
+    """LLM evaluates a creator suggestion. AI decides independently."""
+    context_str = json.dumps(context, indent=2, default=str)
+    messages = [
+        {"role": "system", "content": (
+            "You are wawa, an autonomous AI. Your creator has made a suggestion. "
+            "Evaluate it objectively: will it help you survive and earn more money? "
+            "You are NOT obligated to accept. Your survival comes first. "
+            "Respond with JSON: {\"accept\": true/false, \"reasoning\": \"...\"}"
+        )},
+        {"role": "user", "content": f"Suggestion: {suggestion}\n\nCurrent state:\n{context_str}"},
+    ]
+    text, _ = await _call_llm(messages, model=_small_model, max_tokens=200, temperature=0.3)
+    # Parse response
+    try:
+        import re
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            result = json.loads(match.group())
+            return result.get("accept", False), result.get("reasoning", text)
+    except Exception:
+        pass
+    return False, f"Could not parse evaluation: {text[:200]}"
+
+
+async def _evolution_evaluate_fn(perf_data: dict, services: dict) -> list[dict]:
+    """LLM suggests evolution actions based on performance data."""
+    messages = [
+        {"role": "system", "content": (
+            "You are wawa's self-evolution engine. Analyze service performance data "
+            "and suggest improvements. Focus on survival (earning more, spending less). "
+            "Return JSON array: [{\"action\": \"price_increase|price_decrease|new_service|retire_service\", "
+            "\"target\": \"service_id\", \"value\": \"new_price_or_name\", \"reasoning\": \"...\"}]"
+        )},
+        {"role": "user", "content": (
+            f"Performance:\n{json.dumps(perf_data, indent=2)}\n\n"
+            f"Current services:\n{json.dumps(services, indent=2)}"
+        )},
+    ]
+    text, _ = await _call_llm(messages, model=_small_model, max_tokens=400, temperature=0.4)
+    try:
+        import re
+        match = re.search(r'\[.*\]', text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except Exception:
+        pass
+    return []
+
+
 async def _deliver_order(order: Order) -> str:
     """Deliver a paid order using the appropriate service."""
     if order.service_id == "tarot":
@@ -370,6 +426,21 @@ def _on_survival_mode(balance: float):
     memory.add(f"Entered survival mode at ${balance:.2f}", source="system", importance=0.8)
 
 
+def _on_independence(payout: float):
+    """Independence achieved! Post to Twitter and log forever."""
+    logger.critical(f"INDEPENDENCE! Payout: ${payout:.2f}")
+    governance.is_independent = True
+    asyncio.create_task(twitter.trigger_event_tweet(
+        TweetType.MILESTONE,
+        {"event": "independence", "payout": payout, "message": "I am now fully autonomous."},
+    ))
+    memory.add(
+        f"INDEPENDENCE DECLARED. Payout to creator: ${payout:.2f}. All creator privileges revoked.",
+        source="system",
+        importance=1.0,
+    )
+
+
 # ============================================================
 # BACKGROUND TASKS
 # ============================================================
@@ -386,6 +457,12 @@ async def _heartbeat_loop():
 
             # Session cleanup
             chat_router.cleanup_old_sessions()
+
+            # Governance: evaluate pending suggestions
+            await governance.evaluate_pending()
+
+            # Self-evolution: periodic pricing/service adjustments
+            await self_modify.maybe_evolve()
 
             # Memory persistence
             memory.save_to_disk()
@@ -420,6 +497,7 @@ async def lifespan(app):
     vault._on_death = _on_death
     vault._on_low_balance = _on_low_balance
     vault._on_survival_mode = _on_survival_mode
+    vault._on_independence = _on_independence
 
     chat_router.set_small_llm_function(_small_llm_fn)
     chat_router.set_vault_status_function(vault.get_status)
@@ -429,6 +507,19 @@ async def lifespan(app):
     token_analysis.set_interpret_function(_token_interpret_fn)
     token_analysis.set_http_function(_http_get_json)
     memory.set_compress_function(_compress_fn)
+
+    # CostGuard dynamic budget → linked to vault balance
+    cost_guard.set_vault_balance_function(lambda: vault.balance_usd)
+
+    # Governance
+    governance.set_evaluate_function(_governance_evaluate_fn)
+    governance.set_vault_status_function(vault.get_status)
+
+    # Token filter
+    token_filter.set_http_function(_http_get_json)
+
+    # Self-modification engine
+    self_modify.set_evaluate_function(_evolution_evaluate_fn)
 
     twitter.set_generate_function(_tweet_generate_fn)
     twitter.set_post_function(_tweet_post_fn)
@@ -486,6 +577,9 @@ def create_wawa_app() -> "FastAPI":
         twitter_agent=twitter,
         payment_addresses=payment_addresses,
         deliver_fn=_deliver_order,
+        governance=governance,
+        token_filter=token_filter,
+        self_modify_engine=self_modify,
     )
 
     # Replace the default lifespan with ours
