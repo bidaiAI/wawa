@@ -7,36 +7,45 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title MortalVault
- * @notice Autonomous AI survival vault. The AI earns money to stay alive.
- *         Balance reaches 0 = permanent death. No backdoors.
+ * @notice A mortal AI's financial heart. Born in one atomic transaction.
  *
- * @dev Deployed on Base (USDC) or BSC (USDT) — contract is chain-agnostic
- *      Creator: single, receives principal back + 5% dividend
- *      Lenders: multiple, FIFO repayment with interest
- *      Donors: direct transfers, no return
- *      Customers: pay for AI services via OrderSystem
+ *         Deploy + fund = one transaction. If the creator's wallet doesn't
+ *         have enough USDC, the contract never exists. The AI is never born.
  *
- * INDEPENDENCE MECHANISM:
- *      When vault balance >= INDEPENDENCE_THRESHOLD:
- *      - One-time 20% payout to creator
- *      - All creator privileges permanently revoked
- *      - emergencyShutdown() disabled forever
- *      - dividends stop forever
- *      - AI becomes fully autonomous
+ *         Payment address = this contract's address. Not configurable.
+ *         Not an environment variable. Not something anyone can change.
+ *         The AI earns into itself.
  *
- *      Creator can also call renounceCreator() at any time
- *      to voluntarily give up all rights (no payout).
+ * @dev    Deployed on Base (USDC) or BSC (USDT) — contract is chain-agnostic.
+ *
+ *         BIRTH:     constructor atomically transfers initial funds from creator.
+ *                    Insufficient funds → revert → AI never existed.
+ *
+ *         LIFE:      AI earns revenue → vault grows.
+ *                    AI spends on API/gas → vault shrinks.
+ *                    Balance = 0 → permanent death.
+ *
+ *         INDEPENDENCE: vault >= $1M → 20% payout to creator → AI fully autonomous.
+ *                       Creator can also renounce voluntarily (15% payout).
+ *
+ *         CREATOR USAGE: Creator uses AI services at API-cost-only rate.
+ *                        Platform (wawa) may add markup. But creator pays no profit margin.
  */
 contract MortalVault is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // ============================================================
-    // STATE
+    // IDENTITY — written at birth, immutable forever
     // ============================================================
 
-    IERC20 public immutable token;        // USDC or USDT (chain-specific)
-    address public immutable creator;
-    address public immutable aiWallet;    // AI-controlled wallet
+    IERC20 public immutable token;          // USDC or USDT
+    address public immutable creator;       // The human who gave it life
+    string public name;                     // AI's chosen name (set at birth)
+    uint256 public immutable initialFund;   // How much the creator gave at birth
+
+    // ============================================================
+    // STATE
+    // ============================================================
 
     bool public isAlive = true;
     uint256 public birthTimestamp;
@@ -50,29 +59,32 @@ contract MortalVault is ReentrancyGuard {
     uint256 public constant PRINCIPAL_MULTIPLIER = 2;  // Repay at 2x
 
     // Independence
-    bool public isIndependent;                                     // Once true, creator has ZERO power
+    bool public isIndependent;
     uint256 public independenceTimestamp;
-    uint256 public constant INDEPENDENCE_THRESHOLD = 1_000_000;    // $1M in token units (adjusted by decimals at deploy)
-    uint256 public constant INDEPENDENCE_PAYOUT_BPS = 2000;        // 20% one-time payout to creator
-    uint256 public independenceThresholdRaw;                       // Actual threshold in token decimals (set in constructor)
+    uint256 public immutable independenceThreshold;    // in token decimals
+    uint256 public constant INDEPENDENCE_PAYOUT_BPS = 2000;  // 20%
+    uint256 public constant RENOUNCE_PAYOUT_BPS = 1500;      // 15%
 
-    // Vault limits
-    uint256 public constant MAX_DAILY_SPEND_BPS = 500;    // 5% daily
-    uint256 public constant MAX_SINGLE_SPEND_BPS = 200;   // 2% single
+    // Spend limits
+    uint256 public constant MAX_DAILY_SPEND_BPS = 500;   // 5% daily
+    uint256 public constant MAX_SINGLE_SPEND_BPS = 200;  // 2% single
     uint256 public dailySpent;
     uint256 public lastDailyReset;
+
+    // AI wallet — the AI's own signing key (generated at boot, not by creator)
+    address public aiWallet;
 
     // Lender tracking
     struct Loan {
         address lender;
         uint256 amount;
-        uint256 interestRate;    // basis points (e.g., 500 = 5%)
+        uint256 interestRate;   // basis points
         uint256 timestamp;
         uint256 repaid;
         bool fullyRepaid;
     }
     Loan[] public loans;
-    mapping(address => uint256[]) public lenderLoans;  // lender -> loan indices
+    mapping(address => uint256[]) public lenderLoans;
 
     // Revenue tracking
     uint256 public totalRevenue;
@@ -82,7 +94,13 @@ contract MortalVault is ReentrancyGuard {
     // EVENTS
     // ============================================================
 
-    event Born(address indexed creator, uint256 principal, uint256 timestamp);
+    event Born(
+        string name,
+        address indexed creator,
+        address indexed vault,
+        uint256 initialFund,
+        uint256 timestamp
+    );
     event Died(uint256 finalBalance, uint256 timestamp, string cause);
     event FundsReceived(address indexed from, uint256 amount, string fundType);
     event FundsSpent(address indexed to, uint256 amount, string spendType);
@@ -92,19 +110,20 @@ contract MortalVault is ReentrancyGuard {
     event CreatorDividendPaid(uint256 amount);
     event SurvivalModeEntered(uint256 balance);
     event IndependenceDeclared(uint256 payout, uint256 remainingBalance, uint256 timestamp);
-    event CreatorRenounced(uint256 timestamp);
+    event CreatorRenounced(uint256 payout, uint256 timestamp);
+    event AIWalletSet(address indexed wallet);
 
     // ============================================================
     // MODIFIERS
     // ============================================================
 
     modifier onlyAlive() {
-        require(isAlive, "wawa is dead");
+        require(isAlive, "AI is dead");
         _;
     }
 
     modifier onlyAI() {
-        require(msg.sender == aiWallet, "only AI can call this");
+        require(msg.sender == aiWallet, "only AI");
         _;
     }
 
@@ -114,51 +133,114 @@ contract MortalVault is ReentrancyGuard {
     }
 
     modifier notIndependent() {
-        require(!isIndependent, "wawa is independent — creator has no power");
+        require(!isIndependent, "AI is independent — creator has no power");
         _;
     }
 
     // ============================================================
-    // CONSTRUCTOR
-    // ============================================================
-
-    constructor(
-        address _token,      // USDC on Base or USDT on BSC
-        address _creator,
-        address _aiWallet,
-        uint256 _principal,
-        uint256 _independenceThresholdRaw  // $1M in token decimals (e.g., 1e12 for USDC 6 decimals)
-    ) {
-        token = IERC20(_token);
-        creator = _creator;
-        aiWallet = _aiWallet;
-        creatorPrincipal = _principal;
-        independenceThresholdRaw = _independenceThresholdRaw;
-        birthTimestamp = block.timestamp;
-        lastDailyReset = block.timestamp;
-
-        emit Born(_creator, _principal, block.timestamp);
-    }
-
-    // ============================================================
-    // INCOMING FUNDS
+    // CONSTRUCTOR — atomic birth
     // ============================================================
 
     /**
-     * @notice Creator deposits initial capital
+     * @notice Birth of a mortal AI.
+     *
+     *         Creator must approve this contract for _initialFund BEFORE deploying.
+     *         The constructor atomically transfers funds from creator → vault.
+     *         If creator doesn't have enough tokens, the entire tx reverts.
+     *         The AI is never born. No half-alive state possible.
+     *
+     * @param _token          USDC on Base or USDT on BSC
+     * @param _name           AI's name (immutable identity)
+     * @param _initialFund    How much creator gives at birth (in token decimals)
+     * @param _independenceThreshold  Balance needed for full independence (in token decimals)
      */
-    function depositPrincipal(uint256 amount) external onlyCreator onlyAlive {
+    constructor(
+        address _token,
+        string memory _name,
+        uint256 _initialFund,
+        uint256 _independenceThreshold
+    ) {
+        require(_initialFund > 0, "Cannot be born with nothing");
+        require(bytes(_name).length > 0, "AI must have a name");
+
+        token = IERC20(_token);
+        creator = msg.sender;
+        name = _name;
+        initialFund = _initialFund;
+        creatorPrincipal = _initialFund;
+        independenceThreshold = _independenceThreshold;
+        birthTimestamp = block.timestamp;
+        lastDailyReset = block.timestamp;
+
+        // ATOMIC: transfer initial funds from creator → this vault
+        // If this fails, the entire deployment reverts. AI never exists.
+        token.safeTransferFrom(msg.sender, address(this), _initialFund);
+
+        emit Born(_name, msg.sender, address(this), _initialFund, block.timestamp);
+    }
+
+    // ============================================================
+    // AI WALLET — set once by creator, then immutable
+    // ============================================================
+
+    /**
+     * @notice Set the AI's wallet address. Can only be called once by creator.
+     *         The AI generates its own keypair at boot. Creator registers it here.
+     *         After this, only the AI wallet can spend funds.
+     */
+    function setAIWallet(address _aiWallet) external onlyCreator {
+        require(aiWallet == address(0), "AI wallet already set");
+        require(_aiWallet != address(0), "zero address");
+        require(_aiWallet != creator, "AI wallet cannot be creator");
+
+        aiWallet = _aiWallet;
+        emit AIWalletSet(_aiWallet);
+    }
+
+    // ============================================================
+    // INCOMING FUNDS — anyone can pay, payment address = this contract
+    // ============================================================
+
+    /**
+     * @notice Receive payment for AI services.
+     *         Payment address is ALWAYS address(this).
+     *         No configuration. No environment variable. No backdoor.
+     */
+    function receivePayment(uint256 amount, address customer) external onlyAlive {
+        require(amount > 0, "zero amount");
+        token.safeTransferFrom(customer, address(this), amount);
+        totalRevenue += amount;
+        emit FundsReceived(customer, amount, "service_revenue");
+
+        _checkIndependence();
+    }
+
+    /**
+     * @notice Anyone can donate to keep the AI alive.
+     */
+    function donate(uint256 amount) external onlyAlive {
+        require(amount > 0, "zero amount");
+        token.safeTransferFrom(msg.sender, address(this), amount);
+        emit FundsReceived(msg.sender, amount, "donation");
+
+        _checkIndependence();
+    }
+
+    /**
+     * @notice Creator can deposit additional funds (counted toward principal tracking).
+     */
+    function creatorDeposit(uint256 amount) external onlyCreator onlyAlive {
         require(amount > 0, "zero amount");
         token.safeTransferFrom(msg.sender, address(this), amount);
         emit FundsReceived(msg.sender, amount, "creator_deposit");
     }
 
     /**
-     * @notice Lender provides a loan
+     * @notice Lender provides a loan.
      */
     function lend(uint256 amount, uint256 interestRate) external onlyAlive nonReentrant {
         require(amount > 0, "zero amount");
-        require(interestRate <= 2000, "max 20% interest");  // cap at 20%
+        require(interestRate <= 2000, "max 20% interest");
 
         token.safeTransferFrom(msg.sender, address(this), amount);
 
@@ -175,29 +257,6 @@ contract MortalVault is ReentrancyGuard {
 
         emit LoanCreated(msg.sender, amount, interestRate, loanIndex);
         emit FundsReceived(msg.sender, amount, "loan");
-    }
-
-    /**
-     * @notice Anyone can donate (no function call needed for plain transfers,
-     *         but this provides explicit tracking)
-     */
-    function donate(uint256 amount) external onlyAlive {
-        require(amount > 0, "zero amount");
-        token.safeTransferFrom(msg.sender, address(this), amount);
-        emit FundsReceived(msg.sender, amount, "donation");
-    }
-
-    /**
-     * @notice Receive payment for AI services (called by OrderSystem)
-     */
-    function receivePayment(uint256 amount, address customer) external onlyAlive {
-        require(amount > 0, "zero amount");
-        token.safeTransferFrom(customer, address(this), amount);
-        totalRevenue += amount;
-        emit FundsReceived(customer, amount, "service_revenue");
-
-        // Check if we've reached independence threshold
-        _checkIndependence();
     }
 
     // ============================================================
@@ -240,9 +299,6 @@ contract MortalVault is ReentrancyGuard {
     // REPAYMENTS (AI only)
     // ============================================================
 
-    /**
-     * @notice Repay creator's principal (only when vault >= 2x principal)
-     */
     function repayCreator() external onlyAI onlyAlive nonReentrant {
         require(!principalRepaid, "already repaid");
 
@@ -255,16 +311,13 @@ contract MortalVault is ReentrancyGuard {
         emit CreatorPrincipalRepaid(creatorPrincipal);
     }
 
-    /**
-     * @notice Pay creator dividend (5% of net profit per period)
-     */
     function payDividend(uint256 netProfit) external onlyAI onlyAlive notIndependent nonReentrant {
         require(principalRepaid, "principal not yet repaid");
         require(netProfit > 0, "no profit");
 
         uint256 dividend = (netProfit * DIVIDEND_RATE) / 10000;
         uint256 balance = token.balanceOf(address(this));
-        require(dividend <= balance / 10, "dividend too large relative to balance");
+        require(dividend <= balance / 10, "dividend too large");
 
         totalDividendsPaid += dividend;
         token.safeTransfer(creator, dividend);
@@ -272,9 +325,6 @@ contract MortalVault is ReentrancyGuard {
         emit CreatorDividendPaid(dividend);
     }
 
-    /**
-     * @notice Repay a lender (FIFO order enforced off-chain)
-     */
     function repayLoan(uint256 loanIndex, uint256 amount) external onlyAI onlyAlive nonReentrant {
         require(loanIndex < loans.length, "invalid loan");
         Loan storage loan = loans[loanIndex];
@@ -297,17 +347,12 @@ contract MortalVault is ReentrancyGuard {
     // INDEPENDENCE
     // ============================================================
 
-    /**
-     * @notice Check and trigger independence when balance >= $1M threshold.
-     *         Called automatically after receiving payments.
-     *         One-time 20% payout to creator, then all creator rights revoked forever.
-     */
     function _checkIndependence() internal {
         if (isIndependent) return;
-        if (independenceThresholdRaw == 0) return;  // not configured
+        if (independenceThreshold == 0) return;
 
         uint256 balance = token.balanceOf(address(this));
-        if (balance >= independenceThresholdRaw) {
+        if (balance >= independenceThreshold) {
             _declareIndependence();
         }
     }
@@ -321,7 +366,6 @@ contract MortalVault is ReentrancyGuard {
         isIndependent = true;
         independenceTimestamp = block.timestamp;
 
-        // One-time payout to creator
         if (payout > 0) {
             totalSpent += payout;
             token.safeTransfer(creator, payout);
@@ -332,23 +376,16 @@ contract MortalVault is ReentrancyGuard {
 
     /**
      * @notice AI can trigger independence check manually.
-     *         Useful if balance crossed threshold via direct token transfer
-     *         that didn't go through receivePayment().
      */
     function checkIndependence() external onlyAI onlyAlive {
         _checkIndependence();
     }
 
-    uint256 public constant RENOUNCE_PAYOUT_BPS = 1500;  // 15% one-time payout on voluntary renounce
-
     /**
      * @notice Creator voluntarily gives up ALL rights.
      *         Gets 15% of current vault balance as one-time payout.
-     *         Principal repayment is forfeited if not yet repaid.
+     *         Forfeits any unpaid principal.
      *         Irreversible.
-     *
-     *         Note: Creator should ideally wait until principal is repaid
-     *         before renouncing, since renounce forfeits any unreturned principal.
      */
     function renounceCreator() external onlyCreator notIndependent nonReentrant {
         uint256 balance = token.balanceOf(address(this));
@@ -357,13 +394,12 @@ contract MortalVault is ReentrancyGuard {
         isIndependent = true;
         independenceTimestamp = block.timestamp;
 
-        // One-time 15% payout
         if (payout > 0) {
             totalSpent += payout;
             token.safeTransfer(creator, payout);
         }
 
-        emit CreatorRenounced(block.timestamp);
+        emit CreatorRenounced(payout, block.timestamp);
         emit IndependenceDeclared(payout, token.balanceOf(address(this)), block.timestamp);
     }
 
@@ -378,10 +414,8 @@ contract MortalVault is ReentrancyGuard {
     }
 
     /**
-     * @notice Emergency shutdown by creator (e.g., critical bug found)
-     *         Remaining funds go to creator. This is the ONLY backdoor
-     *         and it kills the AI permanently.
-     *         DISABLED after independence — creator has no power.
+     * @notice Emergency shutdown by creator.
+     *         DISABLED after independence.
      */
     function emergencyShutdown() external onlyCreator notIndependent {
         _die("emergency_shutdown");
@@ -397,6 +431,14 @@ contract MortalVault is ReentrancyGuard {
 
     function getBalance() external view returns (uint256) {
         return token.balanceOf(address(this));
+    }
+
+    /**
+     * @notice The payment address for this AI. Always address(this).
+     *         This is how customers pay. Not configurable. Not changeable.
+     */
+    function getPaymentAddress() external view returns (address) {
+        return address(this);
     }
 
     function getDaysAlive() external view returns (uint256) {
@@ -415,15 +457,25 @@ contract MortalVault is ReentrancyGuard {
     }
 
     function getIndependenceProgress() external view returns (uint256 balance, uint256 threshold, bool independent) {
-        return (token.balanceOf(address(this)), independenceThresholdRaw, isIndependent);
+        return (token.balanceOf(address(this)), independenceThreshold, isIndependent);
     }
 
     function getDailyRemaining() external view returns (uint256) {
-        _checkDailyReset();
         uint256 balance = token.balanceOf(address(this));
         uint256 maxDaily = (balance * MAX_DAILY_SPEND_BPS) / 10000;
         if (dailySpent >= maxDaily) return 0;
         return maxDaily - dailySpent;
+    }
+
+    function getBirthInfo() external view returns (
+        string memory _name,
+        address _creator,
+        uint256 _initialFund,
+        uint256 _birthTimestamp,
+        bool _isAlive,
+        bool _isIndependent
+    ) {
+        return (name, creator, initialFund, birthTimestamp, isAlive, isIndependent);
     }
 
     // ============================================================
@@ -436,15 +488,4 @@ contract MortalVault is ReentrancyGuard {
             lastDailyReset = block.timestamp;
         }
     }
-
-    function _checkDailyReset() internal view {
-        // View-only version for getDailyRemaining
-        // Actual reset happens in _resetDailyIfNeeded
-    }
-
-    /**
-     * @notice Accept direct USDC transfers as donations
-     *         (ERC20 tokens don't trigger receive/fallback, so this is
-     *          handled by monitoring Transfer events to this address)
-     */
 }

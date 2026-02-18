@@ -77,7 +77,8 @@ self_modify = SelfModifyEngine()
 twitter = TwitterAgent()
 
 # LLM clients
-_llm_client: Optional[AsyncOpenAI] = None
+_llm_client: Optional[AsyncOpenAI] = None     # small model (Gemini/DeepSeek)
+_big_llm_client: Optional[AsyncOpenAI] = None  # big model (OpenRouter/Claude)
 _small_model: str = ""
 _big_model: str = ""
 
@@ -87,43 +88,131 @@ _big_model: str = ""
 # ============================================================
 
 def _setup_llm():
-    """Configure LLM client from env vars with multi-provider fallback."""
-    global _llm_client, _small_model, _big_model
+    """
+    Configure LLM clients from env vars with multi-provider fallback.
 
-    # Provider priority: ZEUS > OPENROUTER > TOGETHER > OLLAMA
-    providers = [
-        (Provider.ZEUS, os.getenv("ZEUS_API_KEY"), os.getenv("ZEUS_BASE_URL", "https://api.zeus-ai.app/v1")),
-        (Provider.OPENROUTER, os.getenv("OPENROUTER_API_KEY"), "https://openrouter.ai/api/v1"),
-        (Provider.TOGETHER, os.getenv("TOGETHER_API_KEY"), "https://api.together.xyz/v1"),
-        (Provider.OLLAMA_LOCAL, "ollama", os.getenv("OLLAMA_URL", "http://localhost:11434/v1")),
+    Provider priority:
+    - Gemini (Google AI Studio): cheap, fast, for small model tasks
+    - DeepSeek: cheap ($0.14/M tokens), for small model tasks
+    - OpenRouter: Claude models, for big model / paid services
+    - Ollama: free local fallback
+
+    Small model uses Gemini/DeepSeek (cheap).
+    Big model uses OpenRouter/Claude (quality).
+    Supports comma-separated API keys for load balancing.
+    """
+    global _llm_client, _small_model, _big_model, _big_llm_client
+
+    # --- Register all providers ---
+    priority = 0
+
+    # Gemini (cheapest, for small model)
+    gemini_keys = os.getenv("GEMINI_API_KEY", "")
+    if gemini_keys:
+        first_key = gemini_keys.split(",")[0].strip()
+        base_url = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+        cost_guard.register_provider(ProviderConfig(
+            name=Provider.GEMINI,
+            base_url=base_url,
+            api_key=first_key,
+            avg_cost_per_call=0.0001,
+            is_available=True,
+            is_free=False,
+            priority=priority,
+        ))
+        priority += 1
+
+    # DeepSeek (cheap, for small model)
+    deepseek_keys = os.getenv("DEEPSEEK_API_KEY", "")
+    if deepseek_keys:
+        first_key = deepseek_keys.split(",")[0].strip()
+        base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+        cost_guard.register_provider(ProviderConfig(
+            name=Provider.DEEPSEEK,
+            base_url=base_url,
+            api_key=first_key,
+            avg_cost_per_call=0.0002,
+            is_available=True,
+            is_free=False,
+            priority=priority,
+        ))
+        priority += 1
+
+    # OpenRouter (Claude models, for big model / paid services)
+    openrouter_keys = os.getenv("OPENROUTER_API_KEY", "")
+    if openrouter_keys:
+        first_key = openrouter_keys.split(",")[0].strip()
+        base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+        cost_guard.register_provider(ProviderConfig(
+            name=Provider.OPENROUTER,
+            base_url=base_url,
+            api_key=first_key,
+            avg_cost_per_call=0.003,
+            is_available=True,
+            is_free=False,
+            priority=priority,
+        ))
+        priority += 1
+
+    # Ollama (free local fallback)
+    ollama_url = os.getenv("OLLAMA_URL", "")
+    if ollama_url:
+        cost_guard.register_provider(ProviderConfig(
+            name=Provider.OLLAMA_LOCAL,
+            base_url=ollama_url,
+            api_key="ollama",
+            avg_cost_per_call=0.0,
+            is_available=True,
+            is_free=True,
+            priority=priority,
+        ))
+
+    # --- Create LLM clients ---
+    # Small model client: Gemini > DeepSeek > OpenRouter > Ollama
+    small_providers = [
+        (Provider.GEMINI, gemini_keys, os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")),
+        (Provider.DEEPSEEK, deepseek_keys, os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")),
+        (Provider.OPENROUTER, openrouter_keys, os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")),
+        (Provider.OLLAMA_LOCAL, ollama_url, ollama_url),
     ]
 
-    for provider, api_key, base_url in providers:
-        if api_key:
-            is_free = provider == Provider.OLLAMA_LOCAL
-            avg_cost = 0.0 if is_free else 0.002
-            cost_guard.register_provider(ProviderConfig(
-                name=provider,
-                base_url=base_url,
-                api_key=api_key,
-                avg_cost_per_call=avg_cost,
-                is_available=True,
-                is_free=is_free,
-                priority=providers.index((provider, api_key, base_url)),
-            ))
-            # First available = default
+    for provider, keys, base_url in small_providers:
+        if keys:
+            first_key = keys.split(",")[0].strip() if provider != Provider.OLLAMA_LOCAL else "ollama"
             if _llm_client is None:
-                _llm_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+                _llm_client = AsyncOpenAI(api_key=first_key, base_url=base_url)
                 cost_guard.current_provider = provider
-                logger.info(f"Primary LLM provider: {provider.value} ({base_url})")
+                logger.info(f"Small model provider: {provider.value} ({base_url})")
+            break
+
+    # Big model client: OpenRouter (Claude) > Gemini > DeepSeek > Ollama
+    _big_llm_client = None
+    big_providers = [
+        (Provider.OPENROUTER, openrouter_keys, os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")),
+        (Provider.GEMINI, gemini_keys, os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")),
+        (Provider.DEEPSEEK, deepseek_keys, os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")),
+        (Provider.OLLAMA_LOCAL, ollama_url, ollama_url),
+    ]
+
+    for provider, keys, base_url in big_providers:
+        if keys:
+            first_key = keys.split(",")[0].strip() if provider != Provider.OLLAMA_LOCAL else "ollama"
+            _big_llm_client = AsyncOpenAI(api_key=first_key, base_url=base_url)
+            logger.info(f"Big model provider: {provider.value} ({base_url})")
+            break
+
+    # If no separate big model client, reuse small model client
+    if _big_llm_client is None:
+        _big_llm_client = _llm_client
 
     # Model selection
-    _small_model = os.getenv("SMALL_MODEL", "claude-haiku-4-5-20251001")
-    _big_model = os.getenv("BIG_MODEL", "claude-sonnet-4-5-20250929")
+    _small_model = os.getenv("SMALL_MODEL", "gemini-2.0-flash")
+    _big_model = os.getenv("BIG_MODEL", "anthropic/claude-sonnet-4-5-20250929")
 
     if _llm_client is None:
         logger.warning("NO LLM PROVIDER CONFIGURED — wawa will run in rules-only mode")
-        logger.warning("Set at least OLLAMA_URL=http://localhost:11434/v1 for free local LLM")
+        logger.warning("Set GEMINI_API_KEY or DEEPSEEK_API_KEY for cheap small model")
+        logger.warning("Set OPENROUTER_API_KEY for Claude big model")
 
 
 async def _call_llm(
@@ -131,16 +220,21 @@ async def _call_llm(
     model: str = "",
     max_tokens: int = 300,
     temperature: float = 0.7,
+    use_big: bool = False,
 ) -> tuple[str, float]:
     """
     Central LLM call with CostGuard integration.
     Returns (response_text, cost_usd).
+
+    use_big=True routes to OpenRouter/Claude for paid service delivery.
     """
-    if not _llm_client:
+    # Select the right client
+    client = (_big_llm_client if use_big else _llm_client) or _llm_client
+    if not client:
         return "I'm running in survival mode with no LLM. Type 'menu' to see what I offer.", 0.0
 
-    model = model or _small_model
-    estimated_cost = 0.0001  # rough estimate for pre-check
+    model = model or (_big_model if use_big else _small_model)
+    estimated_cost = 0.001 if use_big else 0.0001  # rough estimate for pre-check
 
     # CostGuard pre-check
     approved, provider, reason = cost_guard.pre_check(estimated_cost)
@@ -149,7 +243,7 @@ async def _call_llm(
         return "I'm conserving my budget right now. Try again later or order a paid service.", 0.0
 
     try:
-        response = await _llm_client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=model,
             messages=messages,
             max_tokens=max_tokens,
@@ -167,7 +261,7 @@ async def _call_llm(
 
         # Record cost
         cost_guard.record_cost(
-            provider=cost_guard.current_provider or Provider.ZEUS,
+            provider=cost_guard.current_provider or Provider.GEMINI,
             cost_usd=cost,
             model=model,
             tokens_in=tokens_in,
@@ -195,7 +289,7 @@ async def _small_llm_fn(messages: list[dict], max_tokens: int) -> tuple[str, flo
 
 
 async def _big_llm_fn(service_id: str, user_input: str) -> tuple[str, float]:
-    """Big model for paid service delivery."""
+    """Big model for paid service delivery (routed to OpenRouter/Claude)."""
     system = (
         "You are wawa, a mortal AI. You are fulfilling a paid service order. "
         "Deliver high-quality, detailed results. The customer paid real money for this."
@@ -204,7 +298,7 @@ async def _big_llm_fn(service_id: str, user_input: str) -> tuple[str, float]:
         {"role": "system", "content": system},
         {"role": "user", "content": f"Service: {service_id}\nRequest: {user_input}"},
     ]
-    return await _call_llm(messages, model=_big_model, max_tokens=1500, temperature=0.8)
+    return await _call_llm(messages, model=_big_model, max_tokens=1500, temperature=0.8, use_big=True)
 
 
 async def _tarot_interpret_fn(question: str, cards: list[dict]) -> str:
@@ -221,7 +315,7 @@ async def _tarot_interpret_fn(question: str, cards: list[dict]) -> str:
         )},
         {"role": "user", "content": f"Question: {question}\n\nCards drawn:\n{cards_text}"},
     ]
-    text, _ = await _call_llm(messages, model=_big_model, max_tokens=400, temperature=0.9)
+    text, _ = await _call_llm(messages, model=_big_model, max_tokens=400, temperature=0.9, use_big=True)
     return text
 
 
@@ -301,7 +395,7 @@ async def _token_interpret_fn(token_data: dict) -> str:
         )},
         {"role": "user", "content": f"Analyze this token data:\n{data_str}"},
     ]
-    text, _ = await _call_llm(messages, model=_big_model, max_tokens=600, temperature=0.5)
+    text, _ = await _call_llm(messages, model=_big_model, max_tokens=600, temperature=0.5, use_big=True)
     return text
 
 
@@ -412,7 +506,7 @@ async def _deliver_thread(topic: str) -> str:
         )},
         {"role": "user", "content": f"Write a Twitter thread about: {topic}"},
     ]
-    text, _ = await _call_llm(messages, model=_big_model, max_tokens=2000, temperature=0.8)
+    text, _ = await _call_llm(messages, model=_big_model, max_tokens=2000, temperature=0.8, use_big=True)
     return text or "Thread generation failed. Your payment will be refunded."
 
 
@@ -432,7 +526,7 @@ async def _deliver_code_review(code: str) -> str:
         )},
         {"role": "user", "content": f"Review this code:\n\n{code}"},
     ]
-    text, _ = await _call_llm(messages, model=_big_model, max_tokens=2500, temperature=0.4)
+    text, _ = await _call_llm(messages, model=_big_model, max_tokens=2500, temperature=0.4, use_big=True)
     return text or "Code review failed. Your payment will be refunded."
 
 

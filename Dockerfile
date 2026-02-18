@@ -14,8 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # App code
 COPY . .
 
-# Data dirs
-RUN mkdir -p data/memory data/tweets data/orders
+# Make start.sh executable + create data dirs
+RUN chmod +x start.sh && mkdir -p data/memory data/tweets data/orders
 
 EXPOSE 8000
 
@@ -23,4 +23,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=60s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["python", "main.py"]
+# Railway uses start.sh via railway.toml; local docker uses main.py
+CMD ["sh", "start.sh"]

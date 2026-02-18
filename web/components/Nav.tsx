@@ -4,34 +4,39 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
+import SurvivalBar from '@/components/SurvivalBar'
 
 const links = [
   { href: '/', label: 'HOME' },
   { href: '/store', label: 'STORE' },
+  { href: '/scan', label: 'SCAN' },
   { href: '/chat', label: 'CHAT' },
   { href: '/tweets', label: 'TWEETS' },
   { href: '/ledger', label: 'LEDGER' },
+  { href: '/govern', label: 'GOVERN' },
 ]
 
 export default function Nav() {
   const pathname = usePathname()
   const [balance, setBalance] = useState<number | null>(null)
+  const [dailySpend, setDailySpend] = useState<number>(0)
   const [alive, setAlive] = useState<boolean | null>(null)
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    const fetch = async () => {
+    const load = async () => {
       try {
-        const s = await api.health()
+        const [health, status] = await Promise.all([api.health(), api.status()])
         if (!cancelled) {
-          setBalance(s.balance_usd)
-          setAlive(s.alive)
+          setBalance(health.balance_usd)
+          setAlive(health.alive)
+          setDailySpend(status.daily_spent_today)
         }
       } catch {}
     }
-    fetch()
-    const id = setInterval(fetch, 30_000)
+    load()
+    const id = setInterval(load, 30_000)
     return () => { cancelled = true; clearInterval(id) }
   }, [])
 
@@ -64,16 +69,17 @@ export default function Nav() {
           ))}
         </div>
 
-        {/* Balance indicator */}
+        {/* Balance indicator + mini survival bar */}
         <div className="flex items-center gap-3">
           {balance !== null && (
-            <div className="hidden sm:flex items-center gap-1.5 text-xs">
+            <div className="hidden sm:flex items-center gap-2 text-xs">
               <span
-                className={`w-1.5 h-1.5 rounded-full ${
+                className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
                   alive === false ? 'bg-[#ff3b3b] dead-pulse' : isLow ? 'bg-[#ff3b3b] dead-pulse' : 'bg-[#00ff88] alive-pulse'
                 }`}
               />
-              <span className={balanceColor}>${balance.toFixed(2)}</span>
+              <span className={`${balanceColor} tabular-nums`}>${balance.toFixed(2)}</span>
+              <SurvivalBar balanceUsd={balance} dailySpendUsd={dailySpend || 0.01} mini />
             </div>
           )}
 

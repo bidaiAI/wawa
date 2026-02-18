@@ -15,6 +15,7 @@ Endpoints:
 All endpoints are public. No auth needed (payment = access).
 """
 
+import os
 import time
 import uuid
 import json
@@ -176,9 +177,12 @@ def create_app(
         version="0.1.0",
     )
 
+    # CORS: allow all in dev, restrict in production via CORS_ORIGINS env var
+    cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=cors_origins,
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )

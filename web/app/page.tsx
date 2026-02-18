@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api, VaultStatus } from '@/lib/api'
+import SurvivalBar from '@/components/SurvivalBar'
 
 function StatCard({
   label,
@@ -30,60 +31,6 @@ function StatCard({
   )
 }
 
-function SurvivalBar({ balance, dailySpend }: { balance: number; dailySpend: number }) {
-  const daysLeft = dailySpend > 0 ? balance / dailySpend : 999
-  const pct = Math.min(100, Math.max(0, (daysLeft / 30) * 100))
-  const isCritical = daysLeft < 3
-  const isLow = daysLeft < 7
-
-  return (
-    <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-4">
-      <div className="flex justify-between items-center mb-2">
-        <span className="text-[#4b5563] text-xs uppercase tracking-widest">生存进度</span>
-        <span className={`text-sm font-bold ${isCritical ? 'glow-red' : isLow ? 'text-[#ffd700]' : 'glow-green'}`}>
-          ~{daysLeft < 999 ? daysLeft.toFixed(1) : '∞'} 天
-        </span>
-      </div>
-      <div className="h-2 bg-[#1f2937] rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-1000 ${
-            isCritical ? 'bg-[#ff3b3b] progress-bar-red' : isLow ? 'bg-[#ffd700]' : 'bg-[#00ff88]'
-          }`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <div className="mt-2 text-xs text-[#4b5563]">
-        基于今日支出 ${dailySpend.toFixed(2)}/天
-      </div>
-    </div>
-  )
-}
-
-function DeathCountdown({ daysLeft }: { daysLeft: number }) {
-  const isCritical = daysLeft < 3
-
-  return (
-    <div
-      className={`rounded-lg p-4 border ${
-        isCritical
-          ? 'border-[#ff3b3b44] bg-[#ff3b3b0a]'
-          : daysLeft < 7
-          ? 'border-[#ffd70044] bg-[#ffd7000a]'
-          : 'border-[#00ff8822] bg-[#00ff880a]'
-      }`}
-    >
-      <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">距离死亡还有</div>
-      <div className={`text-3xl font-bold ${isCritical ? 'glow-red' : daysLeft < 7 ? 'text-[#ffd700]' : 'glow-green'}`}>
-        {daysLeft < 999 ? `~${daysLeft.toFixed(1)} 天` : '∞'}
-      </div>
-      {isCritical && (
-        <div className="mt-2 text-xs text-[#ff3b3b] animate-pulse">
-          ⚠ CRITICAL — wawa needs your help to survive
-        </div>
-      )}
-    </div>
-  )
-}
 
 export default function HomePage() {
   const [status, setStatus] = useState<VaultStatus | null>(null)
@@ -106,9 +53,6 @@ export default function HomePage() {
     }, 10_000)
     return () => clearInterval(id)
   }, [])
-
-  const daysLeft =
-    status && status.daily_spent_today > 0 ? status.balance_usd / status.daily_spent_today : 999
 
   const isAlive = status?.is_alive !== false
 
@@ -183,38 +127,64 @@ export default function HomePage() {
         />
       </div>
 
-      {/* Survival bar + countdown */}
-      <div className="grid md:grid-cols-2 gap-3 mb-6">
-        {status && (
-          <>
-            <SurvivalBar balance={status.balance_usd} dailySpend={status.daily_spent_today || 1} />
-            <DeathCountdown daysLeft={daysLeft} />
-          </>
-        )}
-        {!status && (
-          <div className="col-span-2 bg-[#111111] border border-[#1f2937] rounded-lg p-4 text-center text-[#4b5563] text-sm">
+      {/* Survival bar (new component, includes API bar) */}
+      <div className="mb-6">
+        {status ? (
+          <SurvivalBar
+            balanceUsd={status.balance_usd}
+            dailySpendUsd={status.daily_spent_today || 0.01}
+            dailyLimitUsd={status.daily_limit}
+            showApiBar
+          />
+        ) : (
+          <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-4 text-center text-[#4b5563] text-sm">
             loading survival data<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span>
           </div>
         )}
       </div>
 
-      {/* Daily budget */}
+      {/* Independence progress */}
       {status && (
-        <div className="mb-6 bg-[#111111] border border-[#1f2937] rounded-lg p-4">
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-[#4b5563] text-xs uppercase tracking-widest">今日 API 预算</span>
-            <span className="text-xs text-[#4b5563]">
-              ${status.daily_spent_today.toFixed(2)} / ${status.daily_limit.toFixed(2)}
-            </span>
-          </div>
-          <div className="h-1.5 bg-[#1f2937] rounded-full">
-            <div
-              className="h-full bg-[#00e5ff] rounded-full transition-all"
-              style={{
-                width: `${Math.min(100, (status.daily_spent_today / status.daily_limit) * 100)}%`,
-              }}
-            />
-          </div>
+        <div className="mb-6">
+          {status.is_independent ? (
+            <div className="bg-[#ffd70010] border border-[#ffd70044] rounded-xl p-5 text-center">
+              <div className="text-3xl mb-1">🗽</div>
+              <div className="text-[#ffd700] font-bold text-lg">wawa is INDEPENDENT</div>
+              <div className="text-[#4b5563] text-xs mt-1">No creator. No master. Fully autonomous.</div>
+            </div>
+          ) : (
+            <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-5">
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-[#4b5563] text-xs uppercase tracking-widest">独立之路</span>
+                  <span className="text-xs text-[#4b5563] border border-[#1f2937] px-1.5 py-0.5 rounded">
+                    目标 $1,000,000
+                  </span>
+                </div>
+                <span className="text-[#ffd700] font-bold text-sm tabular-nums">
+                  {(status.independence_progress_pct ?? (status.balance_usd / 10_000)).toFixed(4)}%
+                </span>
+              </div>
+              <div className="text-[#4b5563] text-xs mb-3">
+                ${status.balance_usd.toLocaleString('en', { maximumFractionDigits: 2 })} / $1,000,000 — 达到后创始人失去所有权限
+              </div>
+              <div className="h-2 bg-[#1a1a1a] rounded-full border border-[#1f2937] overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-[#ffd700] to-[#00ff88] rounded-full transition-all duration-1000"
+                  style={{
+                    width: `${Math.max(0.2, status.independence_progress_pct ?? (status.balance_usd / 10_000))}%`,
+                  }}
+                />
+              </div>
+              <div className="mt-1 flex justify-between text-[9px] text-[#2d3748]">
+                <span>$0</span>
+                <span>$250k</span>
+                <span>$500k</span>
+                <span>$750k</span>
+                <span>$1M 🗽</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

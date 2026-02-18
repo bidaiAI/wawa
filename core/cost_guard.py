@@ -2,11 +2,10 @@
 CostGuard - API Cost Protection Module
 
 Prevents the AI from being drained through API cost manipulation.
-Key defense: even if the platform (Zeus or any provider) raises prices,
-wawa automatically switches to cheaper alternatives or local models.
+Key defense: even if any provider raises prices,
+the AI automatically switches to cheaper alternatives or local models.
 
-Extracted from: Zeus TradeGuard (tiandao-labs/deus-core)
-Redesigned for: mortal framework with multi-provider fallback
+Designed for: mortal framework with multi-provider fallback
 """
 
 import time
@@ -21,10 +20,16 @@ logger = logging.getLogger("mortal.cost_guard")
 
 
 class Provider(Enum):
-    """API providers in priority order."""
-    ZEUS = "zeus"
+    """API providers in priority order.
+
+    Provider priority:
+    - Gemini + DeepSeek: cheap, for small model (Layer 1-2 chat)
+    - OpenRouter: Claude models, for big model (paid services)
+    - Ollama: free local fallback
+    """
+    GEMINI = "gemini"
+    DEEPSEEK = "deepseek"
     OPENROUTER = "openrouter"
-    TOGETHER = "together"
     OLLAMA_LOCAL = "ollama_local"
 
 

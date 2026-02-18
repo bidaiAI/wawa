@@ -9,8 +9,7 @@ Layer 1: Hourly summaries (last 24 hours)
 Layer 2: Daily summaries (last 7 days)
 Layer 3: Weekly summaries (permanent archive)
 
-Extracted from: Zeus MemoryService (tiandao-labs/deus-core)
-Redesigned for: mortal framework with cost-aware compression
+Designed for: mortal framework with cost-aware compression
 """
 
 import time

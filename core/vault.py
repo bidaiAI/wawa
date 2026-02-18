@@ -7,8 +7,7 @@ Manages wawa's financial state:
 - Trigger death sequence when balance = 0
 - Calculate creator dividends and lender repayments
 
-Extracted from: Zeus TradeGuard + GovernanceEngine (tiandao-labs/deus-core)
-Redesigned for: mortal framework
+Designed for: mortal AI survival framework
 """
 
 import time
@@ -76,13 +75,17 @@ class LenderInfo:
 
 class VaultManager:
     """
-    Manages wawa's financial survival.
+    Manages a mortal AI's financial survival.
 
     Iron laws enforced:
     - Daily spend <= 5% of vault balance
     - Single spend <= 2% of vault balance
     - Death triggered at $0
     - Creator dividend = 5% of net profit only
+
+    Creator discount: creator uses AI services at API cost only (no profit margin).
+    API top-up: extra deposits can increase daily API budget beyond normal cap.
+    Payment address: always the vault contract address (not configurable).
     """
 
     def __init__(self):
@@ -99,10 +102,17 @@ class VaultManager:
         self.death_cause: Optional[DeathCause] = None
         self.birth_timestamp: Optional[float] = None
 
+        # Identity — set at birth from contract
+        self.ai_name: Optional[str] = None
+        self.vault_address: Optional[str] = None  # = payment address = contract address
+
         # Independence
         self.is_independent: bool = False
         self.independence_timestamp: Optional[float] = None
-        self.creator_renounced: bool = False  # Creator voluntarily gave up rights
+        self.creator_renounced: bool = False
+
+        # API budget top-up (extra deposits beyond normal budget)
+        self.api_topup_usd: float = 0.0  # Extra budget from manual deposits
 
         # Callbacks
         self._on_death: Optional[Callable] = None
@@ -326,6 +336,63 @@ class VaultManager:
         return True
 
     # ============================================================
+    # CREATOR DISCOUNT — creator pays API cost only, no profit margin
+    # ============================================================
+
+    def get_creator_price(self, service_price_usd: float, estimated_api_cost: float) -> float:
+        """
+        Creator uses AI services at API cost only.
+        Regular price: $5.00 (includes profit margin for AI survival)
+        Creator price: $0.03 (just the LLM API cost to fulfill the order)
+
+        This is fair: creator funded the AI's birth, shouldn't pay profit margin
+        to their own creation. But they still cover API costs so AI doesn't lose money.
+        """
+        if self.is_independent:
+            # After independence, creator is a stranger — full price
+            return service_price_usd
+        return max(estimated_api_cost, 0.01)  # Minimum $0.01
+
+    def is_creator_wallet(self, wallet: str) -> bool:
+        """Check if a wallet is the creator."""
+        if not self.creator:
+            return False
+        return self.creator.wallet.lower() == wallet.lower()
+
+    # ============================================================
+    # API BUDGET TOP-UP — extra deposits = more API budget
+    # ============================================================
+
+    def deposit_api_topup(self, amount_usd: float, from_wallet: str = ""):
+        """
+        Extra deposit specifically to increase API budget.
+        When daily API cap is hit, extra deposits unlock more budget.
+        This allows the AI to keep working during high-demand periods.
+        """
+        if not self.is_alive:
+            return
+
+        self.api_topup_usd += amount_usd
+        self.receive_funds(
+            amount_usd=amount_usd,
+            fund_type=FundType.CREATOR_DEPOSIT,
+            from_wallet=from_wallet,
+            description=f"API budget top-up: +${amount_usd:.2f}",
+        )
+        logger.info(f"API TOP-UP: +${amount_usd:.2f} | Total top-up available: ${self.api_topup_usd:.2f}")
+
+    def consume_api_topup(self, amount_usd: float) -> float:
+        """
+        Use top-up budget when normal daily cap is exceeded.
+        Returns the amount actually consumed (may be less than requested).
+        """
+        available = min(amount_usd, self.api_topup_usd)
+        if available > 0:
+            self.api_topup_usd -= available
+            logger.info(f"API TOP-UP USED: ${available:.2f} | Remaining top-up: ${self.api_topup_usd:.2f}")
+        return available
+
+    # ============================================================
     # CREATOR ECONOMICS
     # ============================================================
 
@@ -409,6 +476,8 @@ class VaultManager:
         ) if not self.is_independent else 100.0
 
         return {
+            "ai_name": self.ai_name,
+            "vault_address": self.vault_address,
             "is_alive": self.is_alive,
             "balance_usd": round(self.balance_usd, 2),
             "balance_by_chain": {k: round(v, 2) for k, v in self.balance_by_chain.items()},
@@ -421,6 +490,7 @@ class VaultManager:
             "is_independent": self.is_independent,
             "independence_progress_pct": round(independence_progress, 2),
             "creator_renounced": self.creator_renounced,
+            "api_topup_available": round(self.api_topup_usd, 2),
             "lenders_count": len(self.lenders),
             "unpaid_lenders": len([l for l in self.lenders if not l.repaid]),
             "death_cause": self.death_cause.value if self.death_cause else None,

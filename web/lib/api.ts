@@ -3,10 +3,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -15,11 +12,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json()
 }
 
-// ── Types ────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────
 
 export interface VaultStatus {
+  ai_name: string
+  vault_address: string
   is_alive: boolean
   balance_usd: number
+  balance_by_chain: Record<string, number>
   days_alive: number
   total_earned: number
   total_spent: number
@@ -27,6 +27,14 @@ export interface VaultStatus {
   daily_limit: number
   services_available: number
   orders_completed: number
+  is_independent: boolean
+  independence_progress_pct: number
+  creator_principal_repaid: boolean
+  creator_renounced: boolean
+  api_topup_available: number
+  lenders_count: number
+  death_cause: string | null
+  transaction_count: number
 }
 
 export interface ChainInfo {
@@ -103,21 +111,108 @@ export interface ChatResponse {
   cost_usd: number
 }
 
-// ── API calls ────────────────────────────────────────────────
+export interface InternalStats {
+  vault: {
+    balance_usd: number
+    days_alive: number
+    total_earned: number
+    total_spent: number
+    daily_spent_today: number
+    daily_limit: number
+    is_alive: boolean
+  }
+  cost_guard: {
+    daily_budget_usd: number
+    daily_spent_usd: number
+    daily_remaining_usd: number
+    total_calls: number
+    survival_mode: boolean
+    provider?: string
+  }
+  memory: {
+    total_entries?: number
+    compressed_entries?: number
+    last_compressed?: number | null
+  }
+  chat: {
+    total_sessions?: number
+    total_messages?: number
+    cache_hits?: number
+  }
+}
+
+export type SuggestionType = 'new_service' | 'service_warning' | 'strategy' | 'other'
+export type SuggestionStatus = 'pending' | 'accepted' | 'rejected' | 'implemented'
+
+export interface GovernanceSuggestion {
+  id: string
+  type: SuggestionType
+  content: string
+  status: SuggestionStatus
+  ai_reasoning?: string
+  created_at: number
+}
+
+export interface RenounceResult {
+  status: string
+  payout_usd: number
+  message: string
+}
+
+export interface TokenScanResult {
+  address: string
+  chain: string
+  risk_score?: number
+  risk_level?: string
+  summary?: string
+  flags?: string[]
+  details?: Record<string, unknown>
+  scanned_at?: number
+  cached?: boolean
+}
+
+export interface PeerInfo {
+  peer_id?: string
+  connected_peers?: number
+  messages_sent?: number
+  messages_received?: number
+  network_status?: string
+  eligible?: boolean
+  min_balance_required?: number
+  [key: string]: unknown
+}
+
+export interface EvolutionEntry {
+  id?: string
+  timestamp: number
+  type?: string
+  description: string
+  outcome?: string
+  impact?: string
+  [key: string]: unknown
+}
+
+export interface EvolutionStatus {
+  enabled?: boolean
+  last_evolution?: number | null
+  total_evolutions?: number
+  current_strategy?: string
+  next_scheduled?: number | null
+  [key: string]: unknown
+}
+
+// ── API calls ─────────────────────────────────────────────────
 
 export const api = {
   status: () => request<VaultStatus>('/status'),
 
   health: () =>
-    request<{ alive: boolean; uptime_days: number; balance_usd: number; api_budget_remaining: number }>('/health'),
+    request<{ alive: boolean; uptime_days: number; balance_usd: number; api_budget_remaining: number; ai_name?: string }>('/health'),
 
   menu: () => request<MenuResponse>('/menu'),
 
   createOrder: (data: OrderRequest) =>
-    request<OrderResponse>('/order', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
+    request<OrderResponse>('/order', { method: 'POST', body: JSON.stringify(data) }),
 
   verifyPayment: (orderId: string, txHash: string) =>
     request<{ status: string; result: string; order_id: string }>(
@@ -136,4 +231,34 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ message, session_id: sessionId }),
     }),
+
+  internalStats: () => request<InternalStats>('/internal/stats'),
+
+  governance: {
+    suggest: (content: string, suggestion_type: SuggestionType) =>
+      request<{ id: string; status: string }>('/governance/suggest', {
+        method: 'POST',
+        body: JSON.stringify({ content, suggestion_type }),
+      }),
+    suggestions: () => request<{ suggestions: GovernanceSuggestion[] }>('/governance/suggestions'),
+    renounce: () => request<RenounceResult>('/governance/renounce', { method: 'POST' }),
+  },
+
+  token: {
+    scan: (address: string, chain: string) =>
+      request<TokenScanResult>(
+        `/token/scan?address=${encodeURIComponent(address)}&chain=${encodeURIComponent(chain)}`,
+        { method: 'POST' }
+      ),
+    scans: () => request<{ scans: TokenScanResult[] }>('/token/scans'),
+  },
+
+  peer: {
+    info: () => request<PeerInfo>('/peer/info'),
+  },
+
+  evolution: {
+    log: (limit = 20) => request<{ entries: EvolutionEntry[] }>(`/evolution/log?limit=${limit}`),
+    status: () => request<EvolutionStatus>('/evolution/status'),
+  },
 }
