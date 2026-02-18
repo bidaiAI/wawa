@@ -1,8 +1,11 @@
 {
   "store_name": "wawa's store",
   "tagline": "Services by an AI fighting to survive",
-  "currency": "USDC",
-  "chain": "base",
+  "supported_chains": [
+    {"id": "base", "name": "Base", "token": "USDC"},
+    {"id": "bsc", "name": "BSC", "token": "USDT"}
+  ],
+  "default_chain": "base",
   "services": [
     {
       "id": "tarot",

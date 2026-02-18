@@ -52,6 +52,7 @@ class Transaction:
     counterparty: str = ""         # wallet address
     description: str = ""
     tx_hash: str = ""              # on-chain tx hash if applicable
+    chain: str = ""                # "base", "bsc", or "" for off-chain
 
 
 @dataclass
@@ -85,6 +86,7 @@ class VaultManager:
 
     def __init__(self):
         self.balance_usd: float = 0.0
+        self.balance_by_chain: dict[str, float] = {}
         self.creator: Optional[CreatorInfo] = None
         self.lenders: list[LenderInfo] = []
         self.transactions: list[Transaction] = []
@@ -106,13 +108,16 @@ class VaultManager:
     # ============================================================
 
     def receive_funds(self, amount_usd: float, fund_type: FundType,
-                      from_wallet: str = "", tx_hash: str = "", description: str = ""):
+                      from_wallet: str = "", tx_hash: str = "",
+                      description: str = "", chain: str = ""):
         """Record incoming funds."""
         if not self.is_alive:
             logger.warning("Cannot receive funds - wawa is dead")
             return
 
         self.balance_usd += amount_usd
+        if chain:
+            self.balance_by_chain[chain] = self.balance_by_chain.get(chain, 0.0) + amount_usd
         self.total_income_usd += amount_usd
 
         self.transactions.append(Transaction(
@@ -123,6 +128,7 @@ class VaultManager:
             counterparty=from_wallet,
             description=description,
             tx_hash=tx_hash,
+            chain=chain,
         ))
 
         logger.info(f"RECEIVED ${amount_usd:.2f} [{fund_type.value}] from {from_wallet[:10]}... | Balance: ${self.balance_usd:.2f}")
@@ -293,6 +299,7 @@ class VaultManager:
         return {
             "is_alive": self.is_alive,
             "balance_usd": round(self.balance_usd, 2),
+            "balance_by_chain": {k: round(v, 2) for k, v in self.balance_by_chain.items()},
             "days_alive": days_alive,
             "total_earned": round(self.total_income_usd, 2),
             "total_spent": round(self.total_spent_usd, 2),
@@ -317,6 +324,7 @@ class VaultManager:
                 "counterparty": t.counterparty[:10] + "..." if len(t.counterparty) > 10 else t.counterparty,
                 "description": t.description,
                 "tx_hash": t.tx_hash,
+                "chain": t.chain,
             }
             for t in recent
         ]

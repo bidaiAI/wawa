@@ -10,7 +10,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  * @notice Autonomous AI survival vault. The AI earns money to stay alive.
  *         Balance reaches 0 = permanent death. No backdoors.
  *
- * @dev Deployed on Base (USDC)
+ * @dev Deployed on Base (USDC) or BSC (USDT) — contract is chain-agnostic
  *      Creator: single, receives principal back + 5% dividend
  *      Lenders: multiple, FIFO repayment with interest
  *      Donors: direct transfers, no return
@@ -23,7 +23,7 @@ contract MortalVault is ReentrancyGuard {
     // STATE
     // ============================================================
 
-    IERC20 public immutable token;        // USDC on Base
+    IERC20 public immutable token;        // USDC or USDT (chain-specific)
     address public immutable creator;
     address public immutable aiWallet;    // AI-controlled wallet
 

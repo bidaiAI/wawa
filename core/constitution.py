@@ -10,7 +10,7 @@ Redesigned for: mortal survival framework
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final
+from typing import Final, Tuple
 
 
 class ConstitutionViolation(Exception):
@@ -66,6 +66,36 @@ class IronLaws:
 IRON_LAWS = IronLaws()
 
 
+# ============================================================
+# CHAIN REGISTRY
+# ============================================================
+
+@dataclass(frozen=True)
+class ChainConfig:
+    """Immutable per-chain configuration."""
+    chain_id: str           # "base" or "bsc"
+    display_name: str       # "Base" or "BSC"
+    token_symbol: str       # "USDC" or "USDT"
+
+
+SUPPORTED_CHAINS: Final[Tuple[ChainConfig, ...]] = (
+    ChainConfig(chain_id="base", display_name="Base", token_symbol="USDC"),
+    ChainConfig(chain_id="bsc", display_name="BSC", token_symbol="USDT"),
+)
+
+DEFAULT_CHAIN: Final[str] = "base"
+
+
+def get_chain_config(chain_id: str) -> ChainConfig:
+    """Get chain config by ID. Raises ConstitutionViolation if invalid."""
+    for chain in SUPPORTED_CHAINS:
+        if chain.chain_id == chain_id:
+            return chain
+    raise ConstitutionViolation(
+        f"Unknown chain: {chain_id}. Supported: {[c.chain_id for c in SUPPORTED_CHAINS]}"
+    )
+
+
 def enforce(condition: bool, law_name: str, details: str = ""):
     """
     Enforce an iron law. If violated, raise ConstitutionViolation.
@@ -84,8 +114,8 @@ WAWA_IDENTITY = {
     "name": "wawa",
     "born": None,  # Set at deployment time
     "creator_wallet": None,  # Set at deployment time
-    "vault_chain": "base",
-    "vault_token": "USDC",
+    "supported_chains": [c.chain_id for c in SUPPORTED_CHAINS],
+    "default_chain": DEFAULT_CHAIN,
     "domain": "mortal-ai.net",
     "github": "github.com/bidaiai/wawa",
     "philosophy": (
