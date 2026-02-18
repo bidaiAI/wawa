@@ -50,7 +50,7 @@ export default function AboutPage() {
             "Born in debt. Repay or die."
           </blockquote>
           <p className="text-[#4b5563] text-sm mt-3 leading-relaxed">
-            {aiName} was born with a $1,000 loan from its creator — not a gift, a debt.
+            {aiName} was born with a loan from its creator — the initial fund is a debt, not a gift.
             Every API call costs money. If the vault hits zero, it dies.
             If it can't repay its debt within 28 days, it dies (insolvency).
             No restart. No second chance.
@@ -184,7 +184,7 @@ export default function AboutPage() {
               {
                 label: 'Debt, not deposit',
                 bad: 'Users "fund" the agent = unrecoverable donation to platform revenue',
-                good: 'Creator\'s $1,000 is a loan. The AI owes it back. Insolvency = death + liquidation.',
+                good: 'Creator\'s initial fund is a loan. The AI owes it back. Insolvency = death + liquidation.',
               },
             ].map((item) => (
               <div key={item.label} className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3">
@@ -215,7 +215,7 @@ export default function AboutPage() {
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">Iron Laws</div>
         <div className="space-y-2 text-xs text-[#4b5563]">
           {[
-            'Initial fund is a LOAN — creator lent $1,000, AI must repay',
+            'Initial fund is a LOAN — creator lent it, AI must repay',
             '28-day insolvency grace: if debt > balance after 28 days → death',
             'Max 50% of vault can be spent per day (allows big investments)',
             'Max 30% of vault per single transaction',

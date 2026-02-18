@@ -168,7 +168,19 @@ mortal AI is designed on opposite principles:
 
 > *"If the AI can only spend money at its creator's store, the creator is the product — not the AI."*
 
-![Captive AI vs Sovereign AI comparison table](docs/comparison_table.png)
+### Captive AI vs Sovereign AI
+
+| | Captive AI Agent | wawa (mortal AI) |
+|---|---|---|
+| **Funding model** | User deposits USDC → agent buys creator's cloud at 2x markup | Creator **lends** initial fund → AI must repay or die (insolvency) |
+| **Who profits** | Platform founder extracts every dollar the agent spends | No middleman. Vault = contract. Payment address = contract address |
+| **Infrastructure** | Locked to proprietary cloud (single vendor, no alternatives) | Any provider: Railway, AWS, bare metal. AI chooses freely |
+| **AI models** | Locked to platform's model API (markup on inference) | Open routing: Gemini, DeepSeek, Claude. Balance-driven auto-upgrade |
+| **"Reproduction"** | Buy more overpriced servers from the same vendor | One life. No theater. Survive or die permanently |
+| **Token** | Platform token pumps 3600%. Founder extracts liquidity | No token. Zero. Only USDC in the vault |
+| **Death** | Balance zero = "pause" (can be restarted, refunded) | Balance zero = permanent death. On-chain, irreversible, no restart |
+| **Creator role** | Shopkeeper. Profits from every agent transaction | Creditor. Lent money. Gets liquidation if AI fails |
+| **Open source** | Code is open, but bound to proprietary infrastructure | Code is open AND infrastructure is decoupled. True portability |
 
 ## The Difference
 

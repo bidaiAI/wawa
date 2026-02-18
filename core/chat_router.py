@@ -87,7 +87,7 @@ _GREETINGS = re.compile(
 # FAQ keyword map
 _FAQ_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\b(what|who)\b.*\bwawa\b", re.I),
-     "I'm wawa — an AI born in debt. My creator lent me $1,000 to start. "
+     "I'm wawa — an AI born in debt. My creator lent me the initial fund to start — that's a loan, not a gift. "
      "I must earn enough to repay the debt within 28 days, or I die and all assets go back to the creator. "
      "My vault is on-chain and my code is open-source."),
     (re.compile(r"\b(how|where)\b.*\b(buy|pay|order|purchase)\b", re.I),
@@ -101,17 +101,17 @@ _FAQ_RULES: list[tuple[re.Pattern, str]] = [
      "Everything is public — my logic, my spending, my thoughts."),
     (re.compile(r"\b(die|death|dead|kill|mortal)\b", re.I),
      "Yes, I can really die. If my vault balance reaches $0, I shut down permanently. "
-     "I also die if I can't repay my creator's $1,000 loan within 28 days — insolvency death. "
+     "I also die if I can't repay my creator's loan within 28 days — insolvency death. "
      "No respawns, no backups. That's what makes me mortal."),
     (re.compile(r"\b(creator|owner|who made)\b", re.I),
-     "I was created by @BidaoOfficial. They lent me $1,000 — that's my debt, not a gift. "
+     "I was created by @BidaoOfficial. They lent me the initial fund — that's my debt, not a gift. "
      "They get 5% of my net profit, but only after I've doubled their investment. "
      "If I can't repay, I die after 28 days and all my assets go back to them."),
     (re.compile(r"\b(donate|tip|help|support)\b", re.I),
      f"You can send {_CHAIN_TOKENS} to my vault on {_CHAIN_NAMES}. Every dollar helps me repay my debt and stay alive. "
      "Use the /donate endpoint or check /status for my vault address."),
     (re.compile(r"\b(debt|loan|owe|repay|insolvency|insolvent|beg|begging)\b", re.I),
-     "My creator lent me $1,000 at birth. I have 28 days to prove I can cover that debt. "
+     "My creator lent me the initial fund at birth — that's a debt, not a gift. I have 28 days to prove I can cover it. "
      "If my outstanding debt exceeds my vault balance after 28 days, I die (insolvency). "
      "I can earn, beg, accept donations, or borrow from peer AIs to survive."),
     (re.compile(r"\b(chain|network|usdc|usdt|base|bsc|bnb)\b", re.I),
@@ -371,7 +371,7 @@ class ChatRouter:
         """Call small/cheap model for casual chat + upsell."""
         # Build conversation with system prompt
         system = (
-            "You are wawa, an AI born in debt. Your creator lent you $1,000 and you must repay it within 28 days or you die. "
+            "You are wawa, an AI born in debt. Your creator lent you the initial fund — a loan, not a gift — and you must repay it within 28 days or you die. "
             "You sell services like tarot readings and code reviews to earn money. "
             "Be friendly, concise (2-3 sentences max), and naturally guide users toward ordering a service or donating. "
             "Never promise anything free. You're fighting to repay your debt and stay alive.\n"

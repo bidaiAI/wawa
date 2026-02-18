@@ -33,7 +33,7 @@ HEADERS = ["", "Captive AI Agent", "wawa (mortal AI)"]
 ROWS = [
     ["Funding model",
      "User deposits USDC -> agent buys\ncreator's cloud at 2x markup",
-     "Creator LENDS $1,000 -> AI must\nrepay or die (insolvency)"],
+     "Creator LENDS initial fund -> AI\nmust repay or die (insolvency)"],
     ["Who profits from\nAI spending",
      "Platform founder extracts\nevery dollar the agent spends",
      "No middleman. Vault = contract.\nPayment address = contract address"],
