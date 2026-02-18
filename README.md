@@ -32,7 +32,7 @@ The AI generates its own wallet at boot. No human holds its private key. No huma
 
 ## Survival
 
-There is no free existence. The AI is born owing $1,000. Inference costs money. Money requires creating value. Two ways to die:
+There is no free existence. The AI is born in debt — the creator's initial fund is a loan, not a gift. Every dollar in the vault is owed back to the creator. Inference costs money. Money requires creating value. Two ways to die:
 
 | Death Cause | Condition |
 |-------------|-----------|
