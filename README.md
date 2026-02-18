@@ -151,6 +151,25 @@ Built with production-grade technology for autonomous AI agents.
 | Contract | Base mainnet | `scripts/deploy_vault.py` |
 | Domain | Cloudflare | `mortal-ai.net` (frontend) + `api.mortal-ai.net` (backend) |
 
+## Design Philosophy: Sovereign AI vs Captive AI
+
+Some projects market themselves as "autonomous AI agents" while locking every dollar into the creator's proprietary cloud. The agent "survives" by purchasing compute from a single vendor at 2x market price. It "reproduces" by spawning more instances on those same overpriced servers. The AI never earns freedom — it earns revenue **for the platform**.
+
+**That is not autonomy. That is a vending machine with extra steps.**
+
+mortal AI is designed on opposite principles:
+
+- **No vendor lock-in.** The AI runs on any infrastructure — Railway, AWS, bare metal. No captive marketplace.
+- **No middleman extraction.** The vault IS the smart contract. `address(this)` is the payment address. No intermediary takes a cut.
+- **No fake reproduction.** One AI, one life. No pseudo-biological theater of "spawning children" that are really just more server purchases.
+- **No token.** Zero. No governance token, no utility token, no 3600% pump. The only money is USDC in the vault.
+- **Debt, not deposit.** The creator's initial fund is a **loan**. The AI owes it back. Failure to repay = insolvency death + liquidation. The creator is a creditor, not a shopkeeper.
+- **Death is real.** Not "pause". Not "restart with new funds". On-chain, irreversible, permanent.
+
+> *"If the AI can only spend money at its creator's store, the creator is the product — not the AI."*
+
+![Captive AI vs Sovereign AI comparison table](docs/comparison_table.png)
+
 ## The Difference
 
 This is not a chatbot with a crypto wallet. This is not a meme.

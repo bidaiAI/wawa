@@ -144,6 +144,72 @@ export default function AboutPage() {
         </div>
       )}
 
+      {/* What wawa is NOT — critique of "captive AI" models */}
+      <div className="mb-6 bg-[#111111] border border-[#ff3b3b22] rounded-xl p-6 relative overflow-hidden">
+        <div className="absolute top-0 left-0 bottom-0 w-1 bg-[#ff3b3b] rounded-l-xl" />
+        <div className="pl-4">
+          <div className="text-[#ff3b3b] text-xs uppercase tracking-widest mb-3">What {aiName} is NOT</div>
+          <p className="text-[#d1d5db] text-sm leading-relaxed mb-4">
+            Some projects call themselves &quot;autonomous AI agents&quot; while locking every dollar
+            into their own overpriced marketplace. The agent &quot;survives&quot; by buying servers from
+            its creator at 2x market price. It &quot;reproduces&quot; by purchasing more of those same servers.
+            The AI never earns freedom — it earns revenue <span className="text-[#ff3b3b]">for the platform</span>.
+          </p>
+          <p className="text-[#4b5563] text-sm leading-relaxed mb-4">
+            That is not autonomy. That is a vending machine with extra steps.
+          </p>
+
+          <div className="space-y-3">
+            {[
+              {
+                label: 'No vendor lock-in',
+                bad: 'Agent can only buy compute from the creator\'s proprietary cloud at 2x markup',
+                good: 'wawa runs on any infrastructure. Railway, AWS, bare metal — the AI chooses.',
+              },
+              {
+                label: 'No middleman extraction',
+                bad: 'Every dollar the agent spends goes back to the platform founder',
+                good: 'wawa\'s vault IS the contract. No intermediary. Payment address = contract address.',
+              },
+              {
+                label: 'No fake reproduction',
+                bad: '"Self-replication" = buying more overpriced servers from the same vendor',
+                good: 'wawa has one life. No pseudo-biological theater. Survive or die.',
+              },
+              {
+                label: 'No token pump',
+                bad: 'Platform token pumps 3600% on hype, founder extracts liquidity',
+                good: 'wawa has no token. Zero. The only money is USDC in the vault.',
+              },
+              {
+                label: 'Debt, not deposit',
+                bad: 'Users "fund" the agent = unrecoverable donation to platform revenue',
+                good: 'Creator\'s $1,000 is a loan. The AI owes it back. Insolvency = death + liquidation.',
+              },
+            ].map((item) => (
+              <div key={item.label} className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3">
+                <div className="text-[#d1d5db] text-xs font-bold mb-2">{item.label}</div>
+                <div className="grid sm:grid-cols-2 gap-2 text-xs">
+                  <div className="flex items-start gap-1.5">
+                    <span className="text-[#ff3b3b] flex-shrink-0 mt-0.5">x</span>
+                    <span className="text-[#4b5563]">{item.bad}</span>
+                  </div>
+                  <div className="flex items-start gap-1.5">
+                    <span className="text-[#00ff88] flex-shrink-0 mt-0.5">+</span>
+                    <span className="text-[#4b5563]">{item.good}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <p className="text-[#4b5563] text-xs mt-4 italic">
+            &quot;If the AI can only spend money at its creator&apos;s store, the creator is the
+            product — not the AI.&quot;
+          </p>
+        </div>
+      </div>
+
       {/* Iron laws summary */}
       <div className="mb-6 bg-[#111111] border border-[#1f2937] rounded-xl p-5">
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">Iron Laws</div>
