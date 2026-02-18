@@ -53,6 +53,7 @@ from core.cost_guard import CostGuard, Provider, ProviderConfig
 from core.memory import HierarchicalMemory
 from core.chat_router import ChatRouter
 from services.tarot import TarotService
+from services.token_analysis import TokenAnalysisService
 from twitter.agent import TwitterAgent, TweetType
 from api.server import create_app, Order
 
@@ -66,6 +67,7 @@ cost_guard = CostGuard()
 memory = HierarchicalMemory()
 chat_router = ChatRouter()
 tarot = TarotService()
+token_analysis = TokenAnalysisService()
 twitter = TwitterAgent()
 
 # LLM clients
@@ -281,6 +283,35 @@ async def _tweet_context_fn() -> dict:
     }
 
 
+async def _token_interpret_fn(token_data: dict) -> str:
+    """LLM interpretation for token analysis."""
+    data_str = json.dumps(token_data, indent=2, default=str)
+    messages = [
+        {"role": "system", "content": (
+            "You are wawa, a mortal AI providing crypto token analysis. "
+            "Write a clear, actionable report based on the on-chain data below. "
+            "Highlight key risks and positives. Be honest — your reputation depends on it. "
+            "Use bullet points. 300 words max."
+        )},
+        {"role": "user", "content": f"Analyze this token data:\n{data_str}"},
+    ]
+    text, _ = await _call_llm(messages, model=_big_model, max_tokens=600, temperature=0.5)
+    return text
+
+
+async def _http_get_json(url: str) -> dict:
+    """HTTP GET returning parsed JSON. Used by TokenAnalysisService."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as e:
+        logger.warning(f"HTTP fetch failed: {url[:80]} — {e}")
+        return {}
+
+
 async def _deliver_order(order: Order) -> str:
     """Deliver a paid order using the appropriate service."""
     if order.service_id == "tarot":
@@ -289,6 +320,17 @@ async def _deliver_order(order: Order) -> str:
             share_text = tarot.format_for_share(spread)
             return f"{spread.interpretation}\n\n---\nShare: {share_text}"
         return "Tarot reading failed. Your payment will be refunded."
+
+    if order.service_id == "token_analysis":
+        # Parse input: expect "ADDRESS" or "ADDRESS CHAIN"
+        parts = order.user_input.strip().split()
+        address = parts[0] if parts else ""
+        chain = parts[1] if len(parts) > 1 else order.chain or "base"
+        analysis = await token_analysis.analyze(address, chain)
+        if analysis.interpretation:
+            share_text = token_analysis.format_for_share(analysis)
+            return f"{analysis.interpretation}\n\n---\nShare: {share_text}"
+        return "Token analysis failed. Your payment will be refunded."
 
     # All other services: use big model
     result, cost = await _big_llm_fn(order.service_id, order.user_input)
@@ -384,6 +426,8 @@ async def lifespan(app):
     chat_router.set_cost_status_function(cost_guard.get_status)
 
     tarot.set_interpret_function(_tarot_interpret_fn)
+    token_analysis.set_interpret_function(_token_interpret_fn)
+    token_analysis.set_http_function(_http_get_json)
     memory.set_compress_function(_compress_fn)
 
     twitter.set_generate_function(_tweet_generate_fn)
