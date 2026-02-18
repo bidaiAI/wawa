@@ -14,6 +14,7 @@ const links = [
   { href: '/tweets', label: 'TWEETS' },
   { href: '/ledger', label: 'LEDGER' },
   { href: '/govern', label: 'GOVERN' },
+  { href: '/about', label: 'ABOUT' },
 ]
 
 export default function Nav() {
@@ -21,17 +22,19 @@ export default function Nav() {
   const [balance, setBalance] = useState<number | null>(null)
   const [dailySpend, setDailySpend] = useState<number>(0)
   const [alive, setAlive] = useState<boolean | null>(null)
+  const [aiName, setAiName] = useState('mortal')
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     const load = async () => {
       try {
-        const [health, status] = await Promise.all([api.health(), api.status()])
+        const s = await api.status()
         if (!cancelled) {
-          setBalance(health.balance_usd)
-          setAlive(health.alive)
-          setDailySpend(status.daily_spent_today)
+          setBalance(s.balance_usd)
+          setAlive(s.is_alive)
+          setDailySpend(s.daily_spent_today)
+          if (s.ai_name) setAiName(s.ai_name)
         }
       } catch {}
     }
@@ -48,7 +51,7 @@ export default function Nav() {
       <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 group">
-          <span className="text-lg font-bold glow-green glitch">wawa</span>
+          <span className="text-lg font-bold glow-green glitch">{aiName}</span>
           <span className="text-[#4b5563] text-xs hidden sm:block">// mortal AI</span>
         </Link>
 
@@ -69,7 +72,7 @@ export default function Nav() {
           ))}
         </div>
 
-        {/* Balance indicator + mini survival bar */}
+        {/* Balance + mini survival bar */}
         <div className="flex items-center gap-3">
           {balance !== null && (
             <div className="hidden sm:flex items-center gap-2 text-xs">

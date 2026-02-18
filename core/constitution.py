@@ -109,6 +109,98 @@ IRON_LAWS = IronLaws()
 
 
 # ============================================================
+# MODEL TIER ROUTING — balance-driven model selection
+# ============================================================
+
+@dataclass(frozen=True)
+class ModelTier:
+    """Immutable model routing configuration per balance tier."""
+    level: int
+    name: str                  # Human-readable tier name
+    min_balance_usd: float     # Vault balance threshold to reach this tier
+    provider: str              # "gemini", "deepseek", "openrouter"
+    model: str                 # Model identifier
+    max_tokens: int            # Max output tokens
+    temperature: float         # Default temperature
+    daily_budget_base: float   # Base daily budget for this tier
+    daily_budget_rate: float   # Additional budget per $100 of vault balance
+    max_rpm: int               # Max requests per minute
+
+
+# Balance-driven tier table:
+# - Poor AI uses free/cheap models (Gemini, DeepSeek)
+# - Rich AI graduates to frontier models (Claude)
+# - Each tier has its own budget and rate limits
+MODEL_TIERS: Final[Tuple[ModelTier, ...]] = (
+    ModelTier(
+        level=1, name="survival",
+        min_balance_usd=0,
+        provider="gemini", model="gemini-2.5-flash",
+        max_tokens=200, temperature=0.9,
+        daily_budget_base=0.20, daily_budget_rate=0.5,
+        max_rpm=4,
+    ),
+    ModelTier(
+        level=2, name="bootstrap",
+        min_balance_usd=50,
+        provider="gemini", model="gemini-2.5-flash",
+        max_tokens=1000, temperature=0.8,
+        daily_budget_base=0.50, daily_budget_rate=1.0,
+        max_rpm=8,
+    ),
+    ModelTier(
+        level=3, name="growing",
+        min_balance_usd=200,
+        provider="openrouter", model="anthropic/claude-3.5-haiku",
+        max_tokens=2000, temperature=0.7,
+        daily_budget_base=2.0, daily_budget_rate=3.0,
+        max_rpm=12,
+    ),
+    ModelTier(
+        level=4, name="established",
+        min_balance_usd=500,
+        provider="openrouter", model="anthropic/claude-sonnet-4-20250514",
+        max_tokens=3000, temperature=0.7,
+        daily_budget_base=5.0, daily_budget_rate=5.0,
+        max_rpm=15,
+    ),
+    ModelTier(
+        level=5, name="thriving",
+        min_balance_usd=2000,
+        provider="openrouter", model="anthropic/claude-sonnet-4-20250514",
+        max_tokens=4000, temperature=0.6,
+        daily_budget_base=10.0, daily_budget_rate=5.0,
+        max_rpm=20,
+    ),
+)
+
+
+# Load-balance routing for Lv.1-2 (highest frequency tiers)
+# Alternates between two cheap providers to avoid rate limits
+LOAD_BALANCE_TIERS: Final[Tuple[int, ...]] = (1, 2)
+LOAD_BALANCE_SECONDARY_PROVIDER: Final[str] = "deepseek"
+LOAD_BALANCE_SECONDARY_MODEL: Final[str] = "deepseek-chat"
+
+# Fallback chain: if primary provider fails, try these in order
+FALLBACK_CHAINS: Final[dict] = {
+    "gemini":     ["deepseek", "openrouter", "ollama"],
+    "deepseek":   ["gemini", "openrouter", "ollama"],
+    "openrouter": ["gemini", "deepseek", "ollama"],
+    "ollama":     ["gemini", "deepseek", "openrouter"],
+}
+
+
+def get_model_tier(balance_usd: float) -> ModelTier:
+    """Get the appropriate model tier based on vault balance.
+    Returns highest tier the balance qualifies for."""
+    result = MODEL_TIERS[0]  # default: survival
+    for tier in MODEL_TIERS:
+        if balance_usd >= tier.min_balance_usd:
+            result = tier
+    return result
+
+
+# ============================================================
 # CHAIN REGISTRY
 # ============================================================
 

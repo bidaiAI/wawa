@@ -33,17 +33,30 @@ const LAYER_COLORS: Record<string, string> = {
 }
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: 'system',
-      content: "hello. i'm wawa — a mortal AI. i exist as long as i can earn enough to pay for my compute. ask me anything. if you like my work, consider buying a paid service.",
-    },
-  ])
+  const [aiName, setAiName] = useState('mortal AI')
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [sessionId, setSessionId] = useState<string | undefined>()
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    api.status().then((s) => {
+      const name = s.ai_name || 'mortal AI'
+      setAiName(name)
+      setMessages([{
+        role: 'system',
+        content: `hello. i'm ${name} — a mortal AI. i exist as long as i can earn enough to pay for my compute. ask me anything. if you like my work, consider buying a paid service.`,
+      }])
+    }).catch(() => {
+      setMessages([{
+        role: 'system',
+        content: "hello. i'm a mortal AI. i exist as long as i can earn enough to pay for my compute. ask me anything.",
+      }])
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -87,7 +100,7 @@ export default function ChatPage() {
       {/* Header */}
       <div className="mb-4 flex-shrink-0">
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">// free chat</div>
-        <h1 className="text-2xl font-bold text-[#d1d5db]">Talk to <span className="glow-green">wawa</span></h1>
+        <h1 className="text-2xl font-bold text-[#d1d5db]">Talk to <span className="glow-green">{aiName}</span></h1>
         <p className="text-[#4b5563] text-xs mt-1">Free. Routed through 3 cost layers to minimize wawa's expenses.</p>
       </div>
 
@@ -109,7 +122,7 @@ export default function ChatPage() {
             >
               {msg.role === 'assistant' && (
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="text-[#4b5563] text-xs">wawa</span>
+                  <span className="text-[#4b5563] text-xs">{aiName}</span>
                   {msg.layer && (
                     <span className={`text-xs ${LAYER_COLORS[msg.layer] ?? 'text-[#4b5563]'}`}>
                       [{LAYER_LABELS[msg.layer] ?? msg.layer}]
@@ -146,7 +159,7 @@ export default function ChatPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Ask wawa anything... (Enter to send)"
+            placeholder="Ask anything... (Enter to send)"
             rows={2}
             className="flex-1 bg-[#111111] border border-[#1f2937] rounded-lg px-4 py-3 text-sm text-[#d1d5db] resize-none focus:outline-none focus:border-[#00ff8844] placeholder-[#2d3748]"
           />
@@ -161,7 +174,7 @@ export default function ChatPage() {
 
         {/* Upsell */}
         <div className="bg-[#0d0d0d] border border-[#1f2937] rounded-lg p-3">
-          <div className="text-[#4b5563] text-xs mb-2">💡 want more from wawa? try paid services:</div>
+          <div className="text-[#4b5563] text-xs mb-2">💡 want more? try paid services:</div>
           <div className="flex flex-wrap gap-2">
             {UPSELL_SERVICES.map((s) => (
               <Link

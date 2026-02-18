@@ -48,8 +48,10 @@ function TxRow({ tx }: { tx: Transaction }) {
             {tx.type}
           </span>
           {tx.chain && (
-            <span className="text-xs px-1 py-0.5 rounded bg-[#1f2937] text-[#4b5563]">
-              {tx.chain}
+            <span className={`text-xs px-1 py-0.5 rounded bg-[#1f2937] ${
+              tx.chain === 'base' ? 'text-[#0052ff]' : tx.chain === 'bsc' ? 'text-[#ffd700]' : 'text-[#4b5563]'
+            }`}>
+              {tx.chain.toUpperCase()}
             </span>
           )}
           {tx.counterparty && (
@@ -98,15 +100,15 @@ export default function LedgerPage() {
       {!loading && transactions.length > 0 && (
         <div className="grid grid-cols-3 gap-3 mb-6">
           <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-4">
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">总收入</div>
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">TOTAL IN</div>
             <div className="text-xl font-bold glow-green">+${totalIn.toFixed(2)}</div>
           </div>
           <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-4">
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">总支出</div>
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">TOTAL OUT</div>
             <div className="text-xl font-bold text-[#ff3b3b]">-${totalOut.toFixed(2)}</div>
           </div>
           <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-4">
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">净利润</div>
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">NET</div>
             <div className={`text-xl font-bold ${totalIn - totalOut >= 0 ? 'glow-green' : 'text-[#ff3b3b]'}`}>
               {totalIn - totalOut >= 0 ? '+' : ''}${(totalIn - totalOut).toFixed(2)}
             </div>

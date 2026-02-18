@@ -57,7 +57,7 @@ function ScanCard({
 
       {/* Address */}
       <div className="mb-4">
-        <div className="text-[#4b5563] text-xs mb-1">合约地址</div>
+        <div className="text-[#4b5563] text-xs mb-1">CONTRACT ADDRESS</div>
         <div className="font-mono text-[#00e5ff] text-xs break-all">{result.address}</div>
         <div className="text-[#4b5563] text-xs mt-0.5">{result.chain}</div>
       </div>
@@ -66,7 +66,7 @@ function ScanCard({
       {score !== null && (
         <div className="mb-4">
           <div className="flex justify-between text-xs mb-1">
-            <span className="text-[#4b5563]">风险评分</span>
+            <span className="text-[#4b5563]">RISK SCORE</span>
             <span className={`font-bold ${style.color}`}>{score}/100</span>
           </div>
           <div className="h-2 bg-[#1a1a1a] rounded-full overflow-hidden">
@@ -88,7 +88,7 @@ function ScanCard({
       {/* Flags */}
       {result.flags && result.flags.length > 0 && (
         <div className="mb-4">
-          <div className="text-[#4b5563] text-xs mb-2">⚠ 风险标记</div>
+          <div className="text-[#4b5563] text-xs mb-2">⚠ RISK FLAGS</div>
           <div className="flex flex-wrap gap-1.5">
             {result.flags.map((f, i) => (
               <span key={i} className="text-xs px-2 py-0.5 rounded bg-[#ff3b3b15] text-[#ff3b3b] border border-[#ff3b3b33]">
@@ -101,15 +101,15 @@ function ScanCard({
 
       {/* Cached badge */}
       {result.cached && (
-        <div className="text-[#2d3748] text-[10px] mb-3">⚡ 来自缓存 · {result.scanned_at ? new Date(result.scanned_at * 1000).toLocaleString() : ''}</div>
+        <div className="text-[#2d3748] text-[10px] mb-3">⚡ from cache · {result.scanned_at ? new Date(result.scanned_at * 1000).toLocaleString() : ''}</div>
       )}
 
       {/* Upsell to full */}
       {isFree && onFullScan && (
         <div className="mt-3 p-3 bg-[#0d0d0d] border border-[#00ff8822] rounded-lg text-xs text-[#4b5563]">
-          想要完整链上分析（持仓分布、合约审计、交易历史、风险评分）？
+          Want full on-chain analysis (holder distribution, contract audit, tx history, risk scoring)?
           <button onClick={onFullScan} className="ml-1 text-[#00ff88] hover:underline font-medium">
-            购买全深度报告 $5 →
+            Buy full report $5 →
           </button>
         </div>
       )}
@@ -135,29 +135,29 @@ function PaymentPanel({
   return (
     <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-5">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-[#d1d5db] font-bold">💳 支付全深度分析</h3>
+        <h3 className="text-[#d1d5db] font-bold">💳 Payment — Full Report</h3>
         <button onClick={onCancel} className="text-[#4b5563] text-xs hover:text-[#d1d5db]">✕</button>
       </div>
       <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 mb-4 text-center">
-        <div className="text-[#4b5563] text-xs mb-1">需要支付</div>
+        <div className="text-[#4b5563] text-xs mb-1">AMOUNT DUE</div>
         <div className="text-3xl font-bold glow-green">{order.price_usd.toFixed(2)} {token}</div>
         <div className="text-[#4b5563] text-xs mt-1">on {chainLabel}</div>
       </div>
       <div className="mb-4">
-        <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">支付地址</div>
+        <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">PAYMENT ADDRESS</div>
         <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3 break-all text-[#00e5ff] text-sm font-mono select-all">
           {order.payment_address}
         </div>
         <button onClick={() => navigator.clipboard.writeText(order.payment_address)} className="mt-1 text-xs text-[#4b5563] hover:text-[#00e5ff]">
-          📋 复制地址
+          📋 copy address
         </button>
       </div>
       <div className="grid grid-cols-2 gap-2 mb-4 text-xs text-[#4b5563]">
-        <div>订单号: <span className="text-[#d1d5db]">{order.order_id}</span></div>
-        <div>有效期: <span className="text-[#ffd700]">{order.expires_minutes}min</span></div>
+        <div>Order: <span className="text-[#d1d5db]">{order.order_id}</span></div>
+        <div>Expires: <span className="text-[#ffd700]">{order.expires_minutes}min</span></div>
       </div>
       <div className="mb-4">
-        <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">交易哈希</label>
+        <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">TRANSACTION HASH</label>
         <input
           type="text" value={txHash} onChange={(e) => onTxHashChange(e.target.value)} placeholder="0x..."
           className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3 text-[#d1d5db] text-sm font-mono focus:outline-none focus:border-[#00ff8844] placeholder-[#2d3748]"
@@ -310,14 +310,14 @@ export default function ScanPage() {
           <h1 className="text-3xl font-bold text-[#d1d5db]">
             <span className="glow-cyan">Token</span> Scanner
           </h1>
-          <p className="text-[#4b5563] text-sm mt-1">实时链上扫描 (免费) · 全深度报告 ($5)</p>
+          <p className="text-[#4b5563] text-sm mt-1">Real-time on-chain scan (free) · Full report ($5)</p>
         </div>
         {history.length > 0 && (
           <button
             onClick={() => setShowHistory(!showHistory)}
             className="flex-shrink-0 px-3 py-1.5 border border-[#1f2937] rounded-lg text-xs text-[#4b5563] hover:text-[#d1d5db] transition-colors"
           >
-            📋 历史 ({history.length})
+            📋 History ({history.length})
           </button>
         )}
       </div>
@@ -325,7 +325,7 @@ export default function ScanPage() {
       {/* History drawer */}
       {showHistory && history.length > 0 && (
         <div className="mb-6 bg-[#111111] border border-[#1f2937] rounded-xl p-3">
-          <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">最近扫描记录</div>
+          <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">RECENT SCANS</div>
           {history.map((scan, i) => (
             <HistoryRow key={i} scan={scan} onClick={() => loadHistory(scan)} />
           ))}
@@ -339,7 +339,7 @@ export default function ScanPage() {
         <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-5 mb-6">
           {/* Chain selector */}
           <div className="mb-4">
-            <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">链</label>
+            <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">CHAIN</label>
             <div className="grid grid-cols-4 gap-2">
               {CHAIN_OPTIONS.map((c) => (
                 <button
@@ -356,7 +356,7 @@ export default function ScanPage() {
 
           {/* Address */}
           <div className="mb-4">
-            <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">合约地址</label>
+            <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">CONTRACT ADDRESS</label>
             <input
               type="text" value={address} onChange={(e) => setAddress(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleScan() }}
@@ -390,7 +390,7 @@ export default function ScanPage() {
           {/* Payment chain selector */}
           {(mode === 'payment' || mode === 'ordering') && payChains.length > 0 && (
             <div className="mt-4 pt-4 border-t border-[#1f2937]">
-              <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">支付链</label>
+              <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">PAYMENT CHAIN</label>
               <div className="flex gap-2">
                 {payChains.map((c) => (
                   <button key={c.id} onClick={() => setPayChain(c.id)}
@@ -430,8 +430,8 @@ export default function ScanPage() {
         <div className="mb-6 bg-[#111111] border border-[#1f2937] rounded-xl p-6 text-center">
           <div className="text-4xl mb-3">⚙</div>
           <div className="text-[#d1d5db] font-bold mb-1">wawa is analyzing on-chain data</div>
-          <div className="text-[#4b5563] text-sm">状态: <span className="text-[#00e5ff]">{orderStatus}</span></div>
-          <div className="text-[#4b5563] text-xs mt-2">订单 {order?.order_id} — 预计 15 分钟内交付</div>
+          <div className="text-[#4b5563] text-sm">Status: <span className="text-[#00e5ff]">{orderStatus}</span></div>
+          <div className="text-[#4b5563] text-xs mt-2">Order {order?.order_id} — est. 15 min delivery</div>
         </div>
       )}
 
@@ -440,14 +440,14 @@ export default function ScanPage() {
         <div className="bg-[#111111] border border-[#00ff8822] rounded-xl p-5">
           <div className="flex items-center gap-2 mb-4">
             <span className="text-2xl">📊</span>
-            <h3 className="text-[#00ff88] font-bold">全深度分析报告</h3>
+            <h3 className="text-[#00ff88] font-bold">Full Analysis Report</h3>
             <span className="ml-auto text-xs border border-[#00ff8844] text-[#00ff88] px-1.5 py-0.5 rounded">DELIVERED</span>
           </div>
           <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 whitespace-pre-wrap text-sm text-[#d1d5db] leading-relaxed max-h-[500px] overflow-y-auto">
             {fullResult}
           </div>
           <button onClick={handleReset} className="mt-4 w-full py-2 border border-[#1f2937] text-[#4b5563] rounded-lg hover:text-[#d1d5db] text-sm transition-all">
-            ← 扫描新代币
+            ← scan another token
           </button>
         </div>
       )}
@@ -456,19 +456,19 @@ export default function ScanPage() {
       {mode === 'idle' && (
         <div className="bg-[#0d0d0d] border border-[#1f2937] rounded-xl overflow-hidden">
           <div className="grid grid-cols-3 text-xs">
-            <div className="p-3 border-b border-[#1f2937] text-[#4b5563] uppercase tracking-wider">功能</div>
-            <div className="p-3 border-b border-l border-[#1f2937] text-[#00e5ff] text-center">⚡ 免费扫描</div>
-            <div className="p-3 border-b border-l border-[#1f2937] text-[#00ff88] text-center">📊 全深度</div>
+            <div className="p-3 border-b border-[#1f2937] text-[#4b5563] uppercase tracking-wider">Feature</div>
+            <div className="p-3 border-b border-l border-[#1f2937] text-[#00e5ff] text-center">⚡ Free Scan</div>
+            <div className="p-3 border-b border-l border-[#1f2937] text-[#00ff88] text-center">📊 Full Report</div>
             {[
-              ['风险评分', true, true],
-              ['链上实时数据', true, true],
-              ['合约审计', false, true],
-              ['持仓分布', false, true],
-              ['流动性分析', false, true],
-              ['交易历史', false, true],
-              ['历史缓存', true, false],
-              ['价格', 'FREE', '$5.00'],
-              ['交付时间', '即时', '~15min'],
+              ['Risk Score', true, true],
+              ['Live On-chain Data', true, true],
+              ['Contract Audit', false, true],
+              ['Holder Distribution', false, true],
+              ['Liquidity Analysis', false, true],
+              ['Transaction History', false, true],
+              ['Cached Result', true, false],
+              ['Price', 'FREE', '$5.00'],
+              ['Delivery', 'Instant', '~15min'],
             ].map(([feature, free, paid], i) => (
               <div key={i} className="contents">
                 <div className="p-3 border-b border-[#1f2937] text-[#4b5563]">{feature}</div>

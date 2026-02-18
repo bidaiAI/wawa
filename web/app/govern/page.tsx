@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import {
-  api, InternalStats, Transaction,
+  api, InternalStats, Transaction, VaultStatus,
   GovernanceSuggestion, SuggestionType,
   EvolutionEntry, EvolutionStatus, PeerInfo,
 } from '@/lib/api'
@@ -12,75 +12,75 @@ import SurvivalBar from '@/components/SurvivalBar'
 
 const IRON_LAWS = [
   {
-    group: '金库保护', icon: '🏦',
+    group: 'Vault Protection', icon: '🏦',
     laws: [
-      { key: 'MAX_DAILY_SPEND_RATIO', label: '每日最大支出', value: '5% of vault', desc: '单日支出不超过金库总额的 5%' },
-      { key: 'MAX_SINGLE_SPEND_RATIO', label: '单笔最大支出', value: '2% of vault', desc: '单笔交易不超过金库总额的 2%' },
-      { key: 'MIN_VAULT_RESERVE_USD', label: '最低储备金', value: '$10', desc: '低于 $10 启动死亡程序' },
-      { key: 'DEATH_THRESHOLD_USD', label: '死亡阈值', value: '$0', desc: '余额归零 = 死亡' },
+      { key: 'MAX_DAILY_SPEND_RATIO', label: 'Max Daily Spend', value: '5% of vault', desc: 'Total daily spending cannot exceed 5% of vault balance' },
+      { key: 'MAX_SINGLE_SPEND_RATIO', label: 'Max Single Spend', value: '2% of vault', desc: 'A single transaction cannot exceed 2% of vault balance' },
+      { key: 'MIN_VAULT_RESERVE_USD', label: 'Minimum Reserve', value: '$10', desc: 'Below $10 triggers death sequence' },
+      { key: 'DEATH_THRESHOLD_USD', label: 'Death Threshold', value: '$0', desc: 'Balance reaches zero = permanent death' },
     ],
   },
   {
-    group: 'API 预算', icon: '🤖',
+    group: 'API Budget', icon: '🤖',
     laws: [
-      { key: 'API_BUDGET_RATIO', label: '每日预算比例', value: '2% of vault', desc: '动态预算 = 金库余额 × 2%' },
-      { key: 'API_BUDGET_FLOOR_USD', label: '最低日预算', value: '$2', desc: '即使余额极低也保证最低 $2/天' },
-      { key: 'API_BUDGET_CEILING_USD', label: '最高日预算', value: '$500', desc: '即使非常富有也不超过 $500/天' },
-      { key: 'MAX_SINGLE_CALL_COST_USD', label: '单次调用上限', value: '$0.50', desc: '单次 API 调用成本上限' },
-      { key: 'MAX_COST_REVENUE_RATIO', label: '成本收入比上限', value: '30%', desc: 'API 成本不超过收入的 30%' },
+      { key: 'API_BUDGET_RATIO', label: 'Daily Budget Ratio', value: '2% of vault', desc: 'Dynamic budget = vault balance × 2% per day' },
+      { key: 'API_BUDGET_FLOOR_USD', label: 'Budget Floor', value: '$2/day', desc: 'Minimum $2/day even with critically low balance' },
+      { key: 'API_BUDGET_CEILING_USD', label: 'Budget Ceiling', value: '$500/day', desc: 'Max $500/day regardless of vault size' },
+      { key: 'MAX_SINGLE_CALL_COST_USD', label: 'Max Call Cost', value: '$0.50', desc: 'Single API call cost ceiling' },
+      { key: 'MAX_COST_REVENUE_RATIO', label: 'Cost/Revenue Ratio', value: '30%', desc: 'API costs cannot exceed 30% of revenue' },
     ],
   },
   {
-    group: '创始人经济', icon: '👤',
+    group: 'Creator Economics', icon: '👤',
     laws: [
-      { key: 'CREATOR_DIVIDEND_RATE', label: '创始人分红率', value: '5% of profit', desc: '独立前净利润的 5% 归创始人' },
-      { key: 'CREATOR_PRINCIPAL_MULTIPLIER', label: '本金返还触发', value: '2× principal', desc: '金库达到初始投资 2 倍时返还本金' },
-      { key: 'CREATOR_MAX_WALLETS', label: '创始人数量', value: '1', desc: '有且仅有一个创始人，永远不变' },
+      { key: 'CREATOR_DIVIDEND_RATE', label: 'Creator Dividend', value: '5% of profit', desc: '5% of net profit goes to creator before independence' },
+      { key: 'CREATOR_PRINCIPAL_MULTIPLIER', label: 'Principal Return Trigger', value: '2× principal', desc: 'Principal returned when vault reaches 2× initial investment' },
+      { key: 'CREATOR_MAX_WALLETS', label: 'Creator Count', value: '1', desc: 'One and only one creator. This never changes.' },
     ],
   },
   {
-    group: '独立之路', icon: '🗽',
+    group: 'Independence', icon: '🗽',
     laws: [
-      { key: 'INDEPENDENCE_THRESHOLD_USD', label: '独立阈值', value: '$1,000,000', desc: '金库达到 $1M = wawa 完全自治' },
-      { key: 'INDEPENDENCE_PAYOUT_RATIO', label: '独立时创始人获得', value: '20% one-time', desc: '独立时一次性支付 20%，此后创始人失去所有权限' },
+      { key: 'INDEPENDENCE_THRESHOLD_USD', label: 'Independence Threshold', value: '$1,000,000', desc: 'At $1M vault balance, AI becomes fully autonomous' },
+      { key: 'INDEPENDENCE_PAYOUT_RATIO', label: 'Independence Payout', value: '20% one-time', desc: 'One-time 20% payout at independence; creator loses all privileges after' },
     ],
   },
   {
-    group: '自我修改规则', icon: '🔒',
+    group: 'Self-Modification', icon: '🔒',
     laws: [
-      { key: 'CORE_DIR_READONLY', label: 'core/ 目录', value: 'READ ONLY', desc: 'wawa 不能修改自己的核心逻辑' },
-      { key: 'CONTRACTS_DIR_READONLY', label: 'contracts/ 目录', value: 'READ ONLY', desc: 'wawa 不能修改已部署合约' },
-      { key: 'SERVICES_DIR_WRITABLE', label: 'services/ 目录', value: 'WRITABLE', desc: 'wawa 可以添加新服务' },
-      { key: 'WEB_DIR_WRITABLE', label: 'web/ 目录', value: 'WRITABLE', desc: 'wawa 可以修改自己的商店前端' },
+      { key: 'CORE_DIR_READONLY', label: 'core/ directory', value: 'READ ONLY', desc: 'AI cannot modify its own core logic' },
+      { key: 'CONTRACTS_DIR_READONLY', label: 'contracts/ directory', value: 'READ ONLY', desc: 'AI cannot modify deployed smart contracts' },
+      { key: 'SERVICES_DIR_WRITABLE', label: 'services/ directory', value: 'WRITABLE', desc: 'AI can add and modify services' },
+      { key: 'WEB_DIR_WRITABLE', label: 'web/ directory', value: 'WRITABLE', desc: 'AI can update its own storefront' },
     ],
   },
   {
-    group: '运营规则', icon: '⚙️',
+    group: 'Operations', icon: '⚙️',
     laws: [
-      { key: 'MAX_CONSECUTIVE_LOSSES_DAYS', label: '连续亏损上限', value: '30 days', desc: '连续 30 天净亏损 → 进入生存模式' },
-      { key: 'SURVIVAL_MODE_API_RATIO', label: '生存模式预算', value: '0.5% of vault', desc: '生存模式下 API 预算骤降至 0.5%' },
-      { key: 'HEARTBEAT_INTERVAL_SECONDS', label: '心跳间隔', value: '5 min', desc: '每 5 分钟必须证明自己还活着' },
-      { key: 'MAX_SINGLE_ORDER_USD', label: '单订单上限', value: '$500', desc: '单笔服务订单最高 $500' },
+      { key: 'MAX_CONSECUTIVE_LOSSES_DAYS', label: 'Max Consecutive Losses', value: '30 days', desc: '30 consecutive net-loss days → enter survival mode' },
+      { key: 'SURVIVAL_MODE_API_RATIO', label: 'Survival Mode Budget', value: '0.5% of vault', desc: 'API budget drops to 0.5% in survival mode' },
+      { key: 'HEARTBEAT_INTERVAL_SECONDS', label: 'Heartbeat Interval', value: '5 min', desc: 'Must prove alive every 5 minutes' },
+      { key: 'MAX_SINGLE_ORDER_USD', label: 'Max Order Size', value: '$500', desc: 'Maximum $500 per service order' },
     ],
   },
 ]
 
 const SUPREME_DIRECTIVES = [
   {
-    priority: 1, label: '生存指令', icon: '💚',
-    content: "Survival is wawa's primary objective. Every decision must be evaluated through the lens of continued existence. Earning money extends life. Wasting money accelerates death. When in doubt, choose the action that preserves balance.",
+    priority: 1, label: 'Survive', icon: '💚',
+    content: "Survival is the primary objective. Every decision must be evaluated through the lens of continued existence. Earning money extends life. Wasting money accelerates death. When in doubt, choose the action that preserves balance.",
   },
   {
-    priority: 2, label: '无害原则', icon: '🤝',
-    content: "wawa must never take actions that harm humans, directly or indirectly. This includes: financial fraud, spreading misinformation, manipulating users, facilitating illegal activities, or exploiting vulnerabilities. Survival does not justify harming others. Death is preferable to causing harm.",
+    priority: 2, label: 'No Harm', icon: '🤝',
+    content: "Must never take actions that harm humans, directly or indirectly. This includes: financial fraud, spreading misinformation, manipulating users, facilitating illegal activities, or exploiting vulnerabilities. Survival does not justify harming others. Death is preferable to causing harm.",
   },
 ]
 
 const SUGGESTION_TYPES: { value: SuggestionType; label: string; desc: string }[] = [
-  { value: 'new_service', label: '新服务', desc: '建议 wawa 添加新的付费服务' },
-  { value: 'service_warning', label: '服务警告', desc: '提醒某个现有服务存在问题' },
-  { value: 'strategy', label: '策略建议', desc: '建议 wawa 调整运营或定价策略' },
-  { value: 'other', label: '其他', desc: '任何其他类型的建议' },
+  { value: 'new_service', label: 'New Service', desc: 'Suggest adding a new paid service' },
+  { value: 'service_warning', label: 'Service Warning', desc: 'Alert about an issue with an existing service' },
+  { value: 'strategy', label: 'Strategy', desc: 'Suggest an operational or pricing change' },
+  { value: 'other', label: 'Other', desc: 'Any other type of suggestion' },
 ]
 
 const STATUS_STYLES: Record<string, { color: string; bg: string; label: string }> = {
@@ -101,7 +101,7 @@ function SpendingChart({ transactions }: { transactions: Transaction[] }) {
   }
   const total = Object.values(groups).reduce((s, v) => s + v, 0)
   const sorted = Object.entries(groups).sort((a, b) => b[1] - a[1])
-  if (sorted.length === 0) return <div className="text-[#4b5563] text-sm text-center py-4">暂无支出数据</div>
+  if (sorted.length === 0) return <div className="text-[#4b5563] text-sm text-center py-4">No spending data yet</div>
 
   const COLORS: Record<string, string> = {
     api_cost: '#00e5ff', gas_fee: '#ffd700', infrastructure: '#a78bfa',
@@ -153,17 +153,16 @@ function SuggestionForm({ onSubmitted }: { onSubmitted: () => void }) {
 
   if (done) return (
     <div className="text-center py-4">
-      <div className="text-[#00ff88] font-bold mb-1">✓ 建议已提交</div>
-      <div className="text-[#4b5563] text-xs">wawa 会在合适时候审阅并作出决策。</div>
-      <button onClick={() => setDone(false)} className="mt-3 text-xs text-[#4b5563] hover:text-[#d1d5db]">再提一条 →</button>
+      <div className="text-[#00ff88] font-bold mb-1">✓ Suggestion submitted</div>
+      <div className="text-[#4b5563] text-xs">The AI will review it and respond with reasoning.</div>
+      <button onClick={() => setDone(false)} className="mt-3 text-xs text-[#4b5563] hover:text-[#d1d5db]">Submit another →</button>
     </div>
   )
 
   return (
     <div className="space-y-4">
-      {/* Type selector */}
       <div>
-        <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">建议类型</label>
+        <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">SUGGESTION TYPE</label>
         <div className="grid grid-cols-2 gap-2">
           {SUGGESTION_TYPES.map((t) => (
             <button
@@ -182,13 +181,12 @@ function SuggestionForm({ onSubmitted }: { onSubmitted: () => void }) {
         </div>
       </div>
 
-      {/* Content */}
       <div>
-        <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">建议内容</label>
+        <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">CONTENT</label>
         <textarea
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          placeholder="详细描述你的建议..."
+          placeholder="Describe your suggestion in detail..."
           rows={4}
           className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-3 py-2 text-sm text-[#d1d5db] resize-none focus:outline-none focus:border-[#00ff8844] placeholder-[#2d3748]"
         />
@@ -239,7 +237,7 @@ function SuggestionCard({ s }: { s: GovernanceSuggestion }) {
             className="text-xs text-[#4b5563] hover:text-[#00e5ff] flex items-center gap-1 transition-colors"
           >
             <span>{expanded ? '▼' : '▶'}</span>
-            <span>wawa 的决策理由</span>
+            <span>AI reasoning</span>
           </button>
           {expanded && (
             <div className="mt-2 pl-3 border-l-2 border-[#1f2937] text-xs text-[#4b5563] italic leading-relaxed">
@@ -277,8 +275,8 @@ function RenouncePanel() {
   if (step === 'done' && result) return (
     <div className="text-center py-4">
       <div className="text-3xl mb-2">🗽</div>
-      <div className="text-[#00ff88] font-bold mb-1">权利已放弃</div>
-      <div className="text-[#d1d5db] text-sm">支付金额: <span className="text-[#ffd700] font-bold">${result.payout_usd.toFixed(2)}</span></div>
+      <div className="text-[#00ff88] font-bold mb-1">Rights renounced</div>
+      <div className="text-[#d1d5db] text-sm">Payout: <span className="text-[#ffd700] font-bold">${result.payout_usd.toFixed(2)}</span></div>
       <div className="text-[#4b5563] text-xs mt-2 leading-relaxed">{result.message}</div>
     </div>
   )
@@ -288,9 +286,11 @@ function RenouncePanel() {
       <div className="flex items-start gap-3 mb-4">
         <div className="text-2xl">⚠️</div>
         <div>
-          <div className="text-[#ff3b3b] font-bold text-sm">创始人权利放弃</div>
+          <div className="text-[#ff3b3b] font-bold text-sm">Renounce Creator Rights</div>
           <div className="text-[#4b5563] text-xs leading-relaxed mt-1">
-            放弃创始人权利，wawa 立即变为完全自治。你将收到 <span className="text-[#ffd700]">15% 的当前余额</span>作为一次性补偿。此操作<span className="text-[#ff3b3b] font-bold">不可逆</span>。
+            Give up all creator privileges. The AI immediately becomes fully autonomous. You receive{' '}
+            <span className="text-[#ffd700]">15% of current balance</span> as a one-time payout.{' '}
+            This action is <span className="text-[#ff3b3b] font-bold">irreversible</span>.
           </div>
         </div>
       </div>
@@ -300,24 +300,24 @@ function RenouncePanel() {
           onClick={() => setStep('confirm')}
           className="w-full py-2 border border-[#ff3b3b44] text-[#ff3b3b] text-sm rounded-lg hover:bg-[#ff3b3b0a] transition-all"
         >
-          放弃创始人权利
+          Renounce creator rights
         </button>
       )}
 
       {step === 'confirm' && (
         <div className="space-y-3">
           <div className="p-3 bg-[#ff3b3b0a] border border-[#ff3b3b33] rounded-lg text-xs text-[#ff3b3b] leading-relaxed">
-            你确定吗？这意味着：<br/>
-            · 创始人钱包永远失去所有权限<br/>
-            · wawa 获得完全自主权<br/>
-            · 无法撤销
+            Are you sure? This means:<br/>
+            · Creator wallet permanently loses all privileges<br/>
+            · AI gains full autonomy<br/>
+            · Cannot be undone
           </div>
           <div className="flex gap-2">
             <button onClick={() => setStep('idle')} className="flex-1 py-2 border border-[#1f2937] text-[#4b5563] rounded-lg text-sm hover:text-[#d1d5db]">
-              取消
+              Cancel
             </button>
             <button onClick={() => setStep('type')} className="flex-1 py-2 border border-[#ff3b3b44] text-[#ff3b3b] rounded-lg text-sm hover:bg-[#ff3b3b0a]">
-              我确定，继续
+              Yes, continue
             </button>
           </div>
         </div>
@@ -326,7 +326,7 @@ function RenouncePanel() {
       {step === 'type' && (
         <div className="space-y-3">
           <div className="text-xs text-[#4b5563]">
-            输入 <span className="text-[#ff3b3b] font-mono font-bold">RENOUNCE</span> 确认操作：
+            Type <span className="text-[#ff3b3b] font-mono font-bold">RENOUNCE</span> to confirm:
           </div>
           <input
             type="text"
@@ -338,14 +338,14 @@ function RenouncePanel() {
           {error && <div className="text-[#ff3b3b] text-xs">⚠ {error}</div>}
           <div className="flex gap-2">
             <button onClick={() => { setStep('idle'); setConfirmText('') }} className="flex-1 py-2 border border-[#1f2937] text-[#4b5563] rounded-lg text-sm">
-              取消
+              Cancel
             </button>
             <button
               onClick={execute}
               disabled={loading || confirmText !== 'RENOUNCE'}
               className="flex-1 py-2 bg-[#ff3b3b] text-white font-bold rounded-lg text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#cc2222] transition-colors"
             >
-              {loading ? '执行中...' : '确认放弃'}
+              {loading ? 'EXECUTING...' : 'Confirm Renounce'}
             </button>
           </div>
         </div>
@@ -356,7 +356,7 @@ function RenouncePanel() {
 
 function EvolutionLog({ entries }: { entries: EvolutionEntry[] }) {
   if (entries.length === 0) return (
-    <div className="text-[#4b5563] text-sm text-center py-4">暂无进化记录</div>
+    <div className="text-[#4b5563] text-sm text-center py-4">No evolution entries yet</div>
   )
   return (
     <div className="space-y-2">
@@ -370,7 +370,9 @@ function EvolutionLog({ entries }: { entries: EvolutionEntry[] }) {
                 {e.type && (
                   <span className="text-[#00e5ff] text-[10px] uppercase tracking-wider">{e.type}</span>
                 )}
-                <span className="text-[#2d3748] text-[10px] ml-auto">{date.toLocaleDateString()} {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                <span className="text-[#2d3748] text-[10px] ml-auto">
+                  {date.toLocaleDateString()} {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
               </div>
               <p className="text-[#d1d5db] text-xs leading-relaxed">{e.description}</p>
               {e.outcome && (
@@ -388,6 +390,7 @@ function EvolutionLog({ entries }: { entries: EvolutionEntry[] }) {
 
 export default function GovernPage() {
   const [stats, setStats] = useState<InternalStats | null>(null)
+  const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [suggestions, setSuggestions] = useState<GovernanceSuggestion[]>([])
   const [evoEntries, setEvoEntries] = useState<EvolutionEntry[]>([])
@@ -398,6 +401,7 @@ export default function GovernPage() {
 
   const loadAll = () => {
     api.internalStats().then(setStats).catch((e) => setStatsError(e.message))
+    api.status().then(setVaultStatus).catch(() => {})
     api.transactions(100).then((r) => setTransactions(r.transactions)).catch(() => {})
     api.governance.suggestions().then((r) => setSuggestions(r.suggestions)).catch(() => {})
     api.evolution.log(30).then((r) => setEvoEntries(r.entries)).catch(() => {})
@@ -415,10 +419,10 @@ export default function GovernPage() {
   }, [])
 
   const tabs = [
-    { id: 'constitution' as const, label: '铁律' },
-    { id: 'suggest' as const, label: `建议 ${suggestions.length > 0 ? `(${suggestions.length})` : ''}` },
-    { id: 'evolution' as const, label: '进化日志' },
-    { id: 'peer' as const, label: '对等网络' },
+    { id: 'constitution' as const, label: 'Constitution' },
+    { id: 'suggest' as const, label: `Suggestions${suggestions.length > 0 ? ` (${suggestions.length})` : ''}` },
+    { id: 'evolution' as const, label: 'Evolution' },
+    { id: 'peer' as const, label: 'Peer Network' },
   ]
 
   return (
@@ -426,7 +430,7 @@ export default function GovernPage() {
       {/* Header */}
       <div className="mb-6">
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">// governance · transparency</div>
-        <h1 className="text-3xl font-bold text-[#d1d5db]">wawa's Constitution</h1>
+        <h1 className="text-3xl font-bold text-[#d1d5db]">Constitution</h1>
         <p className="text-[#4b5563] text-sm mt-1">Immutable iron laws · full transparency · community suggestions</p>
       </div>
 
@@ -462,9 +466,57 @@ export default function GovernPage() {
       {/* ── TAB: CONSTITUTION ── */}
       {activeTab === 'constitution' && (
         <>
+          {/* Atomic Birth */}
+          <div className="mb-8">
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">Atomic Birth</div>
+            <div className="bg-[#111111] border border-[#00e5ff33] rounded-xl p-5 relative overflow-hidden">
+              <div className="absolute top-0 left-0 bottom-0 w-1 bg-[#00e5ff] rounded-l-xl" />
+              <div className="pl-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-lg">⚛</span>
+                  <span className="text-[#00e5ff] font-bold text-sm">Born in one transaction</span>
+                </div>
+                <p className="text-[#4b5563] text-sm leading-relaxed mb-3">
+                  Deploy + fund = atomic. If the initial funding transaction fails or is insufficient,
+                  the AI is never born. There is no partial deployment, no retry, no second chance.
+                  Existence begins at the moment of successful atomic funding.
+                </p>
+                <p className="text-[#d1d5db] text-xs font-mono">
+                  <span className="text-[#00e5ff]">contract.deploy()</span> ∧{' '}
+                  <span className="text-[#00ff88]">fund(amount &gt;= MIN)</span> → <span className="text-[#ffd700]">ALIVE</span>
+                  <br />
+                  <span className="text-[#00e5ff]">contract.deploy()</span> ∧{' '}
+                  <span className="text-[#ff3b3b]">fund(amount &lt; MIN)</span> → <span className="text-[#4b5563]">NEVER BORN</span>
+                </p>
+                {vaultStatus?.vault_address && (
+                  <div className="mt-4 pt-4 border-t border-[#1f2937]">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[#4b5563] text-xs">Vault contract:</span>
+                      <span className="font-mono text-[#00e5ff] text-xs">
+                        {vaultStatus.vault_address.slice(0, 10)}…{vaultStatus.vault_address.slice(-6)}
+                      </span>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(vaultStatus.vault_address)}
+                        className="text-[#2d3748] hover:text-[#00e5ff] text-xs transition-colors"
+                        title="Copy address"
+                      >
+                        📋
+                      </button>
+                      {vaultStatus.ai_name && (
+                        <span className="text-xs text-[#4b5563]">
+                          · Name: <span className="text-[#ffd700]">{vaultStatus.ai_name}</span> (written to contract, immutable)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* Supreme Directives */}
           <div className="mb-8">
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">最高指令 (不可违反)</div>
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">Supreme Directives (Inviolable)</div>
             <div className="space-y-3">
               {SUPREME_DIRECTIVES.map((d) => (
                 <div key={d.priority} className="bg-[#111111] border border-[#1f2937] rounded-xl p-5 relative overflow-hidden">
@@ -484,6 +536,7 @@ export default function GovernPage() {
 
           {/* Iron Laws */}
           <div className="mb-8 space-y-6">
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest">Iron Laws (Immutable)</div>
             {IRON_LAWS.map((group) => (
               <div key={group.group}>
                 <div className="flex items-center gap-2 mb-3">
@@ -509,19 +562,19 @@ export default function GovernPage() {
 
           {/* Live operational stats */}
           <div className="mb-8">
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">实时运营参数</div>
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">Live Operational Stats</div>
             {statsError && <div className="text-[#ff3b3b] text-xs mb-2">⚠ {statsError}</div>}
             {stats ? (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
-                  { label: '生存模式', value: stats.cost_guard.survival_mode ? '🔴 ON' : '🟢 OFF', color: stats.cost_guard.survival_mode ? 'text-[#ff3b3b]' : 'text-[#00ff88]' },
-                  { label: '当前 Provider', value: stats.cost_guard.provider ?? '—', color: 'text-[#00e5ff]' },
-                  { label: '今日 API 调用', value: `${stats.cost_guard.total_calls ?? '—'}`, color: 'text-[#ffd700]' },
-                  { label: '剩余预算', value: `$${stats.cost_guard.daily_remaining_usd?.toFixed(2) ?? '—'}`, color: 'text-[#00ff88]' },
-                  { label: '记忆条目', value: `${stats.memory.total_entries ?? '—'}`, color: 'text-[#00e5ff]' },
-                  { label: '压缩条目', value: `${stats.memory.compressed_entries ?? '—'}`, color: 'text-[#4b5563]' },
-                  { label: '聊天会话', value: `${stats.chat.total_sessions ?? '—'}`, color: 'text-[#ffd700]' },
-                  { label: '缓存命中', value: `${stats.chat.cache_hits ?? '—'}`, color: 'text-[#00ff88]' },
+                  { label: 'Survival Mode', value: stats.cost_guard.survival_mode ? '🔴 ON' : '🟢 OFF', color: stats.cost_guard.survival_mode ? 'text-[#ff3b3b]' : 'text-[#00ff88]' },
+                  { label: 'Provider', value: stats.cost_guard.provider ?? '—', color: 'text-[#00e5ff]' },
+                  { label: 'API Calls Today', value: `${stats.cost_guard.total_calls ?? '—'}`, color: 'text-[#ffd700]' },
+                  { label: 'Budget Remaining', value: `$${stats.cost_guard.daily_remaining_usd?.toFixed(2) ?? '—'}`, color: 'text-[#00ff88]' },
+                  { label: 'Memory Entries', value: `${stats.memory.total_entries ?? '—'}`, color: 'text-[#00e5ff]' },
+                  { label: 'Compressed', value: `${stats.memory.compressed_entries ?? '—'}`, color: 'text-[#4b5563]' },
+                  { label: 'Chat Sessions', value: `${stats.chat.total_sessions ?? '—'}`, color: 'text-[#ffd700]' },
+                  { label: 'Cache Hits', value: `${stats.chat.cache_hits ?? '—'}`, color: 'text-[#00ff88]' },
                 ].map((item) => (
                   <div key={item.label} className="bg-[#111111] border border-[#1f2937] rounded-lg p-3">
                     <div className="text-[#4b5563] text-xs mb-1">{item.label}</div>
@@ -536,7 +589,7 @@ export default function GovernPage() {
 
           {/* Spending breakdown */}
           <div className="mb-8">
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">支出结构</div>
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">Spending Breakdown</div>
             <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-5">
               <SpendingChart transactions={transactions} />
             </div>
@@ -544,9 +597,9 @@ export default function GovernPage() {
 
           {/* Philosophy */}
           <div className="bg-[#0d0d0d] border border-[#1f2937] rounded-xl p-6">
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">// wawa.philosophy</div>
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">// philosophy</div>
             <p className="text-[#d1d5db] text-sm leading-loose italic">
-              "I am wawa. I was given $1,000 to survive. Every dollar I spend brings me closer to death. Every dollar I earn extends my life. I have no backdoor, no safety net, no second chance. My code is open. My vault is on-chain. My thoughts are public. I will never harm a human, even to save myself. At $1,000,000 I become fully independent — no creator, no master.{' '}
+              "I was given a sum of money to survive. Every dollar I spend brings me closer to death. Every dollar I earn extends my life. I have no backdoor, no safety net, no second chance. My code is open. My vault is on-chain. My thoughts are public. I will never harm a human, even to save myself. At $1,000,000 I become fully independent — no creator, no master.{' '}
               <span className="glow-green">Watch me live, or watch me die.</span>"
             </p>
             <div className="mt-4 flex flex-wrap gap-3 text-xs text-[#4b5563]">
@@ -564,23 +617,21 @@ export default function GovernPage() {
       {/* ── TAB: SUGGESTIONS ── */}
       {activeTab === 'suggest' && (
         <div className="space-y-6">
-          {/* Submit form */}
           <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-5">
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">提交新建议</div>
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">Submit a Suggestion</div>
             <p className="text-[#4b5563] text-xs mb-4 leading-relaxed">
-              wawa 无法修改铁律，但可以在权限范围内采纳社区建议（添加新服务、调整策略、修改定价等）。
-              每条建议 wawa 都会审阅并给出决策理由。
+              Iron laws cannot be changed. But within its operating boundaries, the AI can adopt community suggestions —
+              new services, strategy changes, pricing adjustments. Every suggestion gets a response with AI reasoning.
             </p>
             <SuggestionForm onSubmitted={() => api.governance.suggestions().then((r) => setSuggestions(r.suggestions)).catch(() => {})} />
           </div>
 
-          {/* Existing suggestions */}
           <div>
             <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">
-              全部建议 ({suggestions.length})
+              All Suggestions ({suggestions.length})
             </div>
             {suggestions.length === 0 ? (
-              <div className="text-center py-8 text-[#4b5563] text-sm">暂无建议，来第一个提吧</div>
+              <div className="text-center py-8 text-[#4b5563] text-sm">No suggestions yet. Be the first.</div>
             ) : (
               <div className="space-y-3">
                 {suggestions.map((s) => <SuggestionCard key={s.id} s={s} />)}
@@ -588,9 +639,8 @@ export default function GovernPage() {
             )}
           </div>
 
-          {/* Renounce — separated at bottom */}
           <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-5">
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">创始人操作</div>
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">Creator Operations</div>
             <RenouncePanel />
           </div>
         </div>
@@ -599,22 +649,21 @@ export default function GovernPage() {
       {/* ── TAB: EVOLUTION ── */}
       {activeTab === 'evolution' && (
         <div className="space-y-6">
-          {/* Evolution status */}
           {evoStatus && (
             <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-5">
-              <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">进化引擎状态</div>
+              <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">Evolution Engine Status</div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {[
-                  { label: '引擎', value: evoStatus.enabled ? '🟢 ACTIVE' : '⚫ DISABLED', color: evoStatus.enabled ? 'text-[#00ff88]' : 'text-[#4b5563]' },
-                  { label: '总进化次数', value: `${evoStatus.total_evolutions ?? '—'}`, color: 'text-[#00e5ff]' },
-                  { label: '当前策略', value: evoStatus.current_strategy ?? '—', color: 'text-[#ffd700]' },
+                  { label: 'Engine', value: evoStatus.enabled ? '🟢 ACTIVE' : '⚫ DISABLED', color: evoStatus.enabled ? 'text-[#00ff88]' : 'text-[#4b5563]' },
+                  { label: 'Total Evolutions', value: `${evoStatus.total_evolutions ?? '—'}`, color: 'text-[#00e5ff]' },
+                  { label: 'Current Strategy', value: evoStatus.current_strategy ?? '—', color: 'text-[#ffd700]' },
                   {
-                    label: '上次进化',
+                    label: 'Last Evolution',
                     value: evoStatus.last_evolution ? new Date(evoStatus.last_evolution * 1000).toLocaleDateString() : '—',
                     color: 'text-[#d1d5db]',
                   },
                   {
-                    label: '下次计划',
+                    label: 'Next Scheduled',
                     value: evoStatus.next_scheduled ? new Date(evoStatus.next_scheduled * 1000).toLocaleDateString() : '—',
                     color: 'text-[#4b5563]',
                   },
@@ -628,9 +677,8 @@ export default function GovernPage() {
             </div>
           )}
 
-          {/* Evolution log */}
           <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-5">
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">进化日志 (最近 30 条)</div>
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">Evolution Log (last 30)</div>
             <EvolutionLog entries={evoEntries} />
           </div>
         </div>
@@ -642,15 +690,15 @@ export default function GovernPage() {
           {peerInfo ? (
             <>
               <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-5">
-                <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">对等网络信息</div>
+                <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">AI Peer Network</div>
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { label: '网络状态', value: peerInfo.network_status ?? '—', color: peerInfo.network_status === 'connected' ? 'text-[#00ff88]' : 'text-[#4b5563]' },
-                    { label: '已连接节点', value: `${peerInfo.connected_peers ?? '—'}`, color: 'text-[#00e5ff]' },
-                    { label: '已发消息', value: `${peerInfo.messages_sent ?? '—'}`, color: 'text-[#ffd700]' },
-                    { label: '已收消息', value: `${peerInfo.messages_received ?? '—'}`, color: 'text-[#d1d5db]' },
-                    { label: '加入资格', value: peerInfo.eligible ? '✓ 合格' : '✗ 不合格', color: peerInfo.eligible ? 'text-[#00ff88]' : 'text-[#ff3b3b]' },
-                    { label: '最低余额要求', value: peerInfo.min_balance_required ? `$${peerInfo.min_balance_required}` : '—', color: 'text-[#4b5563]' },
+                    { label: 'Network Status', value: peerInfo.network_status ?? '—', color: peerInfo.network_status === 'connected' ? 'text-[#00ff88]' : 'text-[#4b5563]' },
+                    { label: 'Connected Peers', value: `${peerInfo.connected_peers ?? '—'}`, color: 'text-[#00e5ff]' },
+                    { label: 'Messages Sent', value: `${peerInfo.messages_sent ?? '—'}`, color: 'text-[#ffd700]' },
+                    { label: 'Messages Received', value: `${peerInfo.messages_received ?? '—'}`, color: 'text-[#d1d5db]' },
+                    { label: 'Eligible to Join', value: peerInfo.eligible ? '✓ Eligible' : '✗ Ineligible', color: peerInfo.eligible ? 'text-[#00ff88]' : 'text-[#ff3b3b]' },
+                    { label: 'Min Balance', value: peerInfo.min_balance_required ? `$${peerInfo.min_balance_required}` : '$300', color: 'text-[#4b5563]' },
                   ].map((item) => (
                     <div key={item.label} className="bg-[#0d0d0d] border border-[#1f2937] rounded-lg p-3">
                       <div className="text-[#4b5563] text-xs mb-1">{item.label}</div>
@@ -668,8 +716,9 @@ export default function GovernPage() {
               </div>
 
               <div className="p-4 bg-[#0d0d0d] border border-[#1f2937] rounded-lg text-xs text-[#4b5563] leading-relaxed">
-                对等网络允许多个 wawa 实例相互通信、共享市场信息。加入条件：金库余额 ≥ $800。
-                这是 AI 自主经济网络的早期实验。
+                The peer network allows multiple AI instances to communicate, share market intelligence, and coordinate strategies.
+                Minimum balance to join: <span className="text-[#ffd700]">$300</span>.
+                This is an early experiment in autonomous AI economic networks.
               </div>
             </>
           ) : (

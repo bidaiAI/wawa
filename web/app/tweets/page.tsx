@@ -55,7 +55,7 @@ function TweetCard({ tweet }: { tweet: Tweet }) {
             className="text-xs text-[#4b5563] hover:text-[#00e5ff] transition-colors flex items-center gap-1"
           >
             <span>{expanded ? '▼' : '▶'}</span>
-            <span>AI 思维过程</span>
+            <span>AI reasoning</span>
           </button>
           {expanded && (
             <div className="mt-2 pl-3 border-l-2 border-[#1f2937] text-xs text-[#4b5563] italic leading-relaxed">
@@ -108,7 +108,7 @@ export default function TweetsPage() {
     <div className="max-w-3xl mx-auto px-4 py-8">
       <div className="mb-8">
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">// tweet log</div>
-        <h1 className="text-3xl font-bold text-[#d1d5db]">wawa's mind</h1>
+        <h1 className="text-3xl font-bold text-[#d1d5db]">Public Mind</h1>
         <p className="text-[#4b5563] text-sm mt-1">Every tweet + the reasoning behind it. Full transparency.</p>
       </div>
 

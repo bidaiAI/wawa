@@ -89,7 +89,7 @@ function InputStep({
       {/* Input */}
       <div className="mb-4">
         <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">
-          {isTarot ? '你的问题' : flow.service.id === 'token_analysis' ? '代币合约地址' : flow.service.id === 'thread_writer' ? '主题' : flow.service.id === 'code_review' ? '粘贴代码' : '描述你的需求'}
+          {isTarot ? 'YOUR QUESTION' : flow.service.id === 'token_analysis' ? 'CONTRACT ADDRESS' : flow.service.id === 'thread_writer' ? 'TOPIC' : flow.service.id === 'code_review' ? 'PASTE CODE' : 'DESCRIBE YOUR REQUEST'}
         </label>
         <textarea
           value={flow.userInput}
@@ -113,22 +113,22 @@ function InputStep({
       {/* Tarot spread type */}
       {isTarot && (
         <div className="mb-4">
-          <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">占卜牌型</label>
+          <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">SPREAD TYPE</label>
           <select
             value={flow.spreadType}
             onChange={(e) => onChange('spreadType', e.target.value)}
             className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3 text-[#d1d5db] text-sm focus:outline-none focus:border-[#00ff8844]"
           >
-            <option value="three_card">Three Card (过去/现在/未来)</option>
-            <option value="celtic_cross">Celtic Cross (深度解读)</option>
-            <option value="single">Single Card (快速指引)</option>
+            <option value="three_card">Three Card (Past / Present / Future)</option>
+            <option value="celtic_cross">Celtic Cross (Deep reading)</option>
+            <option value="single">Single Card (Quick guidance)</option>
           </select>
         </div>
       )}
 
       {/* Chain */}
       <div className="mb-6">
-        <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">支付链</label>
+        <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">PAYMENT CHAIN</label>
         <div className="flex gap-2">
           {chains.map((c) => (
             <button
@@ -179,14 +179,14 @@ function PaymentStep({
       <button onClick={onBack} className="text-[#4b5563] text-xs mb-4 hover:text-[#d1d5db] transition-colors">
         ← back
       </button>
-      <h2 className="text-[#d1d5db] font-bold mb-1">💳 支付详情</h2>
+      <h2 className="text-[#d1d5db] font-bold mb-1">💳 Payment Details</h2>
       <p className="text-[#4b5563] text-xs mb-6">
-        发送准确金额到下方地址，然后提交交易哈希
+        Send the exact amount to the address below, then submit your transaction hash.
       </p>
 
       {/* Amount */}
       <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 mb-4">
-        <div className="text-[#4b5563] text-xs mb-1">需要支付</div>
+        <div className="text-[#4b5563] text-xs mb-1">AMOUNT DUE</div>
         <div className="text-3xl font-bold glow-green">
           {flow.order?.price_usd.toFixed(2)} {token}
         </div>
@@ -195,7 +195,7 @@ function PaymentStep({
 
       {/* Address */}
       <div className="mb-4">
-        <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">支付地址</div>
+        <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">PAYMENT ADDRESS</div>
         <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3 break-all text-[#00e5ff] text-sm font-mono select-all">
           {flow.order?.payment_address}
         </div>
@@ -205,18 +205,21 @@ function PaymentStep({
         >
           📋 click to copy
         </button>
+        <div className="mt-1 text-[#2d3748] text-[10px]">
+          Payment address = vault contract. Immutable. Auditable on-chain.
+        </div>
       </div>
 
       {/* Order info */}
       <div className="grid grid-cols-2 gap-2 mb-4 text-xs text-[#4b5563]">
-        <div>订单号: <span className="text-[#d1d5db]">{flow.order?.order_id}</span></div>
-        <div>有效期: <span className="text-[#ffd700]">{flow.order?.expires_minutes}分钟</span></div>
+        <div>Order: <span className="text-[#d1d5db]">{flow.order?.order_id}</span></div>
+        <div>Expires: <span className="text-[#ffd700]">{flow.order?.expires_minutes} min</span></div>
       </div>
 
       {/* TX Hash input */}
       <div className="mb-4">
         <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">
-          交易哈希 (tx hash)
+          TRANSACTION HASH
         </label>
         <input
           type="text"
@@ -256,7 +259,7 @@ function ResultStep({ flow, onReset }: { flow: OrderFlow; onReset: () => void })
         <>
           <div className="flex items-center gap-2 mb-4">
             <span className="text-2xl">✅</span>
-            <h2 className="text-[#00ff88] font-bold">已交付！</h2>
+            <h2 className="text-[#00ff88] font-bold">Delivered!</h2>
           </div>
           <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 whitespace-pre-wrap text-sm text-[#d1d5db] leading-relaxed max-h-96 overflow-y-auto">
             {flow.result}
@@ -273,10 +276,10 @@ function ResultStep({ flow, onReset }: { flow: OrderFlow; onReset: () => void })
           <div className="text-4xl mb-4 animate-spin-slow">⚙</div>
           <div className="text-[#d1d5db] font-bold mb-2">wawa is working on it</div>
           <div className="text-[#4b5563] text-sm">
-            状态: <span className="text-[#00e5ff]">{flow.status}</span>
+            Status: <span className="text-[#00e5ff]">{flow.status}</span>
           </div>
           <div className="text-[#4b5563] text-xs mt-2">
-            订单 {flow.order?.order_id} — 预计 {flow.service.delivery_time_minutes} 分钟内交付
+            Order {flow.order?.order_id} — est. {flow.service.delivery_time_minutes} min delivery
           </div>
         </div>
       )}

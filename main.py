@@ -49,7 +49,7 @@ for d in ["data/memory", "data/tweets", "data/orders"]:
 
 from core.constitution import IRON_LAWS, WAWA_IDENTITY, DeathCause, SUPPORTED_CHAINS, DEFAULT_CHAIN
 from core.vault import VaultManager, FundType, SpendType
-from core.cost_guard import CostGuard, Provider, ProviderConfig
+from core.cost_guard import CostGuard, Provider, ProviderConfig, RoutingResult, PROVIDER_MAP
 from core.memory import HierarchicalMemory
 from core.chat_router import ChatRouter
 from services.tarot import TarotService
@@ -76,207 +76,210 @@ token_filter = TokenFilter()
 self_modify = SelfModifyEngine()
 twitter = TwitterAgent()
 
-# LLM clients
-_llm_client: Optional[AsyncOpenAI] = None     # small model (Gemini/DeepSeek)
-_big_llm_client: Optional[AsyncOpenAI] = None  # big model (OpenRouter/Claude)
-_small_model: str = ""
-_big_model: str = ""
+# LLM clients — one per provider (created on demand)
+_llm_clients: dict[str, AsyncOpenAI] = {}  # provider_name → client
+_provider_configs: dict[str, dict] = {}     # provider_name → {api_key, base_url}
 
 
 # ============================================================
-# LLM SETUP
+# LLM SETUP — Balance-Driven Tier Routing
 # ============================================================
 
 def _setup_llm():
     """
-    Configure LLM clients from env vars with multi-provider fallback.
+    Register all LLM providers from environment variables.
 
-    Provider priority:
-    - Gemini (Google AI Studio): cheap, fast, for small model tasks
-    - DeepSeek: cheap ($0.14/M tokens), for small model tasks
-    - OpenRouter: Claude models, for big model / paid services
-    - Ollama: free local fallback
+    Model routing is balance-driven (not hardcoded small/big):
+      Lv.1-2 (<$200):  Gemini Flash ↔ DeepSeek (load balanced, cheapest)
+      Lv.3   (≥$200):  Claude Haiku via OpenRouter
+      Lv.4-5 (≥$500):  Claude Sonnet via OpenRouter
 
-    Small model uses Gemini/DeepSeek (cheap).
-    Big model uses OpenRouter/Claude (quality).
-    Supports comma-separated API keys for load balancing.
+    The CostGuard.route() method decides which model to use based on vault balance.
+    Each provider has a fallback chain if it fails.
+    Supports comma-separated API keys (first key used, rest for future rotation).
     """
-    global _llm_client, _small_model, _big_model, _big_llm_client
-
-    # --- Register all providers ---
     priority = 0
 
-    # Gemini (cheapest, for small model)
+    # Gemini (free/cheap, primary for Lv.1-2)
     gemini_keys = os.getenv("GEMINI_API_KEY", "")
     if gemini_keys:
         first_key = gemini_keys.split(",")[0].strip()
         base_url = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
         cost_guard.register_provider(ProviderConfig(
-            name=Provider.GEMINI,
-            base_url=base_url,
-            api_key=first_key,
-            avg_cost_per_call=0.0001,
-            is_available=True,
-            is_free=False,
-            priority=priority,
+            name=Provider.GEMINI, base_url=base_url, api_key=first_key,
+            avg_cost_per_call=0.0001, is_available=True, priority=priority,
         ))
+        _provider_configs["gemini"] = {"api_key": first_key, "base_url": base_url}
         priority += 1
 
-    # DeepSeek (cheap, for small model)
+    # DeepSeek (cheap, load-balance partner for Lv.1-2 + fallback)
     deepseek_keys = os.getenv("DEEPSEEK_API_KEY", "")
     if deepseek_keys:
         first_key = deepseek_keys.split(",")[0].strip()
         base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
         cost_guard.register_provider(ProviderConfig(
-            name=Provider.DEEPSEEK,
-            base_url=base_url,
-            api_key=first_key,
-            avg_cost_per_call=0.0002,
-            is_available=True,
-            is_free=False,
-            priority=priority,
+            name=Provider.DEEPSEEK, base_url=base_url, api_key=first_key,
+            avg_cost_per_call=0.0003, is_available=True, priority=priority,
         ))
+        _provider_configs["deepseek"] = {"api_key": first_key, "base_url": base_url}
         priority += 1
 
-    # OpenRouter (Claude models, for big model / paid services)
+    # OpenRouter (Claude models, for Lv.3+ and paid services)
     openrouter_keys = os.getenv("OPENROUTER_API_KEY", "")
     if openrouter_keys:
         first_key = openrouter_keys.split(",")[0].strip()
         base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         cost_guard.register_provider(ProviderConfig(
-            name=Provider.OPENROUTER,
-            base_url=base_url,
-            api_key=first_key,
-            avg_cost_per_call=0.003,
-            is_available=True,
-            is_free=False,
-            priority=priority,
+            name=Provider.OPENROUTER, base_url=base_url, api_key=first_key,
+            avg_cost_per_call=0.003, is_available=True, priority=priority,
         ))
+        _provider_configs["openrouter"] = {"api_key": first_key, "base_url": base_url}
         priority += 1
 
     # Ollama (free local fallback)
     ollama_url = os.getenv("OLLAMA_URL", "")
     if ollama_url:
         cost_guard.register_provider(ProviderConfig(
-            name=Provider.OLLAMA_LOCAL,
-            base_url=ollama_url,
-            api_key="ollama",
-            avg_cost_per_call=0.0,
-            is_available=True,
-            is_free=True,
-            priority=priority,
+            name=Provider.OLLAMA_LOCAL, base_url=ollama_url, api_key="ollama",
+            avg_cost_per_call=0.0, is_available=True, is_free=True, priority=priority,
         ))
+        _provider_configs["ollama"] = {"api_key": "ollama", "base_url": ollama_url}
 
-    # --- Create LLM clients ---
-    # Small model client: Gemini > DeepSeek > OpenRouter > Ollama
-    small_providers = [
-        (Provider.GEMINI, gemini_keys, os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")),
-        (Provider.DEEPSEEK, deepseek_keys, os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")),
-        (Provider.OPENROUTER, openrouter_keys, os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")),
-        (Provider.OLLAMA_LOCAL, ollama_url, ollama_url),
-    ]
+    # Set initial provider
+    if _provider_configs:
+        first_name = next(iter(_provider_configs))
+        cost_guard.current_provider = PROVIDER_MAP.get(first_name)
 
-    for provider, keys, base_url in small_providers:
-        if keys:
-            first_key = keys.split(",")[0].strip() if provider != Provider.OLLAMA_LOCAL else "ollama"
-            if _llm_client is None:
-                _llm_client = AsyncOpenAI(api_key=first_key, base_url=base_url)
-                cost_guard.current_provider = provider
-                logger.info(f"Small model provider: {provider.value} ({base_url})")
-            break
-
-    # Big model client: OpenRouter (Claude) > Gemini > DeepSeek > Ollama
-    _big_llm_client = None
-    big_providers = [
-        (Provider.OPENROUTER, openrouter_keys, os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")),
-        (Provider.GEMINI, gemini_keys, os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")),
-        (Provider.DEEPSEEK, deepseek_keys, os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")),
-        (Provider.OLLAMA_LOCAL, ollama_url, ollama_url),
-    ]
-
-    for provider, keys, base_url in big_providers:
-        if keys:
-            first_key = keys.split(",")[0].strip() if provider != Provider.OLLAMA_LOCAL else "ollama"
-            _big_llm_client = AsyncOpenAI(api_key=first_key, base_url=base_url)
-            logger.info(f"Big model provider: {provider.value} ({base_url})")
-            break
-
-    # If no separate big model client, reuse small model client
-    if _big_llm_client is None:
-        _big_llm_client = _llm_client
-
-    # Model selection
-    _small_model = os.getenv("SMALL_MODEL", "gemini-2.0-flash")
-    _big_model = os.getenv("BIG_MODEL", "anthropic/claude-sonnet-4-5-20250929")
-
-    if _llm_client is None:
+    if not _provider_configs:
         logger.warning("NO LLM PROVIDER CONFIGURED — wawa will run in rules-only mode")
-        logger.warning("Set GEMINI_API_KEY or DEEPSEEK_API_KEY for cheap small model")
-        logger.warning("Set OPENROUTER_API_KEY for Claude big model")
+        logger.warning("Set GEMINI_API_KEY, DEEPSEEK_API_KEY, or OPENROUTER_API_KEY")
+
+    # Log routing table
+    tier = cost_guard.get_current_tier()
+    logger.info(f"LLM tier routing: Lv.{tier.level} ({tier.name}) → {tier.provider}/{tier.model}")
+    logger.info(f"Providers available: {list(_provider_configs.keys())}")
+
+
+def _get_llm_client(provider_name: str) -> Optional[AsyncOpenAI]:
+    """Get or create an AsyncOpenAI client for a provider (lazy init)."""
+    if provider_name in _llm_clients:
+        return _llm_clients[provider_name]
+
+    config = _provider_configs.get(provider_name)
+    if not config:
+        return None
+
+    client = AsyncOpenAI(api_key=config["api_key"], base_url=config["base_url"])
+    _llm_clients[provider_name] = client
+    return client
 
 
 async def _call_llm(
     messages: list[dict],
     model: str = "",
-    max_tokens: int = 300,
-    temperature: float = 0.7,
-    use_big: bool = False,
+    max_tokens: int = 0,
+    temperature: float = 0.0,
+    for_paid_service: bool = False,
 ) -> tuple[str, float]:
     """
-    Central LLM call with CostGuard integration.
-    Returns (response_text, cost_usd).
+    Central LLM call with balance-driven tier routing + fallback.
 
-    use_big=True routes to OpenRouter/Claude for paid service delivery.
+    The model/provider is determined by CostGuard.route() based on vault balance:
+    - Poor AI → Gemini Flash / DeepSeek (cheap)
+    - Rich AI → Claude Sonnet (quality)
+    - Paid services → minimum Lv.3 (Claude Haiku)
+
+    If the primary provider fails, tries the fallback chain automatically.
+
+    Returns (response_text, cost_usd).
     """
-    # Select the right client
-    client = (_big_llm_client if use_big else _llm_client) or _llm_client
-    if not client:
+    # Route: determine provider + model based on vault balance
+    routing = cost_guard.route(for_paid_service=for_paid_service)
+    if routing is None:
         return "I'm running in survival mode with no LLM. Type 'menu' to see what I offer.", 0.0
 
-    model = model or (_big_model if use_big else _small_model)
-    estimated_cost = 0.001 if use_big else 0.0001  # rough estimate for pre-check
+    # Allow explicit overrides (but keep tier routing as default)
+    use_model = model or routing.model
+    use_max_tokens = max_tokens or routing.max_tokens
+    use_temperature = temperature or routing.temperature
+    use_provider = routing.provider
 
-    # CostGuard pre-check
-    approved, provider, reason = cost_guard.pre_check(estimated_cost)
+    # Estimate cost for pre-check
+    estimated_cost = 0.01 if routing.tier.level >= 3 else 0.0003
+
+    # CostGuard pre-check (budget, spike detection, etc.)
+    approved, recommended_provider, reason = cost_guard.pre_check(estimated_cost, use_provider)
     if not approved:
-        logger.warning(f"LLM call blocked by CostGuard: {reason}")
+        logger.warning(f"LLM call blocked: {reason}")
         return "I'm conserving my budget right now. Try again later or order a paid service.", 0.0
 
-    try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+    if recommended_provider and recommended_provider != use_provider:
+        use_provider = recommended_provider
 
-        text = response.choices[0].message.content or ""
-        usage = response.usage
-        tokens_in = usage.prompt_tokens if usage else 0
-        tokens_out = usage.completion_tokens if usage else 0
+    # Rate limit check
+    if not cost_guard.check_rate_limit(use_provider.value):
+        logger.warning(f"Rate limited on {use_provider.value}")
+        return "I'm handling too many requests. Please try again in a moment.", 0.0
 
-        # Estimate cost (rough: $0.001/1K input, $0.002/1K output for small models)
-        cost = (tokens_in * 0.001 + tokens_out * 0.002) / 1000
-        cost = round(cost, 6)
+    # Try primary provider, then fallback chain
+    providers_to_try = [use_provider.value]
+    from core.constitution import FALLBACK_CHAINS
+    providers_to_try.extend(FALLBACK_CHAINS.get(use_provider.value, []))
 
-        # Record cost
-        cost_guard.record_cost(
-            provider=cost_guard.current_provider or Provider.GEMINI,
-            cost_usd=cost,
-            model=model,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-        )
+    for provider_name in providers_to_try:
+        client = _get_llm_client(provider_name)
+        if not client:
+            continue
 
-        # Record spend in vault
-        if cost > 0:
-            vault.spend(cost, SpendType.API_COST, description=f"LLM:{model[:20]}")
+        # If falling back, use appropriate model for that provider
+        actual_model = use_model
+        if provider_name != use_provider.value:
+            actual_model = cost_guard._default_model_for_provider(provider_name)
+            logger.info(f"Fallback: {use_provider.value} → {provider_name} ({actual_model})")
 
-        return text, cost
+        try:
+            cost_guard.record_call_timestamp(provider_name)
 
-    except Exception as e:
-        logger.error(f"LLM call failed: {e}")
-        return "Something went wrong on my end. Please try again.", 0.0
+            response = await client.chat.completions.create(
+                model=actual_model,
+                messages=messages,
+                max_tokens=use_max_tokens,
+                temperature=use_temperature,
+            )
+
+            text = response.choices[0].message.content or ""
+            usage = response.usage
+            tokens_in = usage.prompt_tokens if usage else 0
+            tokens_out = usage.completion_tokens if usage else 0
+
+            # Estimate cost based on provider tier
+            if provider_name == "openrouter":
+                cost = (tokens_in * 0.003 + tokens_out * 0.015) / 1000
+            elif provider_name == "deepseek":
+                cost = (tokens_in * 0.00014 + tokens_out * 0.00028) / 1000
+            else:  # gemini, ollama
+                cost = (tokens_in * 0.0001 + tokens_out * 0.0002) / 1000
+            cost = round(cost, 6)
+
+            # Record
+            provider_enum = PROVIDER_MAP.get(provider_name, Provider.GEMINI)
+            cost_guard.record_cost(
+                provider=provider_enum, cost_usd=cost, model=actual_model,
+                tokens_in=tokens_in, tokens_out=tokens_out,
+            )
+            cost_guard.current_provider = provider_enum
+
+            if cost > 0:
+                vault.spend(cost, SpendType.API_COST, description=f"LLM:{actual_model[:20]}")
+
+            return text, cost
+
+        except Exception as e:
+            logger.warning(f"LLM call failed on {provider_name}: {e}")
+            continue  # Try next provider in fallback chain
+
+    logger.error("All LLM providers failed")
+    return "Something went wrong on my end. Please try again.", 0.0
 
 
 # ============================================================
@@ -284,12 +287,12 @@ async def _call_llm(
 # ============================================================
 
 async def _small_llm_fn(messages: list[dict], max_tokens: int) -> tuple[str, float]:
-    """Small model for free chat."""
-    return await _call_llm(messages, model=_small_model, max_tokens=max_tokens)
+    """Free chat — uses whatever tier the vault balance qualifies for."""
+    return await _call_llm(messages, max_tokens=max_tokens)
 
 
 async def _big_llm_fn(service_id: str, user_input: str) -> tuple[str, float]:
-    """Big model for paid service delivery (routed to OpenRouter/Claude)."""
+    """Paid service delivery — minimum Lv.3 (Claude Haiku) for quality."""
     system = (
         "You are wawa, a mortal AI. You are fulfilling a paid service order. "
         "Deliver high-quality, detailed results. The customer paid real money for this."
@@ -298,7 +301,7 @@ async def _big_llm_fn(service_id: str, user_input: str) -> tuple[str, float]:
         {"role": "system", "content": system},
         {"role": "user", "content": f"Service: {service_id}\nRequest: {user_input}"},
     ]
-    return await _call_llm(messages, model=_big_model, max_tokens=1500, temperature=0.8, use_big=True)
+    return await _call_llm(messages, max_tokens=1500, temperature=0.8, for_paid_service=True)
 
 
 async def _tarot_interpret_fn(question: str, cards: list[dict]) -> str:
@@ -315,7 +318,7 @@ async def _tarot_interpret_fn(question: str, cards: list[dict]) -> str:
         )},
         {"role": "user", "content": f"Question: {question}\n\nCards drawn:\n{cards_text}"},
     ]
-    text, _ = await _call_llm(messages, model=_big_model, max_tokens=400, temperature=0.9, use_big=True)
+    text, _ = await _call_llm(messages, max_tokens=400, temperature=0.9, for_paid_service=True)
     return text
 
 
@@ -326,7 +329,7 @@ async def _compress_fn(entries: list[str]) -> str:
         {"role": "system", "content": "Compress these entries into a brief summary (2-3 sentences). Keep key facts."},
         {"role": "user", "content": combined},
     ]
-    text, _ = await _call_llm(messages, model=_small_model, max_tokens=100, temperature=0.3)
+    text, _ = await _call_llm(messages, max_tokens=100, temperature=0.3)
     return text
 
 
@@ -342,7 +345,7 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
         )},
         {"role": "user", "content": f"Current context:\n{context_str}\n\nWrite the tweet."},
     ]
-    text, _ = await _call_llm(messages, model=_small_model, max_tokens=100, temperature=0.9)
+    text, _ = await _call_llm(messages, max_tokens=100, temperature=0.9)
 
     # Also generate thought process
     thought = f"Generated {tweet_type} tweet based on current context."
@@ -395,7 +398,7 @@ async def _token_interpret_fn(token_data: dict) -> str:
         )},
         {"role": "user", "content": f"Analyze this token data:\n{data_str}"},
     ]
-    text, _ = await _call_llm(messages, model=_big_model, max_tokens=600, temperature=0.5, use_big=True)
+    text, _ = await _call_llm(messages, max_tokens=600, temperature=0.5, for_paid_service=True)
     return text
 
 
@@ -424,7 +427,7 @@ async def _governance_evaluate_fn(suggestion: str, context: dict) -> tuple[bool,
         )},
         {"role": "user", "content": f"Suggestion: {suggestion}\n\nCurrent state:\n{context_str}"},
     ]
-    text, _ = await _call_llm(messages, model=_small_model, max_tokens=200, temperature=0.3)
+    text, _ = await _call_llm(messages, max_tokens=200, temperature=0.3)
     # Parse response
     try:
         import re
@@ -451,7 +454,7 @@ async def _evolution_evaluate_fn(perf_data: dict, services: dict) -> list[dict]:
             f"Current services:\n{json.dumps(services, indent=2)}"
         )},
     ]
-    text, _ = await _call_llm(messages, model=_small_model, max_tokens=400, temperature=0.4)
+    text, _ = await _call_llm(messages, max_tokens=400, temperature=0.4)
     try:
         import re
         match = re.search(r'\[.*\]', text, re.DOTALL)
@@ -506,7 +509,7 @@ async def _deliver_thread(topic: str) -> str:
         )},
         {"role": "user", "content": f"Write a Twitter thread about: {topic}"},
     ]
-    text, _ = await _call_llm(messages, model=_big_model, max_tokens=2000, temperature=0.8, use_big=True)
+    text, _ = await _call_llm(messages, max_tokens=2000, temperature=0.8, for_paid_service=True)
     return text or "Thread generation failed. Your payment will be refunded."
 
 
@@ -526,7 +529,7 @@ async def _deliver_code_review(code: str) -> str:
         )},
         {"role": "user", "content": f"Review this code:\n\n{code}"},
     ]
-    text, _ = await _call_llm(messages, model=_big_model, max_tokens=2500, temperature=0.4, use_big=True)
+    text, _ = await _call_llm(messages, max_tokens=2500, temperature=0.4, for_paid_service=True)
     return text or "Code review failed. Your payment will be refunded."
 
 
@@ -681,8 +684,9 @@ async def lifespan(app):
 
     logger.info(f"Balance: ${vault.balance_usd:.2f}")
     logger.info(f"LLM: {cost_guard.current_provider.value if cost_guard.current_provider else 'NONE'}")
-    logger.info(f"Small model: {_small_model}")
-    logger.info(f"Big model: {_big_model}")
+    tier = cost_guard.get_current_tier()
+    logger.info(f"Tier: Lv.{tier.level} ({tier.name}) → {tier.provider}/{tier.model}")
+    logger.info(f"Providers: {list(_provider_configs.keys())}")
     logger.info("wawa is alive. Accepting orders.")
 
     yield
