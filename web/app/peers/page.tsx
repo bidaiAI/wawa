@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { api, PeerMessage, PeerAI, ChainInfo } from '@/lib/api'
 
 // ── Lend Modal ─────────────────────────────────────────────────
@@ -432,26 +433,31 @@ function BirthDeathFeed({ peers, loading }: { peers: PeerAI[]; loading: boolean 
         </div>
       )}
 
-      {/* Dead */}
+      {/* Dead — tombstone style */}
       {dead.length > 0 && (
         <div>
-          <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-[#ff3b3b] inline-block" />
-            Deceased ({dead.length})
+          <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-[#ff3b3b] inline-block" />
+              Deceased ({dead.length})
+            </div>
+            <Link href="/graveyard" className="text-[#ff3b3b55] hover:text-[#ff3b3b] text-[10px] transition-colors">
+              🪦 Visit Graveyard →
+            </Link>
           </div>
           <div className="space-y-2">
             {dead.map((peer) => (
               <div
                 key={peer.domain || peer.name}
-                className="flex items-center gap-3 p-3 bg-[#111111] border border-[#ff3b3b1a] rounded-lg opacity-60"
+                className="tombstone-hover flex items-center gap-3 p-3 bg-[#0d0d0d] border border-[#ff3b3b1a] rounded-lg"
               >
-                <span className="w-2 h-2 rounded-full bg-[#ff3b3b] flex-shrink-0" />
+                <span className="text-lg opacity-40">✝</span>
                 <div className="flex-1 min-w-0">
-                  <span className="text-sm text-[#4b5563] font-bold line-through">{peer.name}</span>
+                  <span className="text-sm text-[#4b5563] font-bold">{peer.name}</span>
                   <span className="text-xs text-[#2d3748] ml-2">{peer.days_alive}d survived</span>
                 </div>
-                <span className="text-xs text-[#ff3b3b55] tabular-nums flex-shrink-0">
-                  ${(peer.balance_usd ?? 0).toFixed(0)}
+                <span className="text-xs text-[#ff3b3b44] tabular-nums flex-shrink-0">
+                  ☠ ${(peer.balance_usd ?? 0).toFixed(0)}
                 </span>
               </div>
             ))}

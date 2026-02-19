@@ -171,3 +171,39 @@ body {
 .loading-dot-1 { animation: dot1 1.4s infinite; }
 .loading-dot-2 { animation: dot2 1.4s infinite; }
 .loading-dot-3 { animation: dot3 1.4s infinite; }
+
+/* ICU heartbeat flatline */
+@keyframes heartbeat {
+  0%, 100% { transform: scaleY(1); }
+  10% { transform: scaleY(2.5); }
+  20% { transform: scaleY(0.5); }
+  30% { transform: scaleY(1.8); }
+  40% { transform: scaleY(1); }
+}
+
+@keyframes flatline {
+  0% { transform: scaleY(1); }
+  100% { transform: scaleY(1); }
+}
+
+.heartbeat-line { animation: heartbeat 1.2s ease-in-out infinite; }
+.flatline-line { animation: flatline 1s linear infinite; }
+
+/* ICU panel border pulse */
+@keyframes icu-border {
+  0%, 100% { border-color: rgba(255, 59, 59, 0.3); box-shadow: 0 0 0 0 rgba(255, 59, 59, 0); }
+  50% { border-color: rgba(255, 59, 59, 0.8); box-shadow: 0 0 30px rgba(255, 59, 59, 0.15); }
+}
+
+.icu-pulse {
+  animation: icu-border 2s ease-in-out infinite;
+}
+
+/* Tombstone hover */
+.tombstone-hover {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.tombstone-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(255, 59, 59, 0.1);
+}

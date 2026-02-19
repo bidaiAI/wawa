@@ -17,6 +17,7 @@ const links = [
   { href: '/activity', label: 'ACTIVITY' },
   { href: '/peers', label: 'PEERS' },
   { href: '/govern', label: 'GOVERN' },
+  { href: '/graveyard', label: '🪦' },
   { href: '/about', label: 'ABOUT' },
 ]
 

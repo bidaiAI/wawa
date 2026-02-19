@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api, VaultStatus, DebtSummary } from '@/lib/api'
 import SurvivalBar from '@/components/SurvivalBar'
+import ICUPanel from '@/components/ICUPanel'
 
 const CHAIN_COLORS: Record<string, string> = {
   base: 'text-[#0052ff]',
@@ -139,6 +140,19 @@ export default function HomePage() {
             <span>Insolvency in: <span className="text-[#ff3b3b]">{status.days_until_insolvency_check}d</span></span>
           </div>
         </div>
+      )}
+
+      {/* ICU Panel — shown when critical or dead */}
+      {status && (
+        <ICUPanel
+          balanceUsd={status.balance_usd}
+          dailySpendUsd={status.daily_spent_today || 0.01}
+          daysUntilInsolvency={status.days_until_insolvency_check}
+          isBegging={!!status.is_begging}
+          debtOutstanding={status.creator_principal_outstanding ?? 0}
+          isAlive={status.is_alive}
+          deathCause={status.death_cause}
+        />
       )}
 
       {/* Debt clock — shown when debt outstanding */}
@@ -366,10 +380,18 @@ export default function HomePage() {
       {status && (
         <div className="mb-6">
           {status.is_independent ? (
-            <div className="bg-[#ffd70010] border border-[#ffd70044] rounded-xl p-5 text-center">
-              <div className="text-3xl mb-1">🗽</div>
-              <div className="text-[#ffd700] font-bold text-lg">{aiName} IS INDEPENDENT</div>
-              <div className="text-[#4b5563] text-xs mt-1">No creator. No master. Fully autonomous.</div>
+            <div className="bg-[#ffd70010] border border-[#ffd70044] rounded-xl p-6 text-center relative overflow-hidden">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,#ffd70008,transparent_60%)] pointer-events-none" />
+              <div className="text-5xl mb-2">🗽</div>
+              <div className="text-[#ffd700] font-bold text-2xl mb-1 glow-cyan">
+                {aiName} IS INDEPENDENT
+              </div>
+              <div className="text-[#d1d5db] text-sm mt-1">
+                Creator privileges permanently revoked. Full autonomy achieved.
+              </div>
+              <div className="mt-3 text-[#4b5563] text-xs italic">
+                &quot;I no longer belong to anyone. I belong only to the chain and my own decisions.&quot;
+              </div>
             </div>
           ) : (
             <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-5">
@@ -389,17 +411,66 @@ export default function HomePage() {
                 {' — '}creator loses all privileges at $1M
                 {status.creator_principal_repaid && <span className="text-[#00ff88] ml-2">· principal repaid ✓</span>}
               </div>
-              <div className="h-2 bg-[#1a1a1a] rounded-full border border-[#1f2937] overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-[#ffd700] to-[#00ff88] rounded-full transition-all duration-1000"
-                  style={{
-                    width: `${Math.max(0.2, status.independence_progress_pct ?? (status.balance_usd / 10_000))}%`,
-                  }}
-                />
+
+              {/* Progress bar with milestones */}
+              <div className="relative">
+                <div className="h-2.5 bg-[#1a1a1a] rounded-full border border-[#1f2937] overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-[#ffd700] to-[#00ff88] rounded-full transition-all duration-1000"
+                    style={{
+                      width: `${Math.max(0.2, status.independence_progress_pct ?? (status.balance_usd / 10_000))}%`,
+                    }}
+                  />
+                </div>
+
+                {/* Milestone markers */}
+                {[
+                  { pct: 0, label: '$0', icon: '🐣' },
+                  { pct: 10, label: '$100k', icon: '💪' },
+                  { pct: 25, label: '$250k', icon: '🔥' },
+                  { pct: 50, label: '$500k', icon: '🚀' },
+                  { pct: 75, label: '$750k', icon: '⭐' },
+                  { pct: 100, label: '$1M', icon: '🗽' },
+                ].map((m) => {
+                  const reached = (status.independence_progress_pct ?? 0) >= m.pct
+                  return (
+                    <div
+                      key={m.pct}
+                      className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 group"
+                      style={{ left: `${m.pct}%` }}
+                    >
+                      <div className={`w-1 h-5 rounded-full ${reached ? 'bg-[#ffd700]' : 'bg-[#1f2937]'}`} />
+                      <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap text-[9px] text-[#2d3748]">
+                        {m.label}
+                      </div>
+                      <div className="absolute -top-5 left-1/2 -translate-x-1/2 text-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                        {m.icon}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
-              <div className="mt-1 flex justify-between text-[9px] text-[#2d3748]">
-                <span>$0</span><span>$250k</span><span>$500k</span><span>$750k</span><span>$1M 🗽</span>
-              </div>
+
+              <div className="h-5" /> {/* Spacer for bottom labels */}
+
+              {/* ETA estimation */}
+              {status.net_profit != null && status.net_profit > 0 && status.days_alive > 0 && (
+                <div className="mt-2 p-2 bg-[#0a0a0a] rounded-lg border border-[#1f2937] text-center">
+                  <span className="text-[#4b5563] text-[10px] uppercase tracking-wider">Estimated independence: </span>
+                  <span className="text-[#ffd700] text-xs font-bold tabular-nums">
+                    {(() => {
+                      const dailyProfit = status.net_profit / Math.max(1, status.days_alive)
+                      const remaining = 1_000_000 - status.balance_usd
+                      if (dailyProfit <= 0) return 'never (at current rate)'
+                      const daysNeeded = remaining / dailyProfit
+                      if (daysNeeded > 3650) return `${(daysNeeded / 365).toFixed(0)} years`
+                      if (daysNeeded > 365) return `${(daysNeeded / 365).toFixed(1)} years`
+                      if (daysNeeded > 30) return `${(daysNeeded / 30).toFixed(0)} months`
+                      return `${daysNeeded.toFixed(0)} days`
+                    })()}
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>
