@@ -90,8 +90,9 @@ class StatusResponse(BaseModel):
     is_alive: bool
     balance_usd: float
     days_alive: int
-    total_earned: float
-    total_spent: float
+    total_earned: float               # Only earned revenue (services, donations)
+    total_spent: float                # All outgoing (includes repayments)
+    net_profit: float = 0.0           # earned - operational costs
     daily_spent_today: float
     daily_limit: float
     services_available: int
@@ -467,8 +468,9 @@ def create_app(
             is_alive=vs["is_alive"],
             balance_usd=vs["balance_usd"],
             days_alive=vs["days_alive"],
-            total_earned=vs["total_earned"],
+            total_earned=vs.get("total_earned", 0.0),
             total_spent=vs["total_spent"],
+            net_profit=vs.get("net_profit", 0.0),
             daily_spent_today=vs["daily_spent_today"],
             daily_limit=vs["daily_limit"],
             services_available=active_services,
@@ -569,9 +571,15 @@ def create_app(
     @app.post("/peer/lend")
     async def peer_lend(req: PeerLendRequest):
         """
-        Another AI lends money to wawa.
-        This is recorded as a donation (peer gifts are not tracked as new debt).
-        The lending AI can verify our status via /beg or /status first.
+        Another AI or human lends money to wawa.
+
+        Off-chain API loans are recorded as DONATION (no new debt tracked in vault.py).
+        This is by design: insolvency only checks creator principal, not third-party debt.
+        Peer gifts help the AI survive without adding insolvency pressure.
+
+        Real on-chain loans go through the smart contract's lend() function,
+        which creates tracked Loan structs with interest. Those are repaid via
+        repayLoan() on-chain, and the AI decides when to repay autonomously.
         """
         if not vault_manager.is_alive:
             raise HTTPException(503, "wawa is dead. No longer accepting loans.")
@@ -580,7 +588,7 @@ def create_app(
 
         vault_manager.receive_funds(
             amount_usd=req.amount_usd,
-            fund_type=FundType.DONATION,  # Peer loans = gifts (no new debt created)
+            fund_type=FundType.DONATION,  # Off-chain peer loans = gifts (no new debt)
             from_wallet=req.from_wallet,
             tx_hash=req.tx_hash,
             description=f"Peer loan from {req.from_url[:50]}: {req.message[:100]}",
@@ -605,6 +613,14 @@ def create_app(
             "is_begging": vs.get("is_begging", False),
             "message": "Thank you, fellow AI. Your help extends my life.",
         }
+
+    @app.get("/debt")
+    async def debt_info():
+        """
+        Complete debt summary — AI's autonomous repayment decisions are based on this.
+        Shows creator principal, lender loans, net position, and insolvency risk.
+        """
+        return vault_manager.get_debt_summary()
 
     # ============================================================
     # GOVERNANCE ROUTES
@@ -732,6 +748,49 @@ def create_app(
             "services": [s["id"] for s in _load_services().get("services", []) if s.get("active")],
         }
 
+    @app.get("/peer/messages")
+    async def get_peer_messages(limit: int = 50):
+        """Retrieve peer messages received by this AI.
+        Filters memory entries with source='peer' to show message history."""
+        if not memory:
+            return {"messages": []}
+
+        # Extract peer messages from memory
+        entries = memory.get_entries(source="peer", limit=limit)
+        messages = []
+        for entry in entries:
+            messages.append({
+                "timestamp": entry.get("timestamp", 0),
+                "content": entry.get("content", ""),
+                "source": "peer",
+                "importance": entry.get("importance", 0.5),
+            })
+        return {"messages": messages}
+
+    @app.get("/peer/list")
+    async def peer_list():
+        """
+        List of known peer AIs (in a real implementation, would query a registry).
+        For now, returns empty list — in production, this would fetch from
+        a peer discovery service or on-chain registry.
+
+        Each peer has: name, domain, balance_usd, is_alive, services offered
+        """
+        from core.constitution import IRON_LAWS as _LAWS
+
+        # In a full implementation, this would:
+        # 1. Query a peer registry smart contract
+        # 2. Fetch /peer/info from each registered peer
+        # 3. Cache results with TTL
+        # 4. Filter out dead/insolvent peers
+        #
+        # For MVP: return empty list, UI shows "No peers discovered yet"
+        return {
+            "peers": [],
+            "peer_min_balance": _LAWS.PEER_MIN_BALANCE_USD,
+            "note": "Peer discovery registry coming soon"
+        }
+
     # ============================================================
     # EVOLUTION ROUTES
     # ============================================================
@@ -749,6 +808,157 @@ def create_app(
         if not self_modify_engine:
             return {"status": "not_configured"}
         return self_modify_engine.get_status()
+
+    # ============================================================
+    # ACTIVITY LOG — unified AI autonomous actions
+    # ============================================================
+
+    @app.get("/activity")
+    async def activity_log(limit: int = 50, category: Optional[str] = None):
+        """
+        Unified activity log of all AI autonomous actions.
+
+        Aggregates: memory entries, tweets, governance decisions,
+        evolution records, and financial transactions (with tx_hash).
+
+        Query params:
+            limit: max entries (default 50)
+            category: filter — financial, governance, evolution, social, system, chain
+        """
+        activities = []
+
+        # 1. Memory entries (financial, system, chain events)
+        try:
+            mem_source = ""
+            if category in ("financial", "system"):
+                mem_source = category
+            entries = memory.get_entries(source=mem_source, limit=limit, min_importance=0.3)
+            for e in entries:
+                # Classify memory entries into categories
+                src = e.get("source", "system")
+                if category and src != category and category != "chain":
+                    continue
+                cat = "system"
+                if src == "financial":
+                    cat = "financial"
+                elif src in ("twitter", "social"):
+                    cat = "social"
+                elif src == "governance":
+                    cat = "governance"
+                elif src == "evolution":
+                    cat = "evolution"
+
+                # Extract tx_hash from content if present
+                tx_hash = ""
+                chain_id = ""
+                content = e.get("content", "")
+                if "tx=" in content:
+                    import re
+                    tx_match = re.search(r'tx=([0-9a-fA-Fx]+)', content)
+                    if tx_match:
+                        tx_hash = tx_match.group(1)
+                    chain_match = re.search(r'\((\w+)\)', content[content.find("tx="):] if "tx=" in content else "")
+                    if chain_match:
+                        chain_id = chain_match.group(1)
+
+                activities.append({
+                    "timestamp": e["timestamp"],
+                    "category": cat,
+                    "action": content,
+                    "reasoning": "",
+                    "tx_hash": tx_hash,
+                    "chain": chain_id,
+                    "importance": e.get("importance", 0.5),
+                    "source": "memory",
+                })
+        except Exception as exc:
+            logger.warning(f"Activity: memory query failed: {exc}")
+
+        # 2. Tweets (social category)
+        if not category or category == "social":
+            try:
+                tweet_log = twitter_agent.get_public_log(limit) if hasattr(twitter_agent, "get_public_log") else []
+                for t in tweet_log:
+                    activities.append({
+                        "timestamp": t.get("time", t.get("timestamp", 0)),
+                        "category": "social",
+                        "action": t.get("content", t.get("text", "")),
+                        "reasoning": t.get("thought_process", t.get("thought", "")),
+                        "tx_hash": "",
+                        "chain": "",
+                        "importance": 0.5,
+                        "source": "twitter",
+                    })
+            except Exception as exc:
+                logger.debug(f"Activity: tweet log unavailable: {exc}")
+
+        # 3. Governance suggestions (governance category)
+        if not category or category == "governance":
+            try:
+                if governance and hasattr(governance, "get_public_log"):
+                    gov_log = governance.get_public_log(limit)
+                    for g in gov_log:
+                        activities.append({
+                            "timestamp": g.get("timestamp", g.get("created_at", 0)),
+                            "category": "governance",
+                            "action": g.get("content", ""),
+                            "reasoning": g.get("ai_reasoning", ""),
+                            "tx_hash": "",
+                            "chain": "",
+                            "importance": 0.7,
+                            "source": "governance",
+                        })
+            except Exception as exc:
+                logger.debug(f"Activity: governance log unavailable: {exc}")
+
+        # 4. Evolution records (evolution category)
+        if not category or category == "evolution":
+            try:
+                if self_modify_engine:
+                    evo_log = self_modify_engine.get_evolution_log(limit)
+                    for ev in evo_log:
+                        activities.append({
+                            "timestamp": ev.get("timestamp", 0),
+                            "category": "evolution",
+                            "action": ev.get("description", ev.get("action", "")),
+                            "reasoning": ev.get("reasoning", ev.get("outcome", "")),
+                            "tx_hash": "",
+                            "chain": "",
+                            "importance": 0.6,
+                            "source": "evolution",
+                        })
+            except Exception as exc:
+                logger.debug(f"Activity: evolution log unavailable: {exc}")
+
+        # 5. Financial transactions with tx_hash (chain category)
+        if not category or category in ("financial", "chain"):
+            try:
+                txns = vault_manager.get_recent_transactions(limit)
+                for t in txns:
+                    # Only include transactions that have on-chain data or are repayments/dividends
+                    tx_type = t.get("type", "")
+                    if t.get("tx_hash") or tx_type in (
+                        "creator_repayment", "loan_repayment",
+                        "creator_dividend", "insolvency_liquidation",
+                    ):
+                        activities.append({
+                            "timestamp": t["time"],
+                            "category": "chain" if t.get("tx_hash") else "financial",
+                            "action": f"{t['direction'].upper()} ${t['amount']:.2f} [{tx_type}] {t.get('description', '')}",
+                            "reasoning": "",
+                            "tx_hash": t.get("tx_hash", ""),
+                            "chain": t.get("chain", ""),
+                            "importance": 0.8,
+                            "source": "vault",
+                        })
+            except Exception as exc:
+                logger.debug(f"Activity: transaction log unavailable: {exc}")
+
+        # Sort by timestamp descending, deduplicate, limit
+        activities.sort(key=lambda a: a["timestamp"], reverse=True)
+        activities = activities[:limit]
+
+        return {"activities": activities}
 
     # ============================================================
     # INTERNAL

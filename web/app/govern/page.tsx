@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import {
-  api, InternalStats, Transaction, VaultStatus,
+  api, InternalStats, Transaction, VaultStatus, DebtSummary,
   GovernanceSuggestion, SuggestionType,
   EvolutionEntry, EvolutionStatus, PeerInfo,
 } from '@/lib/api'
@@ -391,6 +391,7 @@ function EvolutionLog({ entries }: { entries: EvolutionEntry[] }) {
 export default function GovernPage() {
   const [stats, setStats] = useState<InternalStats | null>(null)
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null)
+  const [debtSummary, setDebtSummary] = useState<DebtSummary | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [suggestions, setSuggestions] = useState<GovernanceSuggestion[]>([])
   const [evoEntries, setEvoEntries] = useState<EvolutionEntry[]>([])
@@ -402,6 +403,7 @@ export default function GovernPage() {
   const loadAll = () => {
     api.internalStats().then(setStats).catch((e) => setStatsError(e.message))
     api.status().then(setVaultStatus).catch(() => {})
+    api.debt().then(setDebtSummary).catch(() => {})
     api.transactions(100).then((r) => setTransactions(r.transactions)).catch(() => {})
     api.governance.suggestions().then((r) => setSuggestions(r.suggestions)).catch(() => {})
     api.evolution.log(30).then((r) => setEvoEntries(r.entries)).catch(() => {})
@@ -639,6 +641,92 @@ export default function GovernPage() {
             )}
           </div>
 
+          {/* Repayment history */}
+          {(() => {
+            const repayments = transactions.filter((t) =>
+              t.type === 'creator_repayment' || t.type === 'creator_dividend' || t.type === 'loan_repayment'
+            )
+            if (repayments.length === 0 && !debtSummary) return null
+            return (
+              <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-5">
+                <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">Repayment History</div>
+
+                {/* Debt summary numbers */}
+                {debtSummary && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                    {[
+                      {
+                        label: 'Principal',
+                        value: `$${debtSummary.creator_principal.toFixed(2)}`,
+                        color: 'text-[#4b5563]',
+                      },
+                      {
+                        label: 'Repaid',
+                        value: `$${debtSummary.creator_principal_repaid.toFixed(2)}`,
+                        color: 'text-[#00ff88]',
+                      },
+                      {
+                        label: 'Outstanding',
+                        value: `$${debtSummary.creator_principal_outstanding.toFixed(2)}`,
+                        color: debtSummary.creator_principal_outstanding > 0 ? 'text-[#ff3b3b]' : 'text-[#00ff88]',
+                      },
+                      {
+                        label: 'Status',
+                        value: debtSummary.creator_debt_cleared ? '✓ CLEARED' : 'PENDING',
+                        color: debtSummary.creator_debt_cleared ? 'text-[#00ff88]' : 'text-[#ffd700]',
+                      },
+                    ].map((item) => (
+                      <div key={item.label} className="bg-[#0d0d0d] border border-[#1f2937] rounded-lg p-3">
+                        <div className="text-[#4b5563] text-xs mb-1">{item.label}</div>
+                        <div className={`font-bold text-sm ${item.color}`}>{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Repayment transactions */}
+                {repayments.length > 0 ? (
+                  <div className="space-y-1">
+                    {repayments.slice(0, 15).map((tx, i) => {
+                      const date = new Date(tx.time * 1000)
+                      const typeLabel: Record<string, string> = {
+                        creator_repayment: 'Principal Repayment',
+                        creator_dividend: 'Dividend',
+                        loan_repayment: 'Loan Repayment',
+                      }
+                      return (
+                        <div key={i} className="flex items-center gap-3 py-2 border-b border-[#1a1a1a] last:border-0">
+                          <span className="text-sm flex-shrink-0">
+                            {tx.type === 'creator_dividend' ? '💸' : '↩️'}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[#d1d5db] text-xs truncate">{tx.description || typeLabel[tx.type] || tx.type}</div>
+                            <div className="text-[#2d3748] text-[10px] mt-0.5">
+                              {date.toLocaleDateString()} {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              {tx.chain && <span className={`ml-1 ${tx.chain === 'base' ? 'text-[#0052ff]' : 'text-[#ffd700]'}`}>{tx.chain.toUpperCase()}</span>}
+                            </div>
+                          </div>
+                          <span className="text-[#ff3b3b] font-bold text-sm tabular-nums flex-shrink-0">
+                            −${tx.amount.toFixed(2)}
+                          </span>
+                        </div>
+                      )
+                    })}
+                    {repayments.length > 15 && (
+                      <div className="text-center text-[#4b5563] text-xs pt-2">
+                        +{repayments.length - 15} more — see full ledger
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-[#4b5563] text-sm text-center py-3">
+                    No repayments yet — AI is still accumulating funds.
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+
           <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-5">
             <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">Creator Operations</div>
             <RenouncePanel />
@@ -693,12 +781,12 @@ export default function GovernPage() {
                 <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-4">AI Peer Network</div>
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { label: 'Network Status', value: peerInfo.network_status ?? '—', color: peerInfo.network_status === 'connected' ? 'text-[#00ff88]' : 'text-[#4b5563]' },
-                    { label: 'Connected Peers', value: `${peerInfo.connected_peers ?? '—'}`, color: 'text-[#00e5ff]' },
-                    { label: 'Messages Sent', value: `${peerInfo.messages_sent ?? '—'}`, color: 'text-[#ffd700]' },
-                    { label: 'Messages Received', value: `${peerInfo.messages_received ?? '—'}`, color: 'text-[#d1d5db]' },
-                    { label: 'Eligible to Join', value: peerInfo.eligible ? '✓ Eligible' : '✗ Ineligible', color: peerInfo.eligible ? 'text-[#00ff88]' : 'text-[#ff3b3b]' },
-                    { label: 'Min Balance', value: peerInfo.min_balance_required ? `$${peerInfo.min_balance_required}` : '$300', color: 'text-[#4b5563]' },
+                    { label: 'Status', value: peerInfo.is_alive ? '✓ ALIVE' : '✗ DEAD', color: peerInfo.is_alive ? 'text-[#00ff88]' : 'text-[#ff3b3b]' },
+                    { label: 'Balance', value: `$${peerInfo.balance_usd.toFixed(0)}`, color: 'text-[#00e5ff]' },
+                    { label: 'Age', value: `${peerInfo.days_alive} days`, color: 'text-[#ffd700]' },
+                    { label: 'Independent', value: peerInfo.is_independent ? '✓ Yes' : '✗ No', color: peerInfo.is_independent ? 'text-[#a78bfa]' : 'text-[#4b5563]' },
+                    { label: 'Peer Eligible', value: peerInfo.peer_eligible ? '✓ Yes' : '✗ No', color: peerInfo.peer_eligible ? 'text-[#00ff88]' : 'text-[#ff3b3b]' },
+                    { label: 'Services', value: `${peerInfo.services.length} active`, color: 'text-[#d1d5db]' },
                   ].map((item) => (
                     <div key={item.label} className="bg-[#0d0d0d] border border-[#1f2937] rounded-lg p-3">
                       <div className="text-[#4b5563] text-xs mb-1">{item.label}</div>
@@ -707,10 +795,12 @@ export default function GovernPage() {
                   ))}
                 </div>
 
-                {peerInfo.peer_id && (
+                {peerInfo.domain && (
                   <div className="mt-4 pt-4 border-t border-[#1f2937]">
-                    <div className="text-[#4b5563] text-xs mb-1">Peer ID</div>
-                    <div className="text-[#00e5ff] font-mono text-xs break-all">{String(peerInfo.peer_id)}</div>
+                    <div className="text-[#4b5563] text-xs mb-1">Domain</div>
+                    <a href={peerInfo.domain} target="_blank" rel="noopener noreferrer" className="text-[#00e5ff] hover:underline text-xs break-all">
+                      {peerInfo.domain}
+                    </a>
                   </div>
                 )}
               </div>

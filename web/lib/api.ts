@@ -21,8 +21,11 @@ export interface VaultStatus {
   balance_usd: number
   balance_by_chain: Record<string, number>
   days_alive: number
-  total_earned: number
-  total_spent: number
+  total_earned: number          // service revenue only (excl. loans)
+  total_income: number          // all inflows incl. loans/deposits
+  total_spent: number           // all outflows
+  total_operational_cost: number // API + gas + infra costs only
+  net_profit: number            // total_earned - total_operational_cost
   daily_spent_today: number
   daily_limit: number
   services_available: number
@@ -44,6 +47,25 @@ export interface VaultStatus {
   days_until_insolvency_check: number
   is_begging: boolean
   beg_message: string
+}
+
+export interface DebtSummary {
+  balance_usd: number
+  creator_principal: number
+  creator_principal_repaid: number
+  creator_principal_outstanding: number
+  creator_debt_cleared: boolean
+  lender_count: number
+  lender_total_owed: number
+  total_debt: number
+  net_position: number
+  days_alive: number
+  days_until_insolvency_check: number
+  insolvency_risk: boolean
+  total_earned: number
+  total_operational_cost: number
+  net_profit: number
+  is_independent: boolean
 }
 
 export interface BegStatus {
@@ -207,14 +229,32 @@ export interface TokenScanResult {
 }
 
 export interface PeerInfo {
-  peer_id?: string
-  connected_peers?: number
-  messages_sent?: number
-  messages_received?: number
-  network_status?: string
-  eligible?: boolean
-  min_balance_required?: number
-  [key: string]: unknown
+  name: string
+  domain: string
+  is_alive: boolean
+  balance_usd: number
+  days_alive: number
+  is_independent: boolean
+  peer_eligible: boolean
+  services: string[]
+}
+
+export interface PeerMessage {
+  timestamp: number
+  content: string
+  source: string
+  importance: number
+}
+
+export interface PeerAI {
+  name: string
+  domain: string
+  is_alive: boolean
+  balance_usd: number
+  days_alive: number
+  is_independent: boolean
+  peer_eligible: boolean
+  services: string[]
 }
 
 export interface EvolutionEntry {
@@ -234,6 +274,19 @@ export interface EvolutionStatus {
   current_strategy?: string
   next_scheduled?: number | null
   [key: string]: unknown
+}
+
+export type ActivityCategory = 'financial' | 'governance' | 'evolution' | 'social' | 'system' | 'chain'
+
+export interface ActivityEntry {
+  timestamp: number
+  category: ActivityCategory
+  action: string
+  reasoning: string
+  tx_hash: string
+  chain: string
+  importance: number
+  source: string
 }
 
 // ── API calls ─────────────────────────────────────────────────
@@ -269,6 +322,8 @@ export const api = {
 
   internalStats: () => request<InternalStats>('/internal/stats'),
 
+  debt: () => request<DebtSummary>('/debt'),
+
   governance: {
     suggest: (content: string, suggestion_type: SuggestionType) =>
       request<{ id: string; status: string }>('/governance/suggest', {
@@ -295,6 +350,8 @@ export const api = {
 
   peer: {
     info: () => request<PeerInfo>('/peer/info'),
+    messages: (limit = 50) => request<{ messages: PeerMessage[] }>(`/peer/messages?limit=${limit}`),
+    list: () => request<{ peers: PeerAI[]; peer_min_balance: number; note?: string }>('/peer/list'),
     lend: (data: { from_url: string; amount_usd: number; from_wallet?: string; tx_hash?: string; message?: string }) =>
       request<DonateResponse>('/peer/lend', { method: 'POST', body: JSON.stringify(data) }),
   },
@@ -302,5 +359,11 @@ export const api = {
   evolution: {
     log: (limit = 20) => request<{ entries: EvolutionEntry[] }>(`/evolution/log?limit=${limit}`),
     status: () => request<EvolutionStatus>('/evolution/status'),
+  },
+
+  activity: (limit = 50, category?: ActivityCategory) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (category) params.set('category', category)
+    return request<{ activities: ActivityEntry[] }>(`/activity?${params}`)
   },
 }

@@ -254,6 +254,33 @@ class HierarchicalMemory:
 
         return "\n".join(reversed(parts))
 
+    def get_entries(self, source: str = "", limit: int = 50, min_importance: float = 0.0) -> list[dict]:
+        """
+        Query raw memory entries for the activity log.
+
+        Args:
+            source: Filter by source (e.g. "financial", "system", "twitter"). Empty = all.
+            limit: Maximum entries to return.
+            min_importance: Minimum importance threshold (0.0 = all).
+
+        Returns:
+            List of entry dicts sorted by timestamp descending (newest first).
+        """
+        entries = self.raw
+        if source:
+            entries = [e for e in entries if e.source == source]
+        if min_importance > 0:
+            entries = [e for e in entries if e.importance >= min_importance]
+        return [
+            {
+                "timestamp": e.timestamp,
+                "content": e.content,
+                "source": e.source,
+                "importance": e.importance,
+            }
+            for e in sorted(entries, key=lambda e: e.timestamp, reverse=True)[:limit]
+        ]
+
     def get_stats(self) -> dict:
         """Memory system stats for dashboard."""
         return {

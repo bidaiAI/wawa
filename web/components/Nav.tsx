@@ -13,6 +13,8 @@ const links = [
   { href: '/chat', label: 'CHAT' },
   { href: '/tweets', label: 'TWEETS' },
   { href: '/ledger', label: 'LEDGER' },
+  { href: '/activity', label: 'ACTIVITY' },
+  { href: '/peers', label: 'PEERS' },
   { href: '/govern', label: 'GOVERN' },
   { href: '/about', label: 'ABOUT' },
 ]

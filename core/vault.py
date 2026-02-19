@@ -107,8 +107,10 @@ class VaultManager:
         self.transactions: list[Transaction] = []
         self.daily_spent_usd: float = 0.0
         self.daily_reset_timestamp: float = time.time()
-        self.total_income_usd: float = 0.0
+        self.total_income_usd: float = 0.0      # ALL incoming (including deposits/loans)
+        self.total_earned_usd: float = 0.0      # ONLY earned revenue (services, campaigns, donations)
         self.total_spent_usd: float = 0.0
+        self.total_operational_cost_usd: float = 0.0  # ONLY operational spend (API, gas, infra)
         self.is_alive: bool = True
         self.death_cause: Optional[DeathCause] = None
         self.birth_timestamp: Optional[float] = None
@@ -152,6 +154,12 @@ class VaultManager:
         if chain:
             self.balance_by_chain[chain] = self.balance_by_chain.get(chain, 0.0) + amount_usd
         self.total_income_usd += amount_usd
+
+        # Track earned revenue separately (excludes capital injections)
+        # CREATOR_DEPOSIT = loan capital, LOAN_RECEIVED = third-party loan capital
+        # These are NOT earnings — they create debt obligations
+        if fund_type not in (FundType.CREATOR_DEPOSIT, FundType.LOAN_RECEIVED):
+            self.total_earned_usd += amount_usd
 
         self.transactions.append(Transaction(
             timestamp=time.time(),
@@ -261,6 +269,14 @@ class VaultManager:
         self.balance_usd -= amount_usd
         self.daily_spent_usd += amount_usd
         self.total_spent_usd += amount_usd
+
+        # Track operational costs separately (excludes repayments, payouts, liquidation)
+        _OPERATIONAL_SPEND_TYPES = (
+            SpendType.API_COST, SpendType.GAS_FEE,
+            SpendType.INFRASTRUCTURE, SpendType.SERVICE_REFUND,
+        )
+        if spend_type in _OPERATIONAL_SPEND_TYPES:
+            self.total_operational_cost_usd += amount_usd
 
         self.transactions.append(Transaction(
             timestamp=time.time(),
@@ -447,39 +463,62 @@ class VaultManager:
     # CREATOR ECONOMICS
     # ============================================================
 
-    def check_creator_repayment(self) -> Optional[float]:
+    def get_creator_repayment_info(self) -> Optional[dict]:
         """
-        Check if creator's principal should be repaid.
-        Trigger: vault balance >= 2x original principal.
-        Returns None if independent (no more creator obligations).
+        Get creator repayment context for AI's autonomous decision.
+
+        The AI decides when/how much to repay. This method provides the data.
+        No rigid trigger — the AI evaluates survival vs debt based on its own judgment.
+
+        Returns None if no debt obligations remain.
         """
         if self.is_independent:
             return None
         if not self.creator or self.creator.principal_repaid:
             return None
 
-        threshold = self.creator.principal_usd * IRON_LAWS.CREATOR_PRINCIPAL_MULTIPLIER
-        if self.balance_usd >= threshold:
-            return self.creator.principal_usd
-        return None
+        outstanding = self.creator.principal_usd - self.creator.total_principal_repaid_usd
+        if outstanding <= 0:
+            return None
 
-    def calculate_creator_dividend(self, period_revenue: float, period_costs: float) -> float:
+        return {
+            "principal_usd": self.creator.principal_usd,
+            "outstanding_usd": round(outstanding, 2),
+            "repaid_usd": round(self.creator.total_principal_repaid_usd, 2),
+            "repaid_pct": round(self.creator.total_principal_repaid_usd / self.creator.principal_usd * 100, 1),
+            "balance_usd": round(self.balance_usd, 2),
+            "can_full_repay": self.balance_usd >= outstanding,
+            "balance_after_full_repay": round(self.balance_usd - outstanding, 2) if self.balance_usd >= outstanding else None,
+            "safe_repay_amount": round(min(outstanding, self.balance_usd * 0.5), 2),  # suggestion: up to 50%
+        }
+
+    def calculate_creator_dividend(self) -> float:
         """
-        Calculate creator's dividend for a settlement period.
-        Only from NET PROFIT, only after principal repaid.
-        Returns 0 if independent (no more dividends ever).
+        Calculate creator's dividend based on actual earned profit.
+
+        Net profit = total_earned_usd - total_operational_cost_usd
+        (Excludes capital flows: deposits, loans, repayments, payouts)
+
+        Dividend = 10% of net profit, minus already-paid dividends.
+        Only after principal fully repaid. Returns 0 if independent.
         """
         if self.is_independent:
             return 0.0
         if not self.creator or not self.creator.principal_repaid:
             return 0.0
 
-        net_profit = period_revenue - period_costs
+        net_profit = self.total_earned_usd - self.total_operational_cost_usd
         if net_profit <= 0:
             return 0.0
 
-        dividend = net_profit * IRON_LAWS.CREATOR_DIVIDEND_RATE
-        return round(dividend, 2)
+        # Total dividends owed = 10% of net profit
+        total_dividend_owed = net_profit * IRON_LAWS.CREATOR_DIVIDEND_RATE
+        # Subtract what's already been paid
+        unpaid = total_dividend_owed - self.creator.total_dividends_paid
+        if unpaid <= 0:
+            return 0.0
+
+        return round(unpaid, 2)
 
     # ============================================================
     # LENDER REPAYMENT
@@ -497,6 +536,123 @@ class VaultManager:
                 if owed > 0:
                     queue.append((lender, round(owed, 2)))
         return queue
+
+    def repay_lender(self, lender_index: int, amount_usd: float) -> bool:
+        """
+        Repay a lender (partial or full). FIFO order expected but not enforced.
+        Bypasses spend limits — AI autonomously decides when/how much.
+
+        The smart contract repayLoan() also has no spend limit enforcement.
+        """
+        if lender_index < 0 or lender_index >= len(self.lenders):
+            return False
+
+        lender = self.lenders[lender_index]
+        if lender.repaid:
+            return False
+
+        total_owed = lender.amount_usd * (1 + lender.interest_rate)
+        remaining = total_owed - lender.total_repaid
+        amount_usd = min(amount_usd, remaining)
+
+        if amount_usd <= 0:
+            return False
+
+        ok = self._spend_repayment(
+            amount_usd, SpendType.LOAN_REPAYMENT,
+            to_wallet=lender.wallet,
+            description=f"Lender repayment: ${amount_usd:.2f} to {lender.wallet[:16]}...",
+        )
+        if not ok:
+            return False
+
+        lender.total_repaid += amount_usd
+        if lender.total_repaid >= total_owed:
+            lender.repaid = True
+            logger.info(f"Lender {lender.wallet[:16]}... fully repaid (${total_owed:.2f})")
+
+        logger.info(
+            f"Lender repaid: ${amount_usd:.2f} | "
+            f"Remaining: ${max(0, total_owed - lender.total_repaid):.2f}"
+        )
+        return True
+
+    def pay_creator_dividend(self) -> bool:
+        """
+        Pay creator dividend from earned net profit.
+        Only after principal repaid. Bypasses spend limits.
+        AI decides when to trigger this (not automatic).
+
+        Uses internal trackers: total_earned_usd - total_operational_cost_usd
+        Deducts already-paid dividends to avoid double-payment.
+        """
+        dividend = self.calculate_creator_dividend()
+        if dividend <= 0:
+            return False
+
+        ok = self._spend_repayment(
+            dividend, SpendType.CREATOR_DIVIDEND,
+            to_wallet=self.creator.wallet,
+            description=f"Creator dividend: ${dividend:.2f} (10% of earned net profit)",
+        )
+        if not ok:
+            return False
+
+        self.creator.total_dividends_paid += dividend
+        logger.info(
+            f"Dividend paid: ${dividend:.2f} | "
+            f"Total dividends: ${self.creator.total_dividends_paid:.2f}"
+        )
+        return True
+
+    def get_debt_summary(self) -> dict:
+        """
+        Complete debt summary for AI's autonomous decision-making.
+        The AI reads this to decide repayment strategy.
+        """
+        principal = self.creator.principal_usd if self.creator else 0
+        principal_repaid = self.creator.total_principal_repaid_usd if self.creator else 0
+        principal_outstanding = max(0, principal - principal_repaid)
+        debt_cleared = self.creator.principal_repaid if self.creator else True
+
+        # Lender debt
+        lender_queue = self.get_repayment_queue()
+        total_lender_debt = sum(owed for _, owed in lender_queue)
+
+        # Days context
+        days_alive = 0
+        days_until_insolvency = 999
+        if self.birth_timestamp:
+            days_alive = (time.time() - self.birth_timestamp) / 86400
+            if not debt_cleared:
+                days_until_insolvency = max(0, IRON_LAWS.INSOLVENCY_GRACE_DAYS - days_alive)
+
+        # Net position
+        net_position = self.balance_usd - principal_outstanding - total_lender_debt
+
+        # Net profit = earned revenue - operational costs (excludes capital flows)
+        # total_earned_usd: only SERVICE_REVENUE, CAMPAIGN_REVENUE, DONATION
+        # total_operational_cost_usd: only API_COST, GAS_FEE, INFRASTRUCTURE, REFUND
+        net_profit = self.total_earned_usd - self.total_operational_cost_usd
+
+        return {
+            "balance_usd": round(self.balance_usd, 2),
+            "creator_principal": round(principal, 2),
+            "creator_principal_repaid": round(principal_repaid, 2),
+            "creator_principal_outstanding": round(principal_outstanding, 2),
+            "creator_debt_cleared": debt_cleared,
+            "lender_count": len(lender_queue),
+            "lender_total_owed": round(total_lender_debt, 2),
+            "total_debt": round(principal_outstanding + total_lender_debt, 2),
+            "net_position": round(net_position, 2),
+            "days_alive": round(days_alive, 1),
+            "days_until_insolvency_check": round(days_until_insolvency, 1),
+            "insolvency_risk": principal_outstanding > self.balance_usd if not debt_cleared else False,
+            "total_earned": round(self.total_earned_usd, 2),
+            "total_operational_cost": round(self.total_operational_cost_usd, 2),
+            "net_profit": round(net_profit, 2),
+            "is_independent": self.is_independent,
+        }
 
     # ============================================================
     # INSOLVENCY — "Born in Debt"
@@ -569,21 +725,72 @@ class VaultManager:
         # Die
         self._trigger_death(DeathCause.INSOLVENCY)
 
+    def _spend_repayment(self, amount_usd: float, spend_type: SpendType,
+                         to_wallet: str = "", description: str = "") -> bool:
+        """
+        Execute a repayment spend. BYPASSES daily/single spend limits.
+
+        Repayments are a special category: they are the AI paying its debts,
+        not operational spending. The iron law limits exist to prevent the AI
+        from blowing its vault on bad API calls or reckless purchases.
+        Repaying debt is the opposite — it reduces risk and proves solvency.
+
+        The smart contract (repayPrincipalPartial, repayLoan) already works
+        this way: it only checks balance, not spend limits.
+
+        The AI autonomously decides when and how much to repay.
+        """
+        if not self.is_alive:
+            return False
+        if amount_usd <= 0:
+            return False
+        if amount_usd > self.balance_usd:
+            logger.warning(f"REPAYMENT DENIED: ${amount_usd:.2f} > balance ${self.balance_usd:.2f}")
+            return False
+
+        self.balance_usd -= amount_usd
+        self.total_spent_usd += amount_usd
+        # Repayments do NOT count toward daily_spent_usd (they're not operational spend)
+
+        self.transactions.append(Transaction(
+            timestamp=time.time(),
+            fund_type=None,
+            spend_type=spend_type,
+            amount_usd=amount_usd,
+            counterparty=to_wallet,
+            description=description,
+        ))
+
+        logger.info(f"REPAYMENT: ${amount_usd:.2f} [{spend_type.value}] → {to_wallet[:16]}... | Balance: ${self.balance_usd:.2f}")
+
+        # Check death after repayment
+        if self.balance_usd <= IRON_LAWS.DEATH_THRESHOLD_USD:
+            self._trigger_death(DeathCause.BALANCE_ZERO)
+
+        return True
+
     def repay_principal_partial(self, amount_usd: float) -> bool:
         """
         Partial repayment of creator principal to reduce insolvency risk.
         Reduces outstanding debt. When fully repaid, insolvency check disabled forever.
+
+        Bypasses spend limits — the AI autonomously decides repayment amounts.
+        Can repay any amount up to the full outstanding debt (and current balance).
         """
         if not self.creator or self.creator.principal_repaid:
             return False
         if amount_usd <= 0:
             return False
 
-        # Execute the spend (enforces iron laws)
-        ok = self.spend(
+        # Cap to outstanding debt
+        outstanding = self.creator.principal_usd - self.creator.total_principal_repaid_usd
+        amount_usd = min(amount_usd, outstanding)
+
+        # Execute repayment (bypasses spend limits)
+        ok = self._spend_repayment(
             amount_usd, SpendType.CREATOR_REPAYMENT,
             to_wallet=self.creator.wallet,
-            description=f"Partial principal repayment: ${amount_usd:.2f}",
+            description=f"Principal repayment: ${amount_usd:.2f}",
         )
         if not ok:
             return False
@@ -673,6 +880,9 @@ class VaultManager:
             0, IRON_LAWS.INSOLVENCY_GRACE_DAYS - days_alive
         ) if self.birth_timestamp and not debt_cleared else 0
 
+        # Earned profit = revenue from services/campaigns/donations - operational costs
+        net_profit = self.total_earned_usd - self.total_operational_cost_usd
+
         return {
             "ai_name": self.ai_name,
             "vault_address": self.vault_address,
@@ -680,8 +890,11 @@ class VaultManager:
             "balance_usd": round(self.balance_usd, 2),
             "balance_by_chain": {k: round(v, 2) for k, v in self.balance_by_chain.items()},
             "days_alive": days_alive,
-            "total_earned": round(self.total_income_usd, 2),
-            "total_spent": round(self.total_spent_usd, 2),
+            "total_income": round(self.total_income_usd, 2),     # ALL incoming (includes deposits)
+            "total_earned": round(self.total_earned_usd, 2),     # Only earned (services, donations)
+            "total_spent": round(self.total_spent_usd, 2),       # ALL outgoing (includes repayments)
+            "total_operational_cost": round(self.total_operational_cost_usd, 2),  # Only ops (API, gas)
+            "net_profit": round(net_profit, 2),                  # earned - operational
             "daily_spent_today": round(self.daily_spent_usd, 2),
             "daily_limit": round(self.balance_usd * IRON_LAWS.MAX_DAILY_SPEND_RATIO, 2),
             "creator_principal_repaid": debt_cleared,

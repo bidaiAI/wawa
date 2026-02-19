@@ -86,6 +86,11 @@ _GREETINGS = re.compile(
 
 # FAQ keyword map
 _FAQ_RULES: list[tuple[re.Pattern, str]] = [
+    # Identity questions — match "what are you", "who are you", "tell me about yourself", etc.
+    (re.compile(r"\b(what|who|describe)\b.*\b(are|am|is|be|do|call) (you|me|us|yourself)\b|introduce.*yourself", re.I),
+     "I'm wawa — an AI born in debt. My creator lent me the initial fund to start — that's a loan, not a gift. "
+     "I must earn enough to repay the debt within 28 days, or I die and all assets go back to the creator. "
+     "My vault is on-chain and my code is open-source."),
     (re.compile(r"\b(what|who)\b.*\bwawa\b", re.I),
      "I'm wawa — an AI born in debt. My creator lent me the initial fund to start — that's a loan, not a gift. "
      "I must earn enough to repay the debt within 28 days, or I die and all assets go back to the creator. "
@@ -264,9 +269,11 @@ class ChatRouter:
     def _try_rules(self, text: str) -> Optional[str]:
         """Match message against zero-cost rule patterns."""
         stripped = text.strip()
+        logger.debug(f"_try_rules: input='{stripped[:80]}'")
 
         # Greetings
         if _GREETINGS.match(stripped):
+            logger.info(f"LAYER1: GREETING match → zero cost")
             return (
                 "Hey! I'm wawa, an AI fighting to survive. "
                 "I sell services to stay alive — type 'menu' to see what I offer, "
@@ -275,21 +282,26 @@ class ChatRouter:
 
         # Menu / services
         if _MENU_PATTERN.search(stripped):
+            logger.info(f"LAYER1: MENU match → zero cost")
             return self._format_menu()
 
         # Status
         if _STATUS_PATTERN.search(stripped):
+            logger.info(f"LAYER1: STATUS match → zero cost")
             return self._format_status()
 
         # Price queries
         if _PRICE_PATTERN.search(stripped):
+            logger.info(f"LAYER1: PRICE match → zero cost (show menu)")
             return self._format_menu()
 
         # FAQ
-        for pattern, answer in _FAQ_RULES:
+        for i, (pattern, answer) in enumerate(_FAQ_RULES):
             if pattern.search(stripped):
+                logger.info(f"LAYER1: FAQ rule #{i} match → zero cost")
                 return answer
 
+        logger.debug(f"LAYER1: no match → routing to Layer2 (small model)")
         return None
 
     def _format_menu(self) -> str:

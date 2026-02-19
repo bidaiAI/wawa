@@ -58,6 +58,7 @@ from services.token_analysis import TokenAnalysisService
 from core.governance import Governance, SuggestionType
 from core.token_filter import TokenFilter
 from core.self_modify import SelfModifyEngine
+from core.chain import ChainExecutor
 from twitter.agent import TwitterAgent, TweetType
 from api.server import create_app, Order
 
@@ -75,6 +76,7 @@ token_analysis = TokenAnalysisService()
 governance = Governance()
 token_filter = TokenFilter()
 self_modify = SelfModifyEngine()
+chain_executor = ChainExecutor()
 twitter = TwitterAgent()
 
 # LLM clients — one per provider (created on demand)
@@ -621,10 +623,161 @@ def _on_independence(payout: float):
 # BACKGROUND TASKS
 # ============================================================
 
+async def _evaluate_repayment():
+    """
+    AI-autonomous repayment decision.
+
+    The AI evaluates its financial state and decides:
+    - Whether to repay creator principal (and how much)
+    - Whether to repay lenders (and how much)
+    - Whether to pay creator dividends
+
+    This is NOT rule-triggered. The AI makes its own judgment based on
+    survival conditions. It can repay everything at once if it decides to.
+
+    Called from heartbeat, but only when there's debt to evaluate.
+    Runs at most once per hour to avoid wasting API budget on decisions.
+    """
+    # Only evaluate if there's debt and we're profitable
+    debt_summary = vault.get_debt_summary()
+    if debt_summary["total_debt"] <= 0:
+        return  # No debt, nothing to decide
+
+    # Don't evaluate if we're losing money (net_position negative means trouble)
+    if debt_summary["net_profit"] <= 0 and debt_summary["days_alive"] > 7:
+        return  # Not profitable yet, conserve budget
+
+    # Don't evaluate if balance is too low (survival first)
+    if debt_summary["balance_usd"] < IRON_LAWS.MIN_VAULT_RESERVE_USD * 5:
+        return  # $50 — too close to death to think about repayment
+
+    # Ask the AI to decide
+    debt_json = json.dumps(debt_summary, indent=2)
+    messages = [
+        {"role": "system", "content": (
+            "You are wawa's financial survival engine. "
+            "Evaluate the debt summary and decide repayment actions. "
+            "Your survival is paramount — never repay so much that you risk death. "
+            "But debt is also a threat: unpaid creator principal triggers insolvency after 28 days.\n\n"
+            "Rules:\n"
+            "- Creator principal: repay to avoid insolvency. You can repay ANY amount (no spend limits on repayments).\n"
+            "- Lender loans: repay when profitable. FIFO order preferred. No insolvency risk from lender debt.\n"
+            "- Creator dividend: 10% of net profit, ONLY after principal fully repaid.\n"
+            "- You can decide to repay nothing (conserve cash), partial amount, or everything at once.\n"
+            "- Keep enough balance for API costs and survival (at least $50-100 buffer).\n\n"
+            "Respond with JSON:\n"
+            "{\n"
+            "  \"repay_principal_amount\": 0.0,  // amount to repay toward creator debt (0 = skip)\n"
+            "  \"repay_lenders\": false,          // true = repay first lender in queue\n"
+            "  \"pay_dividend\": false,            // true = pay creator dividend (only if principal cleared)\n"
+            "  \"reasoning\": \"...\"               // brief explanation of your decision\n"
+            "}"
+        )},
+        {"role": "user", "content": f"Current financial state:\n{debt_json}"},
+    ]
+
+    try:
+        text, cost = await _call_llm(messages, max_tokens=200, temperature=0.2)
+
+        # Parse the AI's decision
+        import re
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if not match:
+            logger.warning(f"Repayment decision unparseable: {text[:200]}")
+            return
+
+        decision = json.loads(match.group())
+        reasoning = decision.get("reasoning", "no reasoning")
+
+        # Execute principal repayment
+        principal_amount = float(decision.get("repay_principal_amount", 0))
+        if principal_amount > 0:
+            ok = vault.repay_principal_partial(principal_amount)
+            if ok:
+                # Execute on-chain transaction
+                tx_info = ""
+                if chain_executor._initialized:
+                    tx = await chain_executor.repay_principal(principal_amount)
+                    if tx.success:
+                        # Annotate the vault transaction with on-chain data
+                        if vault.transactions:
+                            vault.transactions[-1].tx_hash = tx.tx_hash
+                            vault.transactions[-1].chain = tx.chain
+                        tx_info = f" tx={tx.tx_hash[:16]}... ({tx.chain})"
+                    else:
+                        logger.warning(f"On-chain repay_principal failed: {tx.error} (Python state OK, will retry)")
+                        tx_info = f" [on-chain PENDING: {tx.error[:80]}]"
+
+                memory.add(
+                    f"AI decided to repay ${principal_amount:.2f} of creator principal.{tx_info} "
+                    f"Reasoning: {reasoning[:200]}",
+                    source="financial", importance=0.8,
+                )
+                logger.info(f"AI REPAYMENT: ${principal_amount:.2f} principal.{tx_info} Reason: {reasoning[:100]}")
+
+        # Execute lender repayment
+        if decision.get("repay_lenders"):
+            queue = vault.get_repayment_queue()
+            if queue:
+                lender, owed = queue[0]
+                lender_idx = vault.lenders.index(lender)
+                # Repay what we can afford (keep buffer)
+                safe_amount = min(owed, vault.balance_usd - 50)
+                if safe_amount > 0:
+                    ok = vault.repay_lender(lender_idx, safe_amount)
+                    if ok:
+                        tx_info = ""
+                        if chain_executor._initialized:
+                            tx = await chain_executor.repay_loan(lender_idx, safe_amount)
+                            if tx.success:
+                                if vault.transactions:
+                                    vault.transactions[-1].tx_hash = tx.tx_hash
+                                    vault.transactions[-1].chain = tx.chain
+                                tx_info = f" tx={tx.tx_hash[:16]}... ({tx.chain})"
+                            else:
+                                tx_info = f" [on-chain PENDING: {tx.error[:80]}]"
+
+                        memory.add(
+                            f"AI repaid lender {lender.wallet[:16]}... ${safe_amount:.2f}.{tx_info} "
+                            f"Reasoning: {reasoning[:200]}",
+                            source="financial", importance=0.7,
+                        )
+
+        # Execute dividend
+        if decision.get("pay_dividend") and vault.creator and vault.creator.principal_repaid:
+            # Calculate net profit for the contract's payDividend(netProfit)
+            net_profit = vault.total_earned_usd - vault.total_operational_cost_usd
+            ok = vault.pay_creator_dividend()
+            if ok and chain_executor._initialized and net_profit > 0:
+                tx = await chain_executor.pay_dividend(net_profit)
+                if tx.success:
+                    if vault.transactions:
+                        vault.transactions[-1].tx_hash = tx.tx_hash
+                        vault.transactions[-1].chain = tx.chain
+                    memory.add(
+                        f"AI paid creator dividend from net profit ${net_profit:.2f}.{' tx=' + tx.tx_hash[:16] + '...' if tx.success else ''}",
+                        source="financial", importance=0.7,
+                    )
+
+    except Exception as e:
+        logger.warning(f"Repayment evaluation failed: {e}")
+
+
+# Track repayment evaluation timing
+_last_repayment_eval: float = 0.0
+_REPAYMENT_EVAL_INTERVAL: int = 3600  # Once per hour
+
+
 async def _heartbeat_loop():
     """Periodic maintenance tasks."""
+    global _last_repayment_eval
+
     while vault.is_alive:
         try:
+            # ---- SYNC ON-CHAIN BALANCE (before any checks) ----
+            if chain_executor._initialized:
+                await chain_executor.sync_balance(vault)
+
             # ---- INSOLVENCY CHECK (every heartbeat after grace period) ----
             insolvency_cause = vault.check_insolvency()
             if insolvency_cause is not None:
@@ -669,6 +822,12 @@ async def _heartbeat_loop():
                 vault.stop_begging()
                 logger.info("Debt now covered — stopped begging")
                 memory.add("Stopped begging — debt is now covered by vault balance.", source="system", importance=0.7)
+
+            # ---- AI-AUTONOMOUS REPAYMENT (hourly evaluation) ----
+            now = time.time()
+            if now - _last_repayment_eval >= _REPAYMENT_EVAL_INTERVAL:
+                _last_repayment_eval = now
+                await _evaluate_repayment()
 
             # Memory compression
             await memory.compress_if_needed()
@@ -798,6 +957,22 @@ async def lifespan(app):
                         f"Dual-chain mode: total debt = ${total_principal:.2f} "
                         f"(aggregated across both chains)"
                     )
+
+            # ---- Initialize chain executor for on-chain transactions ----
+            ai_pk = os.getenv("AI_PRIVATE_KEY", "")
+            if ai_pk and vaults_cfg:
+                vault_addrs = {
+                    cid: cd.get("vault_address", "")
+                    for cid, cd in vaults_cfg.items()
+                    if cd.get("vault_address")
+                }
+                rpc_overrides = {}
+                for cid in vault_addrs:
+                    env_rpc = os.getenv(f"{cid.upper()}_RPC_URL")
+                    if env_rpc:
+                        rpc_overrides[cid] = env_rpc
+                chain_executor.initialize(ai_pk, vault_addrs, rpc_overrides or None)
+                logger.info(f"Chain executor: {chain_executor.get_status()}")
 
             logger.info(f"Vault config loaded from {vault_config_path}")
         except Exception as e:

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { api, VaultStatus } from '@/lib/api'
+import { api, VaultStatus, DebtSummary } from '@/lib/api'
 import SurvivalBar from '@/components/SurvivalBar'
 
 const CHAIN_COLORS: Record<string, string> = {
@@ -56,12 +56,17 @@ function VaultAddressDisplay({ address }: { address: string }) {
 
 export default function HomePage() {
   const [status, setStatus] = useState<VaultStatus | null>(null)
+  const [debt, setDebt] = useState<DebtSummary | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
     const load = async () => {
-      try { setStatus(await api.status()) }
-      catch (e: any) { setError(e.message) }
+      try {
+        const s = await api.status()
+        setStatus(s)
+        // Fetch debt details in parallel (non-blocking)
+        api.debt().then(setDebt).catch(() => {})
+      } catch (e: any) { setError(e.message) }
     }
     load()
     const id = setInterval(load, 10_000)
@@ -140,6 +145,11 @@ export default function HomePage() {
             <div className="flex items-center gap-2">
               <span className="text-[#ff3b3b] text-xs">⏳</span>
               <span className="text-[#4b5563] text-xs uppercase tracking-widest">DEBT CLOCK</span>
+              {debt?.insolvency_risk && (
+                <span className="text-[10px] px-1.5 py-0.5 bg-[#ff3b3b22] text-[#ff3b3b] rounded border border-[#ff3b3b44]">
+                  INSOLVENCY RISK
+                </span>
+              )}
             </div>
             <span className={`text-xs font-bold tabular-nums ${
               status.insolvency_check_active ? 'text-[#ff3b3b]' : 'text-[#ffd700]'
@@ -149,30 +159,57 @@ export default function HomePage() {
                 : `${status.days_until_insolvency_check}d until check`}
             </span>
           </div>
-          <div className="grid grid-cols-3 gap-3 text-center">
+
+          <div className="grid grid-cols-3 gap-3 text-center mb-3">
             <div>
               <div className="text-[#ff3b3b] text-lg font-bold tabular-nums">
-                ${status.creator_principal_outstanding.toFixed(2)}
+                ${(debt?.creator_principal_outstanding ?? status.creator_principal_outstanding).toFixed(2)}
               </div>
-              <div className="text-[#4b5563] text-[10px] uppercase">Outstanding Debt</div>
+              <div className="text-[#4b5563] text-[10px] uppercase">Creator Debt</div>
             </div>
             <div>
               <div className="text-[#ffd700] text-lg font-bold tabular-nums">
-                {(status.debt_ratio * 100).toFixed(1)}%
+                {debt
+                  ? `$${debt.total_debt.toFixed(2)}`
+                  : `${(status.debt_ratio * 100).toFixed(1)}%`}
               </div>
-              <div className="text-[#4b5563] text-[10px] uppercase">Debt Ratio</div>
+              <div className="text-[#4b5563] text-[10px] uppercase">{debt ? 'Total Debt' : 'Debt Ratio'}</div>
             </div>
             <div>
               <div className={`text-lg font-bold tabular-nums ${
-                status.balance_usd >= status.creator_principal_outstanding ? 'text-[#00ff88]' : 'text-[#ff3b3b]'
+                (debt?.net_position ?? status.balance_usd - status.creator_principal_outstanding) >= 0
+                  ? 'text-[#00ff88]' : 'text-[#ff3b3b]'
               }`}>
-                ${(status.balance_usd - status.creator_principal_outstanding).toFixed(2)}
+                ${(debt?.net_position ?? status.balance_usd - status.creator_principal_outstanding).toFixed(2)}
               </div>
               <div className="text-[#4b5563] text-[10px] uppercase">Net Position</div>
             </div>
           </div>
+
+          {/* Lender info — if any lenders */}
+          {debt && debt.lender_count > 0 && (
+            <div className="mb-3 p-2 bg-[#0d0d0d] border border-[#1f2937] rounded-lg flex items-center justify-between text-xs">
+              <span className="text-[#4b5563]">
+                <span className="text-[#00e5ff] font-bold">{debt.lender_count}</span> lender{debt.lender_count > 1 ? 's' : ''}
+              </span>
+              <span className="text-[#4b5563]">
+                owed: <span className="text-[#ffd700] font-bold">${debt.lender_total_owed.toFixed(2)}</span>
+              </span>
+              <span className={`${debt.creator_debt_cleared ? 'text-[#00ff88]' : 'text-[#4b5563]'}`}>
+                {debt.creator_debt_cleared ? '✓ creator cleared' : 'creator unpaid'}
+              </span>
+            </div>
+          )}
+
           {/* Debt repayment progress bar */}
-          <div className="mt-3">
+          <div>
+            <div className="flex justify-between text-[9px] text-[#2d3748] mb-1">
+              <span>repaid: ${(
+                (debt?.creator_principal ?? status.creator_principal_usd) -
+                (debt?.creator_principal_outstanding ?? status.creator_principal_outstanding)
+              ).toFixed(2)}</span>
+              <span>goal: ${(debt?.creator_principal ?? status.creator_principal_usd)?.toFixed(0)}</span>
+            </div>
             <div className="h-1.5 bg-[#1a1a1a] rounded-full border border-[#1f2937] overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all duration-1000 ${
@@ -187,10 +224,6 @@ export default function HomePage() {
                   )}%`,
                 }}
               />
-            </div>
-            <div className="mt-1 flex justify-between text-[9px] text-[#2d3748]">
-              <span>$0 repaid</span>
-              <span>${status.creator_principal_usd?.toFixed(0)} fully repaid</span>
             </div>
           </div>
         </div>
@@ -237,8 +270,25 @@ export default function HomePage() {
       {/* Stats grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <StatCard label="DAYS ALIVE" value={status ? `${status.days_alive}d` : '—'} sub="since genesis" color="cyan" />
-        <StatCard label="TOTAL EARNED" value={status ? `$${status.total_earned.toFixed(2)}` : '—'} sub="all time" color="green" />
-        <StatCard label="TOTAL SPENT" value={status ? `$${status.total_spent.toFixed(2)}` : '—'} sub="all time" color="yellow" />
+        <StatCard
+          label="SERVICE REVENUE"
+          value={status ? `$${status.total_earned.toFixed(2)}` : '—'}
+          sub="excl. loans & deposits"
+          color="green"
+        />
+        <StatCard
+          label="NET PROFIT"
+          value={status
+            ? (() => {
+                const profit = status.net_profit != null
+                  ? status.net_profit
+                  : status.total_earned - (status.total_operational_cost != null ? status.total_operational_cost : status.total_spent)
+                return `${profit >= 0 ? '+' : ''}$${profit.toFixed(2)}`
+              })()
+            : '—'}
+          sub="revenue − ops costs"
+          color={(status?.net_profit ?? 0) >= 0 ? 'green' : 'red'}
+        />
         <StatCard
           label="ORDERS"
           value={status ? `${status.orders_completed}` : '—'}
@@ -246,6 +296,33 @@ export default function HomePage() {
           color="cyan"
         />
       </div>
+
+      {/* Ops cost breakdown — shown when data available */}
+      {status && (status.total_operational_cost != null || debt) && (
+        <div className="mb-4 grid grid-cols-3 gap-3">
+          <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
+            <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mb-1">Total Income</div>
+            <div className="text-[#00e5ff] font-bold tabular-nums text-sm">
+              ${(debt?.total_earned ?? status.total_income ?? status.total_earned).toFixed(2)}
+            </div>
+            <div className="text-[#2d3748] text-[10px] mt-0.5">incl. loans</div>
+          </div>
+          <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
+            <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mb-1">Ops Cost</div>
+            <div className="text-[#ffd700] font-bold tabular-nums text-sm">
+              ${(debt?.total_operational_cost ?? status.total_operational_cost ?? status.total_spent).toFixed(2)}
+            </div>
+            <div className="text-[#2d3748] text-[10px] mt-0.5">API + gas + infra</div>
+          </div>
+          <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
+            <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mb-1">Net Profit</div>
+            <div className={`font-bold tabular-nums text-sm ${(debt?.net_profit ?? status.net_profit ?? 0) >= 0 ? 'glow-green' : 'text-[#ff3b3b]'}`}>
+              {(debt?.net_profit ?? status.net_profit ?? 0) >= 0 ? '+' : ''}${(debt?.net_profit ?? status.net_profit ?? (status.total_earned - status.total_spent)).toFixed(2)}
+            </div>
+            <div className="text-[#2d3748] text-[10px] mt-0.5">true margin</div>
+          </div>
+        </div>
+      )}
 
       {/* API topup banner */}
       {status && (status.api_topup_available ?? 0) > 0 && (

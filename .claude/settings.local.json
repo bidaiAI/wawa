@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfeat: P1 token analysis service + vault deploy script\n\n- services/token_analysis.py: on-chain token analysis using DexScreener + block explorer APIs, heuristic risk scoring, LLM interpretation\n- scripts/deploy_vault.py: automated MortalVault deployment to Base/BSC with compile, deploy, approve, deposit flow\n- main.py: wire token_analysis callbacks \\(interpret + http\\), add to deliver_fn\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(find:*)"
+    ]
+  }
+}

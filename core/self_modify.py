@@ -136,22 +136,40 @@ class SelfModifyEngine:
         """
         records = []
 
+        logger.info(f"EVOLUTION CYCLE starting. Performance data: {len(self.performance_data)} services tracked")
+
         # Heuristic pricing adjustments
-        records.extend(self._heuristic_pricing())
+        heuristic_records = self._heuristic_pricing()
+        records.extend(heuristic_records)
+        logger.debug(f"Heuristic pricing: {len(heuristic_records)} records")
 
         # LLM-based evolution (if available)
-        if self._evaluate_fn and self.performance_data:
-            try:
-                llm_records = await self._llm_evolution()
-                records.extend(llm_records)
-            except Exception as e:
-                logger.error(f"LLM evolution failed: {e}")
+        if self._evaluate_fn:
+            if self.performance_data:
+                try:
+                    llm_records = await self._llm_evolution()
+                    records.extend(llm_records)
+                    logger.debug(f"LLM evolution: {len(llm_records)} records")
+                except Exception as e:
+                    logger.error(f"LLM evolution failed: {e}", exc_info=True)
+            else:
+                logger.info("LLM evolution skipped: no performance data yet")
+        else:
+            logger.debug("LLM evolution not configured")
 
         # Log all decisions
         self.evolution_log.extend(records)
+        logger.info(f"EVOLUTION CYCLE complete. Total log size: {len(self.evolution_log)}, New: {len(records)}")
 
         if records:
-            logger.info(f"Evolution cycle: {len(records)} actions taken")
+            for rec in records:
+                logger.info(
+                    f"  EVOLUTION: {rec.action.value} {rec.target} "
+                    f"({rec.old_value} → {rec.new_value}) "
+                    f"applied={rec.applied} | {rec.reasoning[:80]}"
+                )
+        else:
+            logger.info("  (no evolutionary changes needed this cycle)")
 
         return records
 
@@ -165,6 +183,11 @@ class SelfModifyEngine:
         records = []
         services = self._load_services()
         if not services:
+            logger.warning("_heuristic_pricing: services.json is empty or unreadable")
+            return records
+
+        if not services.get("services"):
+            logger.warning("_heuristic_pricing: no services array in services.json")
             return records
 
         for svc in services.get("services", []):
@@ -267,15 +290,41 @@ class SelfModifyEngine:
         """Apply a price change to services.json."""
         try:
             data = self._load_services()
+            if not data:
+                logger.error(f"Cannot load services.json for {svc['id']}")
+                return False
+
+            # Find and update the service
+            updated = False
             for s in data.get("services", []):
                 if s["id"] == svc["id"]:
+                    old_price = s.get("price_usd", 0)
                     s["price_usd"] = new_price
+                    updated = True
                     break
+
+            if not updated:
+                logger.error(f"Service {svc['id']} not found in services.json")
+                return False
+
+            # Write to disk
             self._save_services(data)
-            logger.info(f"Price updated: {svc['id']} → ${new_price:.2f}")
-            return True
+
+            # Verify write by reading back
+            verify_data = self._load_services()
+            for s in verify_data.get("services", []):
+                if s["id"] == svc["id"]:
+                    if s.get("price_usd") == new_price:
+                        logger.info(f"✓ Price persisted: {svc['id']} → ${new_price:.2f} (verified on disk)")
+                        return True
+                    else:
+                        logger.error(f"FAILED: Price change not persisted. Expected ${new_price:.2f}, got ${s.get('price_usd')}")
+                        return False
+
+            logger.error(f"FAILED: {svc['id']} disappeared from services.json after write")
+            return False
         except Exception as e:
-            logger.error(f"Failed to apply price change: {e}")
+            logger.error(f"Exception in _apply_price_change({svc['id']}, {new_price}): {e}", exc_info=True)
             return False
 
     # ============================================================
@@ -299,6 +348,21 @@ class SelfModifyEngine:
         }
 
     def get_evolution_log(self, limit: int = 20) -> list[dict]:
+        """Return evolution log for frontend display."""
+        if not self.evolution_log:
+            # Return a placeholder entry if log is empty (for frontend display)
+            return [
+                {
+                    "time": self._last_evolution or time.time(),
+                    "action": "waiting",
+                    "target": "—",
+                    "old": "—",
+                    "new": "—",
+                    "reasoning": "Evolution engine running. Waiting for order data to analyze pricing.",
+                    "applied": False,
+                }
+            ]
+
         recent = sorted(self.evolution_log, key=lambda r: r.timestamp, reverse=True)[:limit]
         return [
             {
