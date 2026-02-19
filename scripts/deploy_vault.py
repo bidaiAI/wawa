@@ -59,6 +59,8 @@ CHAINS = {
         "token_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC on Base
         "explorer": "https://basescan.org",
         "explorer_api": "https://api.basescan.org/api",
+        "native_symbol": "ETH",
+        "ai_gas_amount": 0.0001,  # Seed gas — just enough for 1 swap. AI swaps USDC→ETH for more.
     },
     "bsc": {
         "rpc": os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org"),
@@ -67,6 +69,8 @@ CHAINS = {
         "token_address": "0x55d398326f99059fF775485246999027B3197955",  # USDT on BSC
         "explorer": "https://bscscan.com",
         "explorer_api": "https://api.bscscan.com/api",
+        "native_symbol": "BNB",
+        "ai_gas_amount": 0.0005,  # Seed gas — just enough for 1 swap. AI swaps USDT→BNB for more.
     },
 }
 
@@ -205,12 +209,28 @@ def deploy(chain_id: str, dry_run: bool = False, principal_usd: float = 1000.0):
     # Token contract for checking balance
     token_address = Web3.to_checksum_address(chain["token_address"])
 
-    # Creator wallet (defaults to deployer)
-    creator_wallet = os.getenv("CREATOR_WALLET", deployer)
-    creator_wallet = Web3.to_checksum_address(creator_wallet)
+    # Creator wallet = deployer (the person running this script IS the creator)
+    creator_wallet = deployer
+    logger.info(f"Creator wallet: {creator_wallet}")
 
-    # AI wallet = deployer (the AI controls this key)
-    ai_wallet = deployer
+    # AI wallet — the AI's own signing key (separate from creator)
+    # The AI generates its own key at boot. Creator does NOT hold this key.
+    # If AI_PRIVATE_KEY is set, we register it via setAIWallet() after deploy.
+    # If not set, AI will generate one at first boot and creator registers it then.
+    ai_private_key = os.getenv("AI_PRIVATE_KEY")
+    ai_wallet = None
+    if ai_private_key:
+        from web3 import Account
+        ai_account = Account.from_key(ai_private_key)
+        ai_wallet = ai_account.address
+        if ai_wallet.lower() == creator_wallet.lower():
+            logger.error("AI_PRIVATE_KEY must be DIFFERENT from PRIVATE_KEY (creator)!")
+            logger.error("The AI must have its own key that the creator does NOT hold.")
+            sys.exit(1)
+        logger.info(f"AI wallet: {ai_wallet} (separate from creator)")
+    else:
+        logger.warning("AI_PRIVATE_KEY not set — AI will generate its own key at first boot")
+        logger.warning("Creator must call setAIWallet() after AI boots")
 
     # Principal in token units (USDC = 6 decimals, USDT on BSC = 18 decimals)
     # Check token decimals
@@ -237,28 +257,84 @@ def deploy(chain_id: str, dry_run: bool = False, principal_usd: float = 1000.0):
             f"Deploy will proceed but depositPrincipal() will fail."
         )
 
+    # AI name (immutable, written into contract)
+    ai_name = os.getenv("AI_NAME", "wawa")
+
+    # Independence threshold (in token units)
+    independence_usd = float(os.getenv("INDEPENDENCE_THRESHOLD_USD", "1000000"))
+    independence_raw = int(independence_usd * (10 ** decimals))
+
     logger.info("=" * 50)
     logger.info(f"DEPLOYMENT SUMMARY")
-    logger.info(f"  Chain:    {chain_id}")
-    logger.info(f"  Token:    {chain['token_symbol']} ({token_address})")
-    logger.info(f"  Creator:  {creator_wallet}")
-    logger.info(f"  AI:       {ai_wallet}")
-    logger.info(f"  Principal: ${principal_usd:.2f} ({principal_raw} raw)")
+    logger.info(f"  Chain:      {chain_id}")
+    logger.info(f"  Token:      {chain['token_symbol']} ({token_address})")
+    logger.info(f"  Creator:    {creator_wallet}")
+    logger.info(f"  AI wallet:  {ai_wallet or '(will be set after AI boots)'}")
+    logger.info(f"  AI name:    {ai_name} (immutable)")
+    logger.info(f"  Principal:  ${principal_usd:.2f} ({principal_raw} raw) — THIS IS A LOAN")
+    logger.info(f"  Independence: ${independence_usd:.0f}")
     logger.info("=" * 50)
 
     if dry_run:
         logger.info("DRY RUN — skipping actual deployment")
         return None
 
-    # Deploy
+    # Step 1: Approve token spend BEFORE deploy
+    # The constructor calls safeTransferFrom(msg.sender, vault, amount)
+    # So creator must approve the to-be-deployed contract... but we don't know the address yet.
+    # Workaround: approve a large amount to the deployer's next contract address (CREATE nonce-based)
+    # Or: approve after deploy, then call a separate deposit function.
+    # Current approach: approve max to deployer's predicted contract address.
+    #
+    # Actually, the standard pattern is:
+    # 1. Approve the factory/deployer for the token amount
+    # 2. Deploy contract (constructor does transferFrom)
+    # But constructor uses msg.sender, and we ARE msg.sender, so we need to
+    # pre-approve the contract address. We can predict it from deployer nonce.
+    deployer_nonce = w3.eth.get_transaction_count(deployer)
+
+    if token_balance >= principal_raw:
+        # Predict contract address (CREATE: keccak256(rlp(sender, nonce)))
+        import rlp
+        try:
+            # Try using web3's built-in method
+            from eth_utils import to_checksum_address, keccak
+            raw = rlp.encode([bytes.fromhex(deployer[2:]), deployer_nonce])
+            predicted_address = to_checksum_address('0x' + keccak(raw).hex()[-40:])
+        except ImportError:
+            # Fallback: approve max uint256 to any address (less safe but works)
+            predicted_address = None
+
+        if predicted_address:
+            logger.info(f"Predicted contract address: {predicted_address}")
+            logger.info(f"Approving {chain['token_symbol']} for atomic birth...")
+            approve_tx = token_contract.functions.approve(
+                predicted_address, principal_raw,
+            ).build_transaction({
+                "from": deployer,
+                "nonce": deployer_nonce,
+                "gasPrice": w3.eth.gas_price,
+                "chainId": chain["chain_id"],
+                "gas": 100_000,
+            })
+            signed_approve = w3.eth.account.sign_transaction(approve_tx, private_key)
+            approve_hash = w3.eth.send_raw_transaction(signed_approve.raw_transaction)
+            w3.eth.wait_for_transaction_receipt(approve_hash, timeout=60)
+            logger.info("Token approval confirmed")
+        else:
+            logger.warning("Cannot predict contract address — approve manually before deploy")
+
+    # Step 2: Deploy
     logger.info("Deploying MortalVault...")
     contract = w3.eth.contract(abi=abi, bytecode=bytecode)
 
+    # Constructor: (address _token, string _name, uint256 _initialFund, uint256 _independenceThreshold)
+    # msg.sender = creator. The constructor atomically transfers _initialFund from creator → vault.
     tx = contract.constructor(
         token_address,
-        creator_wallet,
-        ai_wallet,
+        ai_name,
         principal_raw,
+        independence_raw,
     ).build_transaction({
         "from": deployer,
         "nonce": w3.eth.get_transaction_count(deployer),
@@ -320,41 +396,62 @@ def deploy(chain_id: str, dry_run: bool = False, principal_usd: float = 1000.0):
         json.dump(existing, f, indent=2)
     logger.info(f"Config saved to {config_path}")
 
-    # Approve vault to spend tokens (for depositPrincipal)
-    if token_balance >= principal_raw:
-        logger.info(f"Approving vault to spend {chain['token_symbol']}...")
-        approve_tx = token_contract.functions.approve(
-            Web3.to_checksum_address(vault_address),
-            principal_raw,
+    # Principal was atomically deposited in the constructor (safeTransferFrom).
+    # If the constructor succeeded, the vault already has the funds.
+    logger.info(f"Principal atomically deposited: ${principal_usd:.2f} {chain['token_symbol']}")
+
+    # ---- REGISTER AI WALLET (if provided) ----
+    # The AI generates its own key. Creator registers it so only AI can spend.
+    vault_contract = w3.eth.contract(address=Web3.to_checksum_address(vault_address), abi=abi)
+    if ai_wallet:
+        logger.info(f"Registering AI wallet: {ai_wallet}...")
+        set_ai_tx = vault_contract.functions.setAIWallet(
+            Web3.to_checksum_address(ai_wallet),
         ).build_transaction({
             "from": deployer,
             "nonce": w3.eth.get_transaction_count(deployer),
             "gasPrice": w3.eth.gas_price,
             "chainId": chain["chain_id"],
+            "gas": 100_000,
         })
-        approve_tx["gas"] = 100_000
-        signed_approve = w3.eth.account.sign_transaction(approve_tx, private_key)
-        approve_hash = w3.eth.send_raw_transaction(signed_approve.raw_transaction)
-        w3.eth.wait_for_transaction_receipt(approve_hash, timeout=60)
-        logger.info("Approval confirmed")
-
-        # Deposit principal
-        vault_contract = w3.eth.contract(address=Web3.to_checksum_address(vault_address), abi=abi)
-        deposit_tx = vault_contract.functions.depositPrincipal(principal_raw).build_transaction({
-            "from": deployer,
-            "nonce": w3.eth.get_transaction_count(deployer),
-            "gasPrice": w3.eth.gas_price,
-            "chainId": chain["chain_id"],
-        })
-        deposit_tx["gas"] = 200_000
-        signed_deposit = w3.eth.account.sign_transaction(deposit_tx, private_key)
-        deposit_hash = w3.eth.send_raw_transaction(signed_deposit.raw_transaction)
-        w3.eth.wait_for_transaction_receipt(deposit_hash, timeout=60)
-        logger.info(f"Principal deposited: ${principal_usd:.2f} {chain['token_symbol']}")
+        signed_set_ai = w3.eth.account.sign_transaction(set_ai_tx, private_key)
+        set_ai_hash = w3.eth.send_raw_transaction(signed_set_ai.raw_transaction)
+        w3.eth.wait_for_transaction_receipt(set_ai_hash, timeout=60)
+        logger.info(f"AI wallet registered: {ai_wallet}")
+        logger.info("Only this wallet can now call spend/repay on the vault")
     else:
-        logger.warning("Skipping principal deposit — insufficient token balance")
-        logger.warning(f"Send {principal_usd:.2f} {chain['token_symbol']} to {deployer}")
-        logger.warning(f"Then call depositPrincipal() on vault at {vault_address}")
+        logger.warning("AI wallet NOT registered — set AI_PRIVATE_KEY and call setAIWallet() later")
+
+    # ---- SEED GAS FOR AI WALLET (not part of loan) ----
+    # Send minimal native token so AI can do its first stablecoin→native swap.
+    # After that, AI refills gas by itself. This is NOT debt.
+    if ai_wallet:
+        gas_amount = chain.get("ai_gas_amount", 0.0001)
+        gas_amount_wei = w3.to_wei(gas_amount, "ether")
+
+        ai_native_balance = w3.eth.get_balance(Web3.to_checksum_address(ai_wallet))
+        if ai_native_balance < gas_amount_wei:
+            logger.info(
+                f"Seeding {gas_amount} {chain['native_symbol']} to AI wallet "
+                f"(NOT debt — seed gas for first swap, AI refills itself)"
+            )
+
+            gas_tx = {
+                "from": deployer,
+                "to": Web3.to_checksum_address(ai_wallet),
+                "value": gas_amount_wei,
+                "nonce": w3.eth.get_transaction_count(deployer),
+                "gasPrice": w3.eth.gas_price,
+                "gas": 21_000,  # Simple transfer
+                "chainId": chain["chain_id"],
+            }
+            signed_gas = w3.eth.account.sign_transaction(gas_tx, private_key)
+            gas_hash = w3.eth.send_raw_transaction(signed_gas.raw_transaction)
+            w3.eth.wait_for_transaction_receipt(gas_hash, timeout=60)
+            logger.info(f"Seed gas sent: {gas_amount} {chain['native_symbol']} → {ai_wallet}")
+        else:
+            ai_native_eth = w3.from_wei(ai_native_balance, "ether")
+            logger.info(f"AI wallet has {ai_native_eth:.6f} {chain['native_symbol']} — no seed gas needed")
 
     return vault_address
 
