@@ -227,8 +227,8 @@ class TwitterAgent:
         if self._post_fn:
             try:
                 await self._post_fn(content)
-            except Exception:
-                pass  # Even if posting fails, wawa is already dead
+            except Exception as e:
+                logger.warning(f"Death tweet failed to post: {e}")  # wawa is already dead
 
     def _save_tweet_log(self, record: TweetRecord):
         """Save tweet + thought process to public log."""

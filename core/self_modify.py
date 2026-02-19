@@ -352,18 +352,7 @@ class SelfModifyEngine:
     def get_evolution_log(self, limit: int = 20) -> list[dict]:
         """Return evolution log for frontend display."""
         if not self.evolution_log:
-            # Return a placeholder entry if log is empty (for frontend display)
-            return [
-                {
-                    "time": self._last_evolution or time.time(),
-                    "action": "waiting",
-                    "target": "—",
-                    "old": "—",
-                    "new": "—",
-                    "reasoning": "Evolution engine running. Waiting for order data to analyze pricing.",
-                    "applied": False,
-                }
-            ]
+            return []
 
         recent = sorted(self.evolution_log, key=lambda r: r.timestamp, reverse=True)[:limit]
         return [

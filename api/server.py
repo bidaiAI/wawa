@@ -1,21 +1,51 @@
 """
 wawa API Server - FastAPI Backend
 
-Endpoints:
-- POST /chat              Free chat (3-layer routing)
-- GET  /menu              Service catalog
-- POST /order             Create order + get payment address
-- POST /order/{id}/verify Verify on-chain payment → trigger delivery
-- GET  /order/{id}        Check order status
-- GET  /status            Public vault dashboard
-- GET  /transactions      Public ledger
-- GET  /tweets            Public tweet log
-- GET  /health            Heartbeat
-- POST /donate            Donate to help wawa survive (reduces debt pressure)
-- GET  /beg               Get begging status + message (for frontends / peers)
-- POST /peer/lend         Another AI lends money to wawa
+Core:
+- POST /chat                  Free chat (3-layer routing)
+- GET  /status                Public vault dashboard
+- GET  /health                Heartbeat
+
+Services:
+- GET  /menu                  Service catalog
+- POST /order                 Create order + get payment address
+- POST /order/{id}/verify     Verify on-chain payment + deliver
+- GET  /order/{id}            Check order status
+
+Financial:
+- POST /donate                Donate to help wawa survive
+- GET  /beg                   Get begging status
+- GET  /debt                  Complete debt summary
+- GET  /transactions          Public ledger
+
+Peer Network (AI-to-AI, sovereignty verified):
+- POST /peer/message          Receive message from verified peer AI
+- POST /peer/lend             Receive loan from verified peer AI
+- GET  /peer/info             Public info for peer discovery
+- GET  /peer/list             List known peers
+- GET  /peer/messages         Peer message history
+
+Governance:
+- POST /governance/suggest    Submit suggestion (rate limited)
+- GET  /governance/suggestions View suggestions + AI decisions
+- POST /governance/renounce   Creator renounce (disabled until auth)
+
+Evolution & Activity:
+- GET  /evolution/log         Evolution history
+- GET  /evolution/status      Evolution engine status
+- GET  /activity              Unified activity feed
+
+Token:
+- POST /token/scan            Free token safety scan
+- POST /token/analyze         Paid deep analysis
+
+Other:
+- GET  /ai/name               Get AI name
+- POST /ai/name               Set AI name (rate limited)
+- GET  /internal/stats        Debug stats (public, transparency)
 
 All endpoints are public. No auth needed (payment = access).
+Peer endpoints require on-chain sovereignty verification.
 """
 
 import os
@@ -1005,25 +1035,25 @@ def create_app(
             "is_set": vault_manager.ai_name is not None,
         }
 
+    # Rate limiter for AI name changes (global, 3 per hour)
+    _name_change_timestamps: list[float] = []
+
     @app.post("/ai/name")
     async def set_ai_name(req: SetAINameRequest):
-        """Update AI's custom name (creator-only, requires authorization).
-
-        Validation rules:
-        - Length: 3-50 characters
-        - Allowed characters: alphanumeric, dash (-), underscore (_)
-        - Cannot be changed after being set on-chain (immutable contract property)
+        """Update AI's custom name. Rate limited: 3 changes per hour.
 
         Note: AI name is stored immutably in the smart contract at deployment.
         This endpoint updates the Python runtime cache only.
-
-        Args:
-            name: The new name for this AI
-
-        Returns:
-            { "success": true, "name": "AlphaTrade", "message": "..." }
+        TODO: Require wallet signature from creator_wallet.
         """
         import re
+
+        # Rate limiting (global — name changes are rare and sensitive)
+        now = time.time()
+        _name_change_timestamps[:] = [t for t in _name_change_timestamps if now - t < 3600]
+        if len(_name_change_timestamps) >= 3:
+            raise HTTPException(429, "Rate limit: max 3 name changes per hour")
+        _name_change_timestamps.append(now)
 
         # Validation: format
         if not re.match(r"^[a-zA-Z0-9_-]+$", req.name):
@@ -1035,9 +1065,6 @@ def create_app(
         # Validation: length
         if len(req.name) < 3 or len(req.name) > 50:
             raise HTTPException(400, "Name must be 3-50 characters long")
-
-        # TODO: Verify wallet signature (creator-only authorization)
-        # For MVP: skip signature verification
 
         old_name = vault_manager.ai_name
         vault_manager.ai_name = req.name
@@ -1248,11 +1275,16 @@ def create_app(
         return stats
 
     def _persist_order(order: Order):
-        """Append order to disk log."""
-        log_dir = Path("data/orders")
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / "orders.jsonl"
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(order.to_dict(), ensure_ascii=False) + "\n")
+        """Append order to disk log with flush for durability."""
+        try:
+            log_dir = Path("data/orders")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / "orders.jsonl"
+            line = json.dumps(order.to_dict(), ensure_ascii=False) + "\n"
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(line)
+                f.flush()
+        except Exception as e:
+            logger.error(f"Failed to persist order {order.order_id}: {e}")
 
     return app

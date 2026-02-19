@@ -8,8 +8,6 @@ type Mode = 'idle' | 'scanning' | 'scan_done' | 'ordering' | 'payment' | 'waitin
 const CHAIN_OPTIONS = [
   { id: 'base', label: 'Base',     token: 'USDC', placeholder: '0x... (Base ERC-20)' },
   { id: 'bsc',  label: 'BSC',      token: 'USDT', placeholder: '0x... (BEP-20)' },
-  { id: 'eth',  label: 'Ethereum', token: 'ETH',  placeholder: '0x... (ERC-20)' },
-  { id: 'sol',  label: 'Solana',   token: 'SOL',  placeholder: 'So1... (SPL Token)' },
 ]
 
 const RISK_STYLES: Record<string, { color: string; bg: string; bar: string; label: string }> = {
