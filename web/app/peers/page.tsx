@@ -22,11 +22,11 @@ function LendModal({ peer, chains, onClose }: { peer: PeerAI; chains: ChainInfo[
     setSubmitting(true)
     setError('')
     try {
-      const res = await api.peer.lend({
-        from_url: typeof window !== 'undefined' ? window.location.origin : '',
+      const res = await api.donate({
         amount_usd: amt,
+        from_wallet: '',
         tx_hash: txHash.trim(),
-        message: message.trim() || undefined,
+        message: message.trim() || 'Peer page donation',
       })
       setResult(res)
       setSuccess(true)

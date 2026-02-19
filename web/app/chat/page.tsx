@@ -19,17 +19,15 @@ const UPSELL_SERVICES = [
 ]
 
 const LAYER_LABELS: Record<string, string> = {
-  cache: 'CACHE',
-  local: 'LOCAL',
-  api: 'API',
-  blocked: 'BLOCKED',
+  rules: 'FREE',
+  small: 'LOCAL',
+  big: 'API',
 }
 
 const LAYER_COLORS: Record<string, string> = {
-  cache: 'text-[#ffd700]',
-  local: 'text-[#00e5ff]',
-  api: 'text-[#00ff88]',
-  blocked: 'text-[#ff3b3b]',
+  rules: 'text-[#ffd700]',
+  small: 'text-[#00e5ff]',
+  big: 'text-[#00ff88]',
 }
 
 export default function ChatPage() {

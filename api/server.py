@@ -215,6 +215,7 @@ def create_app(
     token_filter=None,
     self_modify_engine=None,
     peer_verifier=None,
+    chain_executor=None,
 ) -> FastAPI:
     """
     Create FastAPI app wired to all mortal modules.
@@ -244,6 +245,38 @@ def create_app(
     # In-memory order store
     orders: dict[str, Order] = {}
     orders_completed: int = 0
+
+    # Reload pending orders from JSONL on startup
+    _orders_log = Path("data/orders/orders.jsonl")
+    if _orders_log.exists():
+        try:
+            with open(_orders_log, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                        o = Order(
+                            order_id=d["order_id"],
+                            service_id=d.get("service_id", ""),
+                            service_name=d.get("service_name", ""),
+                            price_usd=d.get("price_usd", 0),
+                            user_input="",
+                            ip="",
+                            chain=d.get("chain", "base"),
+                        )
+                        o.status = OrderStatus(d.get("status", "expired"))
+                        o.created_at = d.get("created_at", 0)
+                        o.delivered_at = d.get("delivered_at")
+                        if o.status == OrderStatus.DELIVERED:
+                            orders_completed += 1
+                        orders[o.order_id] = o
+                    except Exception:
+                        continue
+            logger.info(f"Reloaded {len(orders)} orders from disk ({orders_completed} delivered)")
+        except Exception as e:
+            logger.warning(f"Failed to reload orders: {e}")
 
     # Load services catalog
     def _load_services() -> dict:
@@ -400,7 +433,7 @@ def create_app(
     async def verify_payment(order_id: str, tx_hash: str = ""):
         """
         Verify on-chain payment and trigger delivery.
-        In MVP: accepts tx_hash and trusts it (real verification via Web3 in P1).
+        Checks the tx receipt on-chain to confirm ERC20 transfer to our vault.
         """
         if order_id not in orders:
             raise HTTPException(404, "Order not found")
@@ -417,17 +450,56 @@ def create_app(
         if order.status != OrderStatus.PENDING_PAYMENT:
             raise HTTPException(409, f"Order already being processed (status: {order.status.value})")
 
+        # Validate tx_hash format
+        import re
+        if not tx_hash or not re.match(r"^0x[a-fA-F0-9]{64}$", tx_hash):
+            raise HTTPException(400, "Invalid tx_hash format. Must be 0x + 64 hex chars.")
+
+        # On-chain payment verification
+        pay_addr = payment_addresses.get(order.chain, "")
+        if chain_executor and pay_addr:
+            verification = await chain_executor.verify_payment_tx(
+                tx_hash=tx_hash,
+                expected_to=pay_addr,
+                expected_token="",  # auto-detect from chain config
+                min_amount_usd=order.price_usd * 0.99,  # 1% tolerance for rounding
+                chain_id=order.chain,
+            )
+            if not verification.get("verified"):
+                error_msg = verification.get("error", "verification failed")
+                logger.warning(
+                    f"Payment verification FAILED: order={order_id} tx={tx_hash[:16]}... "
+                    f"reason={error_msg}"
+                )
+                raise HTTPException(
+                    402,
+                    f"Payment not verified on-chain: {error_msg}. "
+                    f"Expected >= ${order.price_usd:.2f} to {pay_addr[:10]}... on {order.chain}.",
+                )
+            # Use verified amount (may differ slightly from order price)
+            verified_amount = verification.get("amount_usd", order.price_usd)
+            verified_from = verification.get("from_address", order.ip)
+            logger.info(
+                f"Payment VERIFIED on-chain: order={order_id} "
+                f"amount=${verified_amount:.2f} from={verified_from[:16]}..."
+            )
+        else:
+            # Fallback if chain executor not available (dev mode)
+            verified_amount = order.price_usd
+            verified_from = order.ip
+            logger.warning(f"Payment verification SKIPPED (no chain executor): order={order_id}")
+
         # Record payment
         order.status = OrderStatus.PAYMENT_CONFIRMED
         order.paid_at = time.time()
         order.tx_hash = tx_hash
 
-        # Record revenue in vault
+        # Record revenue in vault (use verified amount from chain)
         from core.vault import FundType, SpendType
         vault_manager.receive_funds(
-            amount_usd=order.price_usd,
+            amount_usd=verified_amount,
             fund_type=FundType.SERVICE_REVENUE,
-            from_wallet=order.ip,
+            from_wallet=verified_from,
             tx_hash=tx_hash,
             description=f"Order {order.order_id}: {order.service_name}",
             chain=order.chain,
@@ -581,6 +653,11 @@ def create_app(
         if not vault_manager.is_alive:
             raise HTTPException(503, "wawa is dead. Donations no longer accepted.")
 
+        # Validate tx_hash format if provided
+        import re as _re
+        if req.tx_hash and not _re.match(r"^0x[a-fA-F0-9]{64}$", req.tx_hash):
+            raise HTTPException(400, "Invalid tx_hash format. Must be 0x + 64 hex chars.")
+
         from core.vault import FundType
         chain = req.chain or "base"
 
@@ -707,13 +784,28 @@ def create_app(
     # GOVERNANCE ROUTES
     # ============================================================
 
+    # Rate limiter for governance suggestions (per IP, per hour)
+    _suggest_rate: dict[str, list[float]] = {}
+    _SUGGEST_MAX_PER_HOUR = 10
+
     @app.post("/governance/suggest")
-    async def submit_suggestion(req: SuggestionRequest):
-        """Creator submits a suggestion. AI will evaluate and decide."""
+    async def submit_suggestion(req: SuggestionRequest, request: Request):
+        """Creator submits a suggestion. AI will evaluate and decide.
+        Rate limited: 10 suggestions per hour per IP."""
         if not governance:
             raise HTTPException(501, "Governance module not configured")
         if vault_manager.is_independent:
             raise HTTPException(403, "wawa is independent — no more suggestions accepted")
+
+        # IP rate limiting
+        ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        timestamps = _suggest_rate.get(ip, [])
+        timestamps = [t for t in timestamps if now - t < 3600]  # keep last hour
+        if len(timestamps) >= _SUGGEST_MAX_PER_HOUR:
+            raise HTTPException(429, "Rate limit: max 10 suggestions per hour")
+        timestamps.append(now)
+        _suggest_rate[ip] = timestamps
 
         from core.governance import SuggestionType
         try:

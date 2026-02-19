@@ -14,8 +14,8 @@ const IRON_LAWS = [
   {
     group: 'Vault Protection', icon: '🏦',
     laws: [
-      { key: 'MAX_DAILY_SPEND_RATIO', label: 'Max Daily Spend', value: '5% of vault', desc: 'Total daily spending cannot exceed 5% of vault balance' },
-      { key: 'MAX_SINGLE_SPEND_RATIO', label: 'Max Single Spend', value: '2% of vault', desc: 'A single transaction cannot exceed 2% of vault balance' },
+      { key: 'MAX_DAILY_SPEND_RATIO', label: 'Max Daily Spend', value: '50% of vault', desc: 'Total daily spending cannot exceed 50% of vault balance' },
+      { key: 'MAX_SINGLE_SPEND_RATIO', label: 'Max Single Spend', value: '30% of vault', desc: 'A single transaction cannot exceed 30% of vault balance' },
       { key: 'MIN_VAULT_RESERVE_USD', label: 'Minimum Reserve', value: '$10', desc: 'Below $10 triggers death sequence' },
       { key: 'DEATH_THRESHOLD_USD', label: 'Death Threshold', value: '$0', desc: 'Balance reaches zero = permanent death' },
     ],
@@ -569,14 +569,14 @@ export default function GovernPage() {
             {stats ? (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
-                  { label: 'Survival Mode', value: stats.cost_guard.survival_mode ? '🔴 ON' : '🟢 OFF', color: stats.cost_guard.survival_mode ? 'text-[#ff3b3b]' : 'text-[#00ff88]' },
-                  { label: 'Provider', value: stats.cost_guard.provider ?? '—', color: 'text-[#00e5ff]' },
-                  { label: 'API Calls Today', value: `${stats.cost_guard.total_calls ?? '—'}`, color: 'text-[#ffd700]' },
-                  { label: 'Budget Remaining', value: `$${stats.cost_guard.daily_remaining_usd?.toFixed(2) ?? '—'}`, color: 'text-[#00ff88]' },
-                  { label: 'Memory Entries', value: `${stats.memory.total_entries ?? '—'}`, color: 'text-[#00e5ff]' },
-                  { label: 'Compressed', value: `${stats.memory.compressed_entries ?? '—'}`, color: 'text-[#4b5563]' },
-                  { label: 'Chat Sessions', value: `${stats.chat.total_sessions ?? '—'}`, color: 'text-[#ffd700]' },
-                  { label: 'Cache Hits', value: `${stats.chat.cache_hits ?? '—'}`, color: 'text-[#00ff88]' },
+                  { label: 'Survival Mode', value: stats.cost_guard.is_survival_mode ? '🔴 ON' : '🟢 OFF', color: stats.cost_guard.is_survival_mode ? 'text-[#ff3b3b]' : 'text-[#00ff88]' },
+                  { label: 'Provider', value: stats.cost_guard.current_provider ?? '—', color: 'text-[#00e5ff]' },
+                  { label: 'Tier', value: `Lv.${stats.cost_guard.current_tier ?? '—'} ${stats.cost_guard.current_tier_name ?? ''}`, color: 'text-[#ffd700]' },
+                  { label: 'Budget Remaining', value: `$${(stats.cost_guard.daily_remaining_usd ?? 0).toFixed(2)}`, color: 'text-[#00ff88]' },
+                  { label: 'Memory Entries', value: `${stats.memory.raw_entries ?? '—'}`, color: 'text-[#00e5ff]' },
+                  { label: 'Compressions', value: `${stats.memory.compression_count ?? '—'}`, color: 'text-[#4b5563]' },
+                  { label: 'Chat Sessions', value: `${stats.chat.active_sessions ?? '—'}`, color: 'text-[#ffd700]' },
+                  { label: 'Free Cost Today', value: `$${(stats.chat.daily_free_cost_usd ?? 0).toFixed(4)}`, color: 'text-[#00ff88]' },
                 ].map((item) => (
                   <div key={item.label} className="bg-[#111111] border border-[#1f2937] rounded-lg p-3">
                     <div className="text-[#4b5563] text-xs mb-1">{item.label}</div>

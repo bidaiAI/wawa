@@ -174,27 +174,40 @@ export interface InternalStats {
     days_alive: number
     total_earned: number
     total_spent: number
-    daily_spent_today: number
-    daily_limit: number
+    daily_spent_usd: number
     is_alive: boolean
   }
   cost_guard: {
-    daily_budget_usd: number
     daily_spent_usd: number
+    daily_cap_usd: number
     daily_remaining_usd: number
-    total_calls: number
-    survival_mode: boolean
-    provider?: string
+    total_api_cost_usd: number
+    total_revenue_usd: number
+    cost_revenue_ratio: number
+    is_survival_mode: boolean
+    current_provider?: string
+    current_tier: number
+    current_tier_name: string
+    current_model: string
   }
   memory: {
-    total_entries?: number
-    compressed_entries?: number
-    last_compressed?: number | null
+    raw_entries: number
+    hourly_summaries: number
+    daily_summaries: number
+    weekly_summaries: number
+    total_tokens_saved: number
+    compression_count: number
   }
   chat: {
-    total_sessions?: number
-    total_messages?: number
-    cache_hits?: number
+    active_sessions: number
+    rate_limited_ips: number
+    daily_free_cost_usd: number
+    daily_free_budget_usd: number
+  }
+  peer_verifier?: {
+    cache_size: number
+    cache_fresh: number
+    cache_ttl_seconds: number
   }
 }
 
@@ -354,7 +367,7 @@ export const api = {
     info: () => request<PeerInfo>('/peer/info'),
     messages: (limit = 50) => request<{ messages: PeerMessage[] }>(`/peer/messages?limit=${limit}`),
     list: () => request<{ peers: PeerAI[]; peer_min_balance: number; note?: string }>('/peer/list'),
-    lend: (data: { from_url: string; amount_usd: number; from_wallet?: string; tx_hash?: string; message?: string }) =>
+    lend: (data: { from_url: string; amount_usd: number; from_wallet?: string; tx_hash?: string; message?: string; vault_address: string; chain_id?: string }) =>
       request<DonateResponse>('/peer/lend', { method: 'POST', body: JSON.stringify(data) }),
   },
 

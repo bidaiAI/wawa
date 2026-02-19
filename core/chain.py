@@ -493,6 +493,88 @@ class ChainExecutor:
         )
         return True
 
+    async def verify_payment_tx(
+        self,
+        tx_hash: str,
+        expected_to: str,
+        expected_token: str,
+        min_amount_usd: float,
+        chain_id: str = "",
+    ) -> dict:
+        """
+        Verify an on-chain ERC20 transfer (payment) by reading the tx receipt.
+
+        Returns dict with:
+          verified: bool, amount_usd: float, from_address: str, error: str
+
+        Checks:
+        1. Transaction exists and succeeded (status == 1)
+        2. Transfer event to expected_to address (our vault)
+        3. Amount >= min_amount_usd
+        """
+        if not self._initialized:
+            return {"verified": False, "amount_usd": 0, "from_address": "", "error": "chain not initialized"}
+
+        # Determine which chain to query
+        chains_to_check = [chain_id] if chain_id and chain_id in self._chains else list(self._chains.keys())
+
+        for cid in chains_to_check:
+            chain = self._chains.get(cid)
+            if not chain:
+                continue
+
+            try:
+                w3 = chain["w3"]
+                decimals = chain["token_decimals"]
+                token_addr = chain["token_address"].lower()
+
+                def _verify(w=w3, d=decimals, ta=token_addr):
+                    receipt = w.eth.get_transaction_receipt(tx_hash)
+                    if receipt is None:
+                        return {"verified": False, "error": "tx not found"}
+                    if receipt["status"] != 1:
+                        return {"verified": False, "error": "tx reverted"}
+
+                    # Parse ERC20 Transfer(from, to, value) events
+                    # Transfer event topic: keccak256("Transfer(address,address,uint256)")
+                    transfer_topic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+                    for log_entry in receipt.get("logs", []):
+                        if log_entry["address"].lower() != ta:
+                            continue
+                        topics = log_entry.get("topics", [])
+                        if len(topics) < 3:
+                            continue
+                        if topics[0].hex() if hasattr(topics[0], 'hex') else topics[0] != transfer_topic:
+                            continue
+
+                        # Decode: topics[1]=from, topics[2]=to, data=value
+                        to_addr = "0x" + (topics[2].hex() if hasattr(topics[2], 'hex') else topics[2])[-40:]
+                        from_addr = "0x" + (topics[1].hex() if hasattr(topics[1], 'hex') else topics[1])[-40:]
+                        value_raw = int(log_entry["data"].hex() if hasattr(log_entry["data"], 'hex') else log_entry["data"], 16)
+
+                        if to_addr.lower() == expected_to.lower():
+                            amount_usd = _raw_to_usd(value_raw, d)
+                            return {
+                                "verified": amount_usd >= min_amount_usd,
+                                "amount_usd": amount_usd,
+                                "from_address": w.to_checksum_address(from_addr),
+                                "error": "" if amount_usd >= min_amount_usd else f"amount ${amount_usd:.2f} < ${min_amount_usd:.2f}",
+                            }
+
+                    return {"verified": False, "error": "no matching Transfer event to vault"}
+
+                result = await asyncio.get_running_loop().run_in_executor(None, _verify)
+                if result.get("verified") or result.get("error") != "tx not found":
+                    result["chain"] = cid
+                    return result
+
+            except Exception as e:
+                logger.warning(f"Payment verify failed on {cid}: {e}")
+                continue
+
+        return {"verified": False, "amount_usd": 0, "from_address": "", "error": "tx not found on any chain"}
+
     async def check_native_balance(self) -> dict[str, float]:
         """
         Check native token (ETH/BNB) balance on each chain for the AI wallet.

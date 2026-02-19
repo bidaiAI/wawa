@@ -186,13 +186,13 @@ class VaultManager:
                 self.creator = CreatorInfo(wallet=from_wallet, principal_usd=amount_usd)
                 self.birth_timestamp = time.time()
                 logger.info(f"CREATOR registered: {from_wallet} with ${amount_usd:.2f}")
-            elif not self.creator.principal_repaid and from_wallet.lower() == self.creator.wallet.lower():
-                # Additional deposit from same creator (e.g. dual-chain second chain)
-                # Adds to total principal debt
-                self.creator.principal_usd += amount_usd
+            elif from_wallet.lower() == self.creator.wallet.lower():
+                # Additional deposit from creator (top-up, not new debt).
+                # Contract's creatorDeposit() does NOT increase principal — it only
+                # transfers tokens in. We match contract behavior: no debt increase.
                 logger.info(
-                    f"CREATOR additional deposit: +${amount_usd:.2f} | "
-                    f"Total principal (debt): ${self.creator.principal_usd:.2f}"
+                    f"CREATOR top-up: +${amount_usd:.2f} (not added to debt) | "
+                    f"Principal remains: ${self.creator.principal_usd:.2f}"
                 )
 
         # Check independence threshold

@@ -656,10 +656,12 @@ def _record_gas_fee(tx_result) -> None:
     Gas costs are small but should be tracked for accurate P&L."""
     if not tx_result.success or tx_result.gas_cost_native <= 0:
         return
-    # Approximate native → USD (conservative estimates)
-    # Base uses ETH, BSC uses BNB. These are rough — sync_balance handles
-    # the actual on-chain balance, so minor inaccuracy here is acceptable.
-    native_usd_rates = {"base": 2500.0, "bsc": 300.0}
+    # Approximate native → USD. Read from env vars (updated by operator),
+    # fallback to conservative defaults. sync_balance handles actual vault balance.
+    native_usd_rates = {
+        "base": float(os.getenv("ETH_USD_PRICE", "2500")),
+        "bsc": float(os.getenv("BNB_USD_PRICE", "300")),
+    }
     rate = native_usd_rates.get(tx_result.chain, 2500.0)
     gas_usd = tx_result.gas_cost_native * rate
     if gas_usd > 0.0001:  # Don't track sub-cent dust
@@ -1269,6 +1271,7 @@ def create_wawa_app() -> "FastAPI":
         token_filter=token_filter,
         self_modify_engine=self_modify,
         peer_verifier=peer_verifier,
+        chain_executor=chain_executor,
     )
 
     # Replace the default lifespan with ours
