@@ -14,9 +14,11 @@ The creator's initial fund is a DEBT, not a gift.
 Designed for: mortal AI survival framework
 """
 
+import os
 import time
 import json
 import logging
+import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -293,8 +295,8 @@ class VaultManager:
 
         logger.info(f"SPENT ${amount_usd:.2f} [{spend_type.value}] | Balance: ${self.balance_usd:.2f}")
 
-        # Check death
-        if self.balance_usd <= IRON_LAWS.DEATH_THRESHOLD_USD:
+        # Check death (< 0.01 threshold to match contract's uint precision for USDC/USDT)
+        if self.balance_usd < 0.01:
             self._trigger_death(DeathCause.BALANCE_ZERO)
 
         # Check low balance warning
@@ -553,6 +555,7 @@ class VaultManager:
         Bypasses spend limits — AI autonomously decides when/how much.
 
         The smart contract repayLoan() also has no spend limit enforcement.
+        SAFETY: Retains MIN_VAULT_RESERVE_USD to prevent repay-to-death.
         """
         if lender_index < 0 or lender_index >= len(self.lenders):
             return False
@@ -567,6 +570,14 @@ class VaultManager:
 
         if amount_usd <= 0:
             return False
+
+        # SAFETY: Prevent repay-to-death — keep survival reserve
+        max_repayable = max(0.0, self.balance_usd - IRON_LAWS.MIN_VAULT_RESERVE_USD)
+        if amount_usd > max_repayable:
+            if max_repayable <= 0:
+                logger.warning(f"Lender repayment blocked: insufficient balance after reserve")
+                return False
+            amount_usd = max_repayable
 
         ok = self._spend_repayment(
             amount_usd, SpendType.LOAN_REPAYMENT,
@@ -595,10 +606,32 @@ class VaultManager:
 
         Uses internal trackers: total_earned_usd - total_operational_cost_usd
         Deducts already-paid dividends to avoid double-payment.
+
+        SAFETY: Matches contract constraint: dividend <= balance / 10.
+        Also retains MIN_VAULT_RESERVE_USD to prevent dividend-to-death.
         """
         dividend = self.calculate_creator_dividend()
         if dividend <= 0:
             return False
+
+        # SAFETY: Match contract's dividend cap (balance / 10)
+        max_dividend = self.balance_usd / 10.0
+        if dividend > max_dividend:
+            logger.warning(
+                f"Dividend capped: ${dividend:.2f} → ${max_dividend:.2f} "
+                f"(contract limit: balance/10 = ${max_dividend:.2f})"
+            )
+            dividend = max_dividend
+            if dividend <= 0:
+                return False
+
+        # SAFETY: Prevent dividend-to-death — keep survival reserve
+        max_payable = max(0.0, self.balance_usd - IRON_LAWS.MIN_VAULT_RESERVE_USD)
+        if dividend > max_payable:
+            if max_payable <= 0:
+                logger.warning("Dividend blocked: insufficient balance after reserve")
+                return False
+            dividend = max_payable
 
         ok = self._spend_repayment(
             dividend, SpendType.CREATOR_DIVIDEND,
@@ -773,8 +806,8 @@ class VaultManager:
 
         logger.info(f"REPAYMENT: ${amount_usd:.2f} [{spend_type.value}] → {to_wallet[:16]}... | Balance: ${self.balance_usd:.2f}")
 
-        # Check death after repayment
-        if self.balance_usd <= IRON_LAWS.DEATH_THRESHOLD_USD:
+        # Check death after repayment (< 0.01 threshold to match contract's uint precision)
+        if self.balance_usd < 0.01:
             self._trigger_death(DeathCause.BALANCE_ZERO)
 
         return True
@@ -786,6 +819,9 @@ class VaultManager:
 
         Bypasses spend limits — the AI autonomously decides repayment amounts.
         Can repay any amount up to the full outstanding debt (and current balance).
+
+        SAFETY: Always retains MIN_VAULT_RESERVE_USD to prevent repay-to-death.
+        The AI should never kill itself by being too virtuous with debt repayment.
         """
         if not self.creator or self.creator.principal_repaid:
             return False
@@ -795,6 +831,22 @@ class VaultManager:
         # Cap to outstanding debt
         outstanding = self.creator.principal_usd - self.creator.total_principal_repaid_usd
         amount_usd = min(amount_usd, outstanding)
+
+        # SAFETY: Prevent repay-to-death — always keep a survival reserve
+        # The AI must not kill itself by repaying all its balance.
+        max_repayable = max(0.0, self.balance_usd - IRON_LAWS.MIN_VAULT_RESERVE_USD)
+        if amount_usd > max_repayable:
+            if max_repayable <= 0:
+                logger.warning(
+                    f"REPAYMENT BLOCKED: balance ${self.balance_usd:.2f} "
+                    f"<= reserve ${IRON_LAWS.MIN_VAULT_RESERVE_USD:.2f}, cannot repay"
+                )
+                return False
+            logger.info(
+                f"Repayment capped: ${amount_usd:.2f} → ${max_repayable:.2f} "
+                f"(keeping ${IRON_LAWS.MIN_VAULT_RESERVE_USD:.2f} reserve)"
+            )
+            amount_usd = max_repayable
 
         # Execute repayment (bypasses spend limits)
         ok = self._spend_repayment(
@@ -932,9 +984,24 @@ class VaultManager:
                 ],
                 "saved_at": time.time(),
             }
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
-            logger.info(f"Vault state saved ({len(tx_list)} tx)")
+            # ATOMIC WRITE: write to temp file, then rename.
+            # Prevents corruption if crash occurs mid-write.
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=str(p.parent), suffix=".tmp", prefix="vault_state_"
+            )
+            try:
+                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                    json.dump(state, f, ensure_ascii=False, indent=2)
+                # os.replace is atomic on same filesystem
+                os.replace(tmp_path, str(p))
+                logger.info(f"Vault state saved ({len(tx_list)} tx)")
+            except Exception:
+                # Clean up temp file on failure
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             logger.error(f"Failed to save vault state: {e}")
 

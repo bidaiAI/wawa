@@ -12,9 +12,11 @@ Layer 3: Weekly summaries (permanent archive)
 Designed for: mortal framework with cost-aware compression
 """
 
+import os
 import time
 import json
 import logging
+import tempfile
 from dataclasses import dataclass, field
 from typing import Optional
 from pathlib import Path
@@ -352,7 +354,7 @@ class HierarchicalMemory:
             return False
 
     def save_to_disk(self):
-        """Persist memory to disk."""
+        """Persist memory to disk using atomic write (write-to-tmp then rename)."""
         data = {
             "raw": [{"t": e.timestamp, "c": e.content, "s": e.source, "i": e.importance}
                     for e in self.raw],
@@ -366,6 +368,18 @@ class HierarchicalMemory:
                       "compressions": self.compression_count},
         }
         path = self.storage_dir / "memory.json"
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        logger.info(f"Memory saved to {path}")
+        # ATOMIC WRITE: write to temp file, then rename to prevent corruption
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(self.storage_dir), suffix=".tmp", prefix="memory_"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, str(path))
+            logger.info(f"Memory saved to {path}")
+        except Exception as e:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            logger.error(f"Failed to save memory: {e}")

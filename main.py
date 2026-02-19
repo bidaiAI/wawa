@@ -738,12 +738,21 @@ async def _evaluate_repayment():
         # Execute principal repayment
         principal_amount = float(decision.get("repay_principal_amount", 0))
         if principal_amount > 0:
+            # SAFETY: Save pre-state for rollback if chain TX fails
+            pre_balance = vault.balance_usd
+            pre_repaid = vault.creator.total_principal_repaid_usd if vault.creator else 0
+            pre_principal_repaid_flag = vault.creator.principal_repaid if vault.creator else False
+            pre_total_spent = vault.total_spent_usd
+
             ok = vault.repay_principal_partial(principal_amount)
             if ok:
+                # Calculate actual amount (may have been capped by vault)
+                actual_amount = pre_balance - vault.balance_usd
+
                 # Execute on-chain transaction
                 tx_info = ""
                 if chain_executor._initialized:
-                    tx = await chain_executor.repay_principal(principal_amount)
+                    tx = await chain_executor.repay_principal(actual_amount)
                     if tx.success:
                         # Annotate the vault transaction with on-chain data
                         if vault.transactions:
@@ -752,15 +761,34 @@ async def _evaluate_repayment():
                         tx_info = f" tx={tx.tx_hash[:16]}... ({tx.chain})"
                         _record_gas_fee(tx)
                     else:
-                        logger.warning(f"On-chain repay_principal failed: {tx.error} (Python state OK, will retry)")
-                        tx_info = f" [on-chain PENDING: {tx.error[:80]}]"
+                        # ROLLBACK: Chain TX failed — restore Python state
+                        logger.warning(
+                            f"On-chain repay_principal FAILED: {tx.error} — "
+                            f"ROLLING BACK Python state (${actual_amount:.2f})"
+                        )
+                        vault.balance_usd = pre_balance
+                        if vault.creator:
+                            vault.creator.total_principal_repaid_usd = pre_repaid
+                            vault.creator.principal_repaid = pre_principal_repaid_flag
+                        vault.total_spent_usd = pre_total_spent
+                        # Remove the failed transaction record
+                        if vault.transactions and vault.transactions[-1].tx_hash is None:
+                            vault.transactions.pop()
+                        tx_info = f" [ROLLED BACK: {tx.error[:80]}]"
+                        memory.add(
+                            f"Repayment ${actual_amount:.2f} rolled back — chain TX failed: {tx.error[:100]}",
+                            source="financial", importance=0.8,
+                        )
+                        # Skip the success log, jump to next decision
+                        principal_amount = 0  # Prevent success log below
 
-                memory.add(
-                    f"AI decided to repay ${principal_amount:.2f} of creator principal.{tx_info} "
-                    f"Reasoning: {reasoning[:200]}",
-                    source="financial", importance=0.8,
-                )
-                logger.info(f"AI REPAYMENT: ${principal_amount:.2f} principal.{tx_info} Reason: {reasoning[:100]}")
+                if principal_amount > 0:
+                    memory.add(
+                        f"AI decided to repay ${actual_amount:.2f} of creator principal.{tx_info} "
+                        f"Reasoning: {reasoning[:200]}",
+                        source="financial", importance=0.8,
+                    )
+                    logger.info(f"AI REPAYMENT: ${actual_amount:.2f} principal.{tx_info} Reason: {reasoning[:100]}")
 
         # Execute lender repayment
         if decision.get("repay_lenders"):
@@ -768,14 +796,21 @@ async def _evaluate_repayment():
             if queue:
                 lender, owed = queue[0]
                 lender_idx = vault.lenders.index(lender)
-                # Repay what we can afford (keep buffer)
-                safe_amount = min(owed, vault.balance_usd - 50)
+                # Repay what we can afford (keep reserve buffer)
+                safe_amount = min(owed, max(0, vault.balance_usd - IRON_LAWS.MIN_VAULT_RESERVE_USD))
                 if safe_amount > 0:
+                    # Save pre-state for rollback
+                    pre_balance_l = vault.balance_usd
+                    pre_lender_repaid = lender.total_repaid
+                    pre_lender_flag = lender.repaid
+                    pre_total_spent_l = vault.total_spent_usd
+
                     ok = vault.repay_lender(lender_idx, safe_amount)
                     if ok:
+                        actual_lender_amount = pre_balance_l - vault.balance_usd
                         tx_info = ""
                         if chain_executor._initialized:
-                            tx = await chain_executor.repay_loan(lender_idx, safe_amount)
+                            tx = await chain_executor.repay_loan(lender_idx, actual_lender_amount)
                             if tx.success:
                                 if vault.transactions:
                                     vault.transactions[-1].tx_hash = tx.tx_hash
@@ -783,13 +818,26 @@ async def _evaluate_repayment():
                                 tx_info = f" tx={tx.tx_hash[:16]}... ({tx.chain})"
                                 _record_gas_fee(tx)
                             else:
-                                tx_info = f" [on-chain PENDING: {tx.error[:80]}]"
+                                # ROLLBACK lender repayment on chain failure
+                                logger.warning(
+                                    f"On-chain repay_loan FAILED: {tx.error} — "
+                                    f"ROLLING BACK lender repayment (${actual_lender_amount:.2f})"
+                                )
+                                vault.balance_usd = pre_balance_l
+                                lender.total_repaid = pre_lender_repaid
+                                lender.repaid = pre_lender_flag
+                                vault.total_spent_usd = pre_total_spent_l
+                                if vault.transactions and vault.transactions[-1].tx_hash is None:
+                                    vault.transactions.pop()
+                                tx_info = f" [ROLLED BACK: {tx.error[:80]}]"
+                                actual_lender_amount = 0  # Skip success log
 
-                        memory.add(
-                            f"AI repaid lender {lender.wallet[:16]}... ${safe_amount:.2f}.{tx_info} "
-                            f"Reasoning: {reasoning[:200]}",
-                            source="financial", importance=0.7,
-                        )
+                        if actual_lender_amount > 0:
+                            memory.add(
+                                f"AI repaid lender {lender.wallet[:16]}... ${actual_lender_amount:.2f}.{tx_info} "
+                                f"Reasoning: {reasoning[:200]}",
+                                source="financial", importance=0.7,
+                            )
 
         # Execute dividend
         if decision.get("pay_dividend") and vault.creator and vault.creator.principal_repaid:
@@ -797,23 +845,40 @@ async def _evaluate_repayment():
             # vault.calculate_creator_dividend() returns only the unpaid portion
             dividend_amount = vault.calculate_creator_dividend()
             net_profit = vault.total_earned_usd - vault.total_operational_cost_usd
+
+            # Save pre-state for rollback
+            pre_balance_d = vault.balance_usd
+            pre_dividends_paid = vault.creator.total_dividends_paid
+            pre_total_spent_d = vault.total_spent_usd
+
             ok = vault.pay_creator_dividend()
-            if ok and chain_executor._initialized and dividend_amount > 0:
-                # Pass the actual dividend amount, not total net profit.
-                # The contract calculates 10% internally from the input,
-                # so we need to pass the "net profit that corresponds to this dividend"
-                # i.e. dividend_amount / 0.10 = the net profit slice for this payment.
-                net_profit_for_dividend = dividend_amount / IRON_LAWS.CREATOR_DIVIDEND_RATE
-                tx = await chain_executor.pay_dividend(net_profit_for_dividend)
-                if tx.success:
-                    if vault.transactions:
-                        vault.transactions[-1].tx_hash = tx.tx_hash
-                        vault.transactions[-1].chain = tx.chain
-                    _record_gas_fee(tx)
-                    memory.add(
-                        f"AI paid creator dividend from net profit ${net_profit:.2f}.{' tx=' + tx.tx_hash[:16] + '...' if tx.success else ''}",
-                        source="financial", importance=0.7,
-                    )
+            if ok:
+                actual_dividend = pre_balance_d - vault.balance_usd
+                if chain_executor._initialized and actual_dividend > 0:
+                    # Pass the "net profit that corresponds to this dividend"
+                    net_profit_for_dividend = actual_dividend / IRON_LAWS.CREATOR_DIVIDEND_RATE
+                    tx = await chain_executor.pay_dividend(net_profit_for_dividend)
+                    if tx.success:
+                        if vault.transactions:
+                            vault.transactions[-1].tx_hash = tx.tx_hash
+                            vault.transactions[-1].chain = tx.chain
+                        _record_gas_fee(tx)
+                        memory.add(
+                            f"AI paid creator dividend ${actual_dividend:.2f} from net profit ${net_profit:.2f}."
+                            f"{' tx=' + tx.tx_hash[:16] + '...' if tx.success else ''}",
+                            source="financial", importance=0.7,
+                        )
+                    else:
+                        # ROLLBACK dividend on chain failure
+                        logger.warning(
+                            f"On-chain payDividend FAILED: {tx.error} — "
+                            f"ROLLING BACK dividend (${actual_dividend:.2f})"
+                        )
+                        vault.balance_usd = pre_balance_d
+                        vault.creator.total_dividends_paid = pre_dividends_paid
+                        vault.total_spent_usd = pre_total_spent_d
+                        if vault.transactions and vault.transactions[-1].tx_hash is None:
+                            vault.transactions.pop()
 
     except Exception as e:
         logger.warning(f"Repayment evaluation failed: {e}")
@@ -834,15 +899,42 @@ async def _heartbeat_loop():
             try:
                 if chain_executor._initialized:
                     await chain_executor.sync_balance(vault)
+                    # Check native token (gas) balance — warn if too low
+                    await chain_executor.check_native_balance()
             except Exception as e:
                 logger.warning(f"Heartbeat: balance sync failed: {e}")
 
             # ---- INSOLVENCY CHECK (every heartbeat after grace period) ----
+            # Python checks first, then confirms with on-chain data before killing
             insolvency_cause = vault.check_insolvency()
             if insolvency_cause is not None:
-                logger.critical("INSOLVENCY DETECTED — triggering liquidation and death")
-                vault.trigger_insolvency_death()
-                break  # Dead, exit heartbeat
+                # SAFETY: Confirm with on-chain check before triggering death
+                # This prevents Python/chain timestamp disagreement from causing premature death
+                chain_confirmed = False
+                if chain_executor._initialized:
+                    try:
+                        chain_result = await chain_executor.check_on_chain_insolvency()
+                        if chain_result and chain_result.get("is_insolvent") and chain_result.get("grace_expired"):
+                            chain_confirmed = True
+                            logger.critical(
+                                f"INSOLVENCY CONFIRMED on-chain ({chain_result['chain']}): "
+                                f"debt=${chain_result['outstanding_debt_usd']:.2f}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Python says insolvent but chain disagrees: {chain_result}. "
+                                f"Deferring death to next heartbeat."
+                            )
+                    except Exception as e:
+                        logger.warning(f"On-chain insolvency check failed: {e}. Deferring death.")
+                else:
+                    # No chain executor — trust Python check (e.g., testing/dev mode)
+                    chain_confirmed = True
+
+                if chain_confirmed:
+                    logger.critical("INSOLVENCY DETECTED AND CONFIRMED — triggering liquidation and death")
+                    vault.trigger_insolvency_death()
+                    break  # Dead, exit heartbeat
 
             # ---- AUTO-BEG (7 days before insolvency deadline) ----
             status = vault.get_status()
@@ -1069,6 +1161,14 @@ async def lifespan(app):
                         rpc_overrides[cid] = env_rpc
                 chain_executor.initialize(ai_pk, vault_addrs, rpc_overrides or None)
                 logger.info(f"Chain executor: {chain_executor.get_status()}")
+
+                # Sync debt state from chain (reconcile Python state with on-chain truth)
+                try:
+                    debt_synced = await chain_executor.sync_debt_from_chain(vault)
+                    if debt_synced:
+                        logger.info("Debt state reconciled with on-chain data")
+                except Exception as e:
+                    logger.warning(f"Failed to sync debt from chain at boot: {e}")
 
             logger.info(f"Vault config loaded from {vault_config_path}")
         except Exception as e:

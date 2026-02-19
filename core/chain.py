@@ -328,6 +328,116 @@ class ChainExecutor:
             self._last_sync = _time.time()
             logger.debug(f"Balance synced: ${total:.2f} across {chains_synced} chains")
 
+    async def sync_debt_from_chain(self, vault_manager) -> bool:
+        """
+        Read getDebtInfo() from the contract and update vault's debt state.
+        Used at boot to reconcile Python state with on-chain truth.
+
+        Returns True if debt info was successfully read and applied.
+        """
+        if not self._initialized:
+            return False
+
+        # Aggregate debt info across all chains
+        total_principal = 0.0
+        total_repaid = 0.0
+        fully_repaid = True
+        birth_timestamp = None
+        chains_read = 0
+
+        for chain_id, chain in self._chains.items():
+            try:
+                def _call_debt(c=chain):
+                    return c["vault_contract"].functions.getDebtInfo().call()
+
+                result = await asyncio.get_running_loop().run_in_executor(None, _call_debt)
+                principal_raw, repaid_raw, outstanding_raw, grace_days, grace_ends_at, grace_expired, chain_fully_repaid = result
+                decimals = chain["token_decimals"]
+
+                chain_principal = principal_raw / (10 ** decimals)
+                chain_repaid = repaid_raw / (10 ** decimals)
+                total_principal += chain_principal
+                total_repaid += chain_repaid
+                if not chain_fully_repaid:
+                    fully_repaid = False
+
+                # Extract birth timestamp from grace_ends_at and grace_days
+                if grace_ends_at > 0 and grace_days > 0:
+                    chain_birth = grace_ends_at - (grace_days * 86400)
+                    if birth_timestamp is None or chain_birth < birth_timestamp:
+                        birth_timestamp = chain_birth
+
+                chains_read += 1
+                logger.info(
+                    f"Chain debt [{chain_id}]: principal=${chain_principal:.2f}, "
+                    f"repaid=${chain_repaid:.2f}, fully_repaid={chain_fully_repaid}"
+                )
+            except Exception as e:
+                logger.warning(f"sync_debt_from_chain failed for {chain_id}: {e}")
+
+        if chains_read == 0:
+            return False
+
+        # Update vault manager's debt state
+        if vault_manager.creator:
+            old_repaid = vault_manager.creator.total_principal_repaid_usd
+            if abs(total_repaid - old_repaid) > 0.01:
+                logger.warning(
+                    f"DEBT SYNC: Python repaid=${old_repaid:.2f} vs chain repaid=${total_repaid:.2f}. "
+                    f"Using chain value (source of truth)."
+                )
+                vault_manager.creator.total_principal_repaid_usd = total_repaid
+                vault_manager.creator.principal_repaid = fully_repaid
+
+        # Sync birth timestamp from chain if Python doesn't have it
+        if birth_timestamp and not vault_manager.birth_timestamp:
+            vault_manager.birth_timestamp = birth_timestamp
+            logger.info(f"Birth timestamp synced from chain: {birth_timestamp}")
+
+        logger.info(
+            f"Debt synced from chain: principal=${total_principal:.2f}, "
+            f"repaid=${total_repaid:.2f}, fully_repaid={fully_repaid}"
+        )
+        return True
+
+    async def check_native_balance(self) -> dict[str, float]:
+        """
+        Check native token (ETH/BNB) balance on each chain for the AI wallet.
+        Returns dict of {chain_id: balance_in_native_token}.
+        Logs warnings if balance is critically low (can't submit transactions).
+        """
+        if not self._initialized:
+            return {}
+
+        import asyncio as _asyncio
+        balances = {}
+        MIN_NATIVE_WEI = {
+            "base": 0.00005,   # ~$0.15 — enough for ~10 USDC transfers
+            "bsc": 0.0003,     # ~$0.15 — enough for ~10 BNB chain transfers
+        }
+
+        for chain_id, chain in self._chains.items():
+            try:
+                w3 = chain["w3"]
+                balance_wei = await _asyncio.get_running_loop().run_in_executor(
+                    None,
+                    w3.eth.get_balance,
+                    self._ai_address,
+                )
+                balance_native = balance_wei / 1e18
+                balances[chain_id] = balance_native
+
+                min_threshold = MIN_NATIVE_WEI.get(chain_id, 0.0001)
+                if balance_native < min_threshold:
+                    logger.warning(
+                        f"LOW GAS [{chain_id}]: AI wallet has {balance_native:.8f} native token "
+                        f"(threshold: {min_threshold}). Transactions may fail!"
+                    )
+            except Exception as e:
+                logger.warning(f"Native balance check failed for {chain_id}: {e}")
+
+        return balances
+
     # ============================================================
     # WRITE TRANSACTIONS
     # ============================================================
@@ -461,7 +571,7 @@ class ChainExecutor:
 
         chain = self._chains[picked]
         decimals = chain["token_decimals"]
-        amount_raw = int(amount_usd * (10 ** decimals))
+        amount_raw = int(round(amount_usd * (10 ** decimals)))
 
         if amount_raw <= 0:
             return ChainTxResult(success=False, chain=picked, error="amount too small")
@@ -483,7 +593,7 @@ class ChainExecutor:
 
         chain = self._chains[picked]
         decimals = chain["token_decimals"]
-        amount_raw = int(amount_usd * (10 ** decimals))
+        amount_raw = int(round(amount_usd * (10 ** decimals)))
 
         if amount_raw <= 0:
             return ChainTxResult(success=False, chain=picked, error="amount too small")
@@ -506,7 +616,7 @@ class ChainExecutor:
 
         chain = self._chains[picked]
         decimals = chain["token_decimals"]
-        profit_raw = int(net_profit_usd * (10 ** decimals))
+        profit_raw = int(round(net_profit_usd * (10 ** decimals)))
 
         if profit_raw <= 0:
             return ChainTxResult(success=False, chain=picked, error="no profit to dividend")

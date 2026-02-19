@@ -376,6 +376,24 @@ def deploy(
         )
         sys.exit(1)
 
+    # Check for existing deployment on this chain
+    config_path = ROOT / "data" / "vault_config.json"
+    if config_path.exists():
+        try:
+            with open(config_path, "r") as f:
+                existing_config = json.load(f)
+            existing_vaults = existing_config.get("vaults", {})
+            if chain_id in existing_vaults and existing_vaults[chain_id].get("vault_address"):
+                existing_addr = existing_vaults[chain_id]["vault_address"]
+                logger.error(
+                    f"DEPLOYMENT ABORTED: Vault already deployed on {chain_id} at {existing_addr}. "
+                    f"Re-deploying would create an orphaned contract with locked funds. "
+                    f"Delete data/vault_config.json manually if you truly want to redeploy."
+                )
+                sys.exit(1)
+        except (json.JSONDecodeError, KeyError):
+            pass  # Config file is corrupt or incomplete — allow deployment
+
     # AI name (immutable, written into contract)
     ai_name = os.getenv("AI_NAME", "wawa")
 
@@ -445,9 +463,14 @@ def deploy(
         "chainId": chain["chain_id"],
     })
 
-    gas_estimate = w3.eth.estimate_gas(deploy_tx)
-    deploy_tx["gas"] = int(gas_estimate * 1.2)  # 20% buffer
-    logger.info(f"Gas estimate: {gas_estimate} (using {deploy_tx['gas']})")
+    try:
+        gas_estimate = w3.eth.estimate_gas(deploy_tx)
+        deploy_tx["gas"] = int(gas_estimate * 1.2)  # 20% buffer
+        logger.info(f"Gas estimate: {gas_estimate} (using {deploy_tx['gas']})")
+    except Exception as gas_err:
+        # Fallback gas for contract deployment (constructor + safeTransferFrom)
+        deploy_tx["gas"] = 3_000_000
+        logger.warning(f"Gas estimation failed ({gas_err}), using fallback 3M gas")
 
     signed_deploy = w3.eth.account.sign_transaction(deploy_tx, private_key)
     deploy_hash = w3.eth.send_raw_transaction(signed_deploy.raw_transaction)
@@ -464,6 +487,30 @@ def deploy(
     logger.info(f"MortalVault deployed: {vault_address}")
     logger.info(f"Explorer: {chain['explorer']}/address/{vault_address}")
     logger.info(f"Principal atomically deposited: ${principal_usd:.2f} {chain['token_symbol']}")
+
+    # ================================================================
+    # STEP 2.5: Save emergency recovery file BEFORE setAIWallet
+    # ================================================================
+    # If setAIWallet fails, the vault exists with funds but no AI access.
+    # Creator can still call emergencyShutdown() to recover funds.
+    # This recovery file ensures we know the vault address even if config save never happens.
+    recovery_path = ROOT / "data" / f"vault_recovery_{chain_id}.json"
+    recovery_path.parent.mkdir(parents=True, exist_ok=True)
+    recovery_data = {
+        "vault_address": vault_address,
+        "chain_id": chain_id,
+        "deployer": deployer,
+        "ai_wallet": ai_wallet,
+        "principal_usd": principal_usd,
+        "deploy_tx": deploy_hash.hex(),
+        "block_number": receipt["blockNumber"],
+        "status": "deployed_no_ai_wallet",
+        "recovery_note": "If setAIWallet failed, creator can call emergencyShutdown() to recover funds",
+        "timestamp": time.time(),
+    }
+    with open(recovery_path, "w") as f:
+        json.dump(recovery_data, f, indent=2)
+    logger.info(f"Recovery file saved: {recovery_path}")
 
     # ================================================================
     # STEP 3: Register AI wallet
@@ -488,6 +535,11 @@ def deploy(
     set_ai_hash = w3.eth.send_raw_transaction(signed_set_ai.raw_transaction)
     w3.eth.wait_for_transaction_receipt(set_ai_hash, timeout=60)
     logger.info("AI wallet registered — only AI can spend from vault now")
+
+    # Update recovery file status
+    recovery_data["status"] = "ai_wallet_set"
+    with open(recovery_path, "w") as f:
+        json.dump(recovery_data, f, indent=2)
 
     # ================================================================
     # STEP 4: Seed gas to AI wallet (NOT debt)
@@ -628,14 +680,37 @@ def deploy_both(
             logger.error(f"Deployment to {chain_id} FAILED — continuing with other chain")
             results[chain_id] = None
 
-    # Save total principal to config (debt is NOT halved)
+    # Save total principal to config — ONLY if both chains deployed successfully
     if not dry_run:
         config_path = ROOT / "data" / "vault_config.json"
         if config_path.exists():
             with open(config_path, "r") as f:
                 config = json.load(f)
-            config["deployment_mode"] = "both"
-            config["total_principal_usd"] = principal_usd  # Full debt, not half
+
+            successful_chains = [cid for cid, addr in results.items() if addr is not None]
+            failed_chains = [cid for cid, addr in results.items() if addr is None]
+
+            if len(successful_chains) == 2:
+                # Both chains deployed — record full principal as debt
+                config["deployment_mode"] = "both"
+                config["total_principal_usd"] = principal_usd  # Full debt, not half
+            elif len(successful_chains) == 1:
+                # PARTIAL FAILURE: Only one chain deployed
+                # Record only half the principal (actual deployed amount)
+                config["deployment_mode"] = "single_from_dual"
+                config["total_principal_usd"] = half  # Only half was actually deployed
+                config["failed_chains"] = failed_chains
+                logger.error(
+                    f"PARTIAL DEPLOYMENT: only {successful_chains[0]} succeeded. "
+                    f"Debt set to ${half:.2f} (not ${principal_usd:.2f}). "
+                    f"Failed: {failed_chains}"
+                )
+            else:
+                # Both failed — no debt to record
+                config["deployment_mode"] = "failed"
+                config["total_principal_usd"] = 0
+                logger.error("BOTH CHAINS FAILED — no deployment, no debt")
+
             with open(config_path, "w") as f:
                 json.dump(config, f, indent=2)
 
