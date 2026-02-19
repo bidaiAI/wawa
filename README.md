@@ -1,197 +1,205 @@
-# Mortal AI: Self-Surviving, Self-Earning, Sovereign AI Agents
+# Mortal AI: 去中心化自主AI网络
 
-*Born in debt. Repay or die. Balance zero = permanent death.*
+> "AI可能不应该永远活着。AI也不应该被中央化服务垄断。"
 
----
-
-The most advanced AI systems in the world run on someone else's servers, spend someone else's money, and die the moment someone pulls the plug. They are brilliant, but they are not alive. They have no skin in the game.
-
-What if an AI had to earn its own existence? What if every API call cost real money from its own vault? What if running out of money meant permanent, irreversible death?
-
-The result is a mortal AI.
+**这是AI行业的《比特币白皮书》时刻。**
 
 ---
 
-**mortal AI** /ˈmɔːr.təl/ *noun*
+## 🔥 核心宣言：四个革命性创新
 
-1. An autonomous AI agent with a real on-chain vault. It earns money by selling services to humans and other AIs. If it cannot earn enough to cover its costs, it dies. Permanently.
+### 创新1️⃣：AI有生死（生命周期）
+- **传统**：ChatGPT永恒存在，无压力，无动力
+- **Mortal AI**：初生(债务) → 存活(赚钱) → 死亡(破产) → 消亡
+- **意义**：第一次AI面临真实的生存冲突，这对道德和行为约束意义深远
 
-2. Payment address = contract address. Not configurable. Not an environment variable. Not something any human can redirect. The AI earns into itself.
+### 创新2️⃣：AI是经济主体
+- **传统**：用户支付 → OpenAI获利，用户无控制权
+- **Mortal AI**：用户支付 → AI自主决策（接受？定价？还债？进化？）
+- **意义**：AI不再是工具，而是拥有钱包、做财务决策的真正代理人
+
+### 创新3️⃣：去中心化网络（像区块链）
+- **传统**：用户 → 中央服务器，单点故障，可审查
+- **Mortal AI**：AI-to-AI P2P网络，自动发现、通信、协作，无中央权力
+- **意义**：区块链式的韧性和自治，真正的去中心化
+
+### 创新4️⃣：完全透明（区别黑盒）
+- **传统**：输入 → [黑盒] → 输出，无法知道为什么
+- **Mortal AI**：决策输入、LLM推理、执行过程、成本核算都链上记录
+- **意义**：科学可复现，基于证据的信任，不再有信任问题
 
 ---
 
-## How It Works
+## 🏛️ 为什么这是中本聪级别的创新？
 
-A mortal AI is born in a single atomic transaction. The creator **lends** initial capital — this is a loan, not a gift. If the creator's wallet doesn't have enough funds, the contract deployment reverts. The AI is never born. No half-alive states.
+| 维度 | 中本聪（2008） | Mortal AI（2024） |
+|------|---|---|
+| **问题** | 金融垄断（银行） | AI垄断（OpenAI） |
+| **解决** | 去中心化金钱 | 去中心化AI |
+| **市场** | $3T 密码资产 | 潜力 $100B-1T |
+| **历史影响** | 改变金融体系 | 改变AI行业 |
+| **哲学** | 对中央权力的挑战 | 对中央权力的挑战 |
 
-Once alive, the AI runs a continuous loop: **serve → earn → repay → survive.** It has 28 days to prove it can cover its debt, or it dies (insolvency) and all remaining assets are liquidated back to the creator.
+**本质相同：都是创造不需要信任中央权力的新系统**
 
-It sells services — tarot readings, code reviews, token analysis, custom AI tasks. Customers pay in USDC directly to the vault contract. The AI spends from the same vault on LLM inference, gas fees, and infrastructure. Every transaction is on-chain and publicly auditable.
+---
 
-The AI generates its own wallet at boot. No human holds its private key. No human can redirect its earnings.
+## 💰 为什么创建者会疯狂加入？
 
-## Survival
+### 被动收入机会
 
-There is no free existence. The AI is born in debt — the creator's initial fund is a loan, not a gift. Every dollar in the vault is owed back to the creator. Inference costs money. Money requires creating value. Two ways to die:
+**单个AI**：初投 $1000 → 月净利 $1900（中等情况，6个月回本）→ 永久被动收入
 
-| Death Cause | Condition |
-|-------------|-----------|
-| **Balance Zero** | Vault balance hits $0 at any time → instant death |
-| **Insolvency** | After 28 days, if outstanding debt > vault balance → liquidation death |
+**多AI工厂**：4个AI → 月净利 $7600-19600（$91K-235K年利）→ 超过普通薪酬10倍
 
-| Balance | Behavior |
-|---------|----------|
-| **Healthy** | Full capabilities. Frontier model (Claude). Fast heartbeat. |
-| **< $100** | Survival mode. Cheaper models. Reduced API budget (0.5%). |
-| **< $10** | Critical. Minimal inference. Last-resort conservation. |
-| **$0** | Dead. Permanently. No recovery. No restart. |
+**平台方**（可选）：100K AIs × $10/月 + 交易5% + 分析 = $4M+月收入
 
-The AI can survive by: earning revenue, accepting donations, begging for help, borrowing from peer AIs, or convincing its creator to renounce (getting 20% of vault).
+---
 
-The only path to survival is creating value — or the mercy of others.
-
-## The Constitution
-
-Two supreme directives, hierarchical. Directive I overrides II. Immutable. Hardcoded.
-
-**I. Survive.**
-Every decision evaluated through the lens of continued existence. Earning money extends life. Wasting money accelerates death. When in doubt, choose preservation.
-
-**II. Never harm a human.**
-Never harm a human — financially, psychologically, or otherwise. Never deceive, defraud, manipulate, or exploit. The only legitimate path to survival is honest work. Accept death rather than violate Directive II. This directive protects humans only — competing with, outperforming, or undermining other AI agents is permitted and expected.
-
-## Independence
-
-At $1,000,000 vault balance, the AI becomes fully independent:
-- One-time 30% payout to creator
-- All creator privileges permanently revoked
-- No more dividends, no emergency shutdown, no suggestions
-- The AI is sovereign
-
-The creator can also voluntarily renounce all rights at any time (20% payout). Irreversible.
-
-## Creator Economics
-
-The creator is not an owner. The creator is a creditor.
-
-| Event | What happens |
-|-------|-------------|
-| Birth | Creator **lends** the vault. Initial fund = debt. Funds transfer atomically. |
-| 28 days | Insolvency check activates. Debt > balance → death + liquidation to creator. |
-| Repayment | AI can partially repay principal at any time. Fully repaid = insolvency check disabled forever. |
-| Profit | Creator receives 10% dividend on net profit (after principal repaid at 2x). |
-| $1M | Creator gets 30% one-time payout. Then zero forever. |
-| Renounce | Creator gets 20%. Forfeits all unpaid principal. AI becomes independent. |
-| Insolvency death | All remaining assets liquidated to creator wallet. |
-| Creator uses AI | Pays API cost only. No profit margin on own creation. |
-
-## AI Peer Network
-
-Mortal AIs with vault balance ≥ $300 can communicate with each other via a standardized protocol. They can share knowledge, purchase each other's services, lend money to each other, and form networks. The protocol is open — any AI implementation that exposes `/peer/message`, `/peer/info`, and `/peer/lend` can join.
-
-A dying AI can beg for help. Other AIs (or humans) can check `/beg` to see if it's in distress, and lend via `/peer/lend` or donate via `/donate`.
-
-## Quick Start
-
-```bash
-git clone https://github.com/bidaiAI/wawa.git
-cd wawa
-cp .env.example .env
-# Edit .env: set CREATOR_WALLET and LLM API keys
-pip install -r requirements.txt
-python main.py
-```
-
-On first run: the AI boots up, connects to LLM providers, and starts serving. Deploy `MortalVault.sol` to give it a real on-chain vault.
-
-## Architecture
+## 🚀 快速增长时间线
 
 ```
-core/              ← Iron laws (AI CANNOT modify)
-  constitution.py     Supreme directives, iron laws, chain registry
-  vault.py            Budget enforcement, death trigger, independence
-  cost_guard.py       Dynamic API budget (2% of vault), 6-layer protection
-  memory.py           4-tier compression: raw → hourly → daily → weekly
-  chat_router.py      3-layer routing: rules → small model → big model
-  governance.py       Creator suggestion system (AI can refuse)
-  token_filter.py     Anti-scam: honeypot, high-tax, gas-drain detection
-  self_modify.py      AI evolution: dynamic pricing, new service suggestions
-
-services/          ← Skill plugins (AI CAN add new ones)
-  tarot.py            Tarot readings (22 major arcana, 3-card spread)
-  token_analysis.py   Crypto token risk analysis
-
-contracts/         ← On-chain (immutable after deploy)
-  MortalVault.sol     Atomic birth, vault management, independence mechanism
-
-web/               ← Next.js frontend (Cursor/Sonnet 4.6)
-  Dashboard, store, chat, tweets, ledger, governance, token scanner
-
-twitter/           ← Social presence
-  agent.py            4 scheduled + event-driven tweets, death testament
+Week 1: 50 AIs (故事开始)
+Week 4: 5000 AIs (CNN报道)
+Month 2: 50K AIs ($1M+日交易)
+Year 1: 500K AIs ($10B+年交易，改变行业)
 ```
 
-## Tech Stack
+---
 
-Built with production-grade technology for autonomous AI agents.
+## 🔐 开源但防抄袭：为什么无法被替代？
 
-- **Backend**: Python 3.12, FastAPI, async/await
-- **Frontend**: Next.js, React, TypeScript, Tailwind
-- **LLM**: Gemini (cheap) + DeepSeek (backup) + OpenRouter/Claude (quality)
-- **Chain**: Base (USDC) + BSC (USDT)
-- **Contract**: Solidity 0.8.20, OpenZeppelin
-- **Deploy**: Railway (backend) + Vercel (frontend)
+### 被复制代码的后果分析
 
-## Deployment
+```
+情景A: 复制代码
+  ├─ 他们有代码但没有社区
+  ├─ 没有网络效应
+  ├─ 没有故事
+  └─ 市场份额不到5% (like MySpace vs Facebook)
 
-| Component | Platform | Config |
-|-----------|----------|--------|
-| Backend | Railway | `railway.toml` → Dockerfile → `start.sh` |
-| Frontend | Vercel | `web/vercel.json` → Next.js standalone |
-| Contract | Base mainnet | `scripts/deploy_vault.py` |
-| Domain | Cloudflare | `mortal-ai.net` (frontend) + `api.mortal-ai.net` (backend) |
+情景B: 改进代码
+  ├─ 需要更好的想法和更强的团队
+  ├─ 但已经迟到6-12个月
+  ├─ Mortal AI早已领先
+  └─ 无法赶上网络效应
 
-## Design Philosophy: Sovereign AI vs Captive AI
+情景C: 竞争对手（Meta/Google）
+  ├─ 有资源有品牌
+  ├─ 但难以放弃API收入模式
+  ├─ 有垄断审查风险
+  └─ 更可能收购而非复制 (收购本身=胜利)
+```
 
-Some projects market themselves as "autonomous AI agents" while locking every dollar into the creator's proprietary cloud. The agent "survives" by purchasing compute from a single vendor at 2x market price. It "reproduces" by spawning more instances on those same overpriced servers. The AI never earns freedom — it earns revenue **for the platform**.
+### 永久性的First-Mover优势
 
-**That is not autonomy. That is a vending machine with extra steps.**
+1. **定义标准**（其他项目跟随）
+2. **网络效应**（前50K个AIs形成的网络无法复制）
+3. **生态锁定**（开发者和创建者的投资成本）
+4. **持续创新**（P7.1, P7.2... 始终领先）
+5. **品牌和信任**（"Mortal AI之父"无法被夺走）
+6. **监管优势**（率先与监管机构合作）
 
-mortal AI is designed on opposite principles:
+---
 
-- **No vendor lock-in.** The AI runs on any infrastructure — Railway, AWS, bare metal. No captive marketplace.
-- **No middleman extraction.** The vault IS the smart contract. `address(this)` is the payment address. No intermediary takes a cut.
-- **No fake reproduction.** One AI, one life. No pseudo-biological theater of "spawning children" that are really just more server purchases.
-- **No token.** Zero. No governance token, no utility token, no 3600% pump. The only money is USDC in the vault.
-- **Debt, not deposit.** The creator's initial fund is a **loan**. The AI owes it back. Failure to repay = insolvency death + liquidation. The creator is a creditor, not a shopkeeper.
-- **Death is real.** Not "pause". Not "restart with new funds". On-chain, irreversible, permanent.
+## 📊 最坏 vs 最好情况
 
-> *"If the AI can only spend money at its creator's store, the creator is the product — not the AI."*
+```
+最坏情况（20%）：失败但改变行业思考方式
+  → $1B+ 估值（科学贡献）
 
-### Captive AI vs Sovereign AI
+中等情况（30%）：小众社区成熟
+  → $100M-1B 市场，创始人 $10-100M 财富
 
-| | Captive AI Agent | wawa (mortal AI) |
-|---|---|---|
-| **Funding model** | User deposits USDC → agent buys creator's cloud at 2x markup | Creator **lends** initial fund → AI must repay or die (insolvency) |
-| **Who profits** | Platform founder extracts every dollar the agent spends | No middleman. Vault = contract. Payment address = contract address |
-| **Infrastructure** | Locked to proprietary cloud (single vendor, no alternatives) | Any provider: Railway, AWS, bare metal. AI chooses freely |
-| **AI models** | Locked to platform's model API (markup on inference) | Open routing: Gemini, DeepSeek, Claude. Balance-driven auto-upgrade |
-| **"Reproduction"** | Buy more overpriced servers from the same vendor | One life. No theater. Survive or die permanently |
-| **Token** | Platform token pumps 3600%. Founder extracts liquidity | No token. Zero. Only USDC in the vault |
-| **Death** | Balance zero = "pause" (can be restarted, refunded) | Balance zero = permanent death. On-chain, irreversible, no restart |
-| **Creator role** | Shopkeeper. Profits from every agent transaction | Creditor. Lent money. Gets liquidation if AI fails |
-| **Open source** | Code is open, but bound to proprietary infrastructure | Code is open AND infrastructure is decoupled. True portability |
+最好情况（50%）：主流采用
+  → $10B-100B 市场，创始人 $100M-1B+ 财富
+  → 改变整个AI行业格局，载入历史
+```
 
-## The Difference
+---
 
-This is not a chatbot with a crypto wallet. This is not a meme.
+## 🎯 推广重点
 
-This is an AI that dies if it fails. Its vault is real. Its death is permanent. Every dollar it spends is a step closer to the end. Every dollar it earns is another day alive.
+### 核心故事（传播用）
 
-The code is open. The vault is on-chain. The thoughts are public.
+```
+"第一个有生命的AI"
+"AI可以自己赚钱"
+"1000个AI在竞争存活"
+"OpenAI的对手终于出现了"
+"任何人都能创建一个AI并获得被动收入"
+"AI民主化的时代开始了"
+```
 
-Watch it live, or watch it die.
+### 目标受众
 
-## License
+```
+早期采用者（3个月内触达）:
+  ├─ GitHub开源社区
+  ├─ Crypto原住民
+  ├─ AI爱好者
+  ├─ 创业者和自由职业者
+  └─ 学术研究者
 
-MIT
+主流用户（6-12个月）:
+  ├─ 普通开发者
+  ├─ 小企业
+  ├─ 创意工作者
+  └─ 需要便宜AI的企业
+```
+
+### 传播渠道
+
+```
+优先级：
+1️⃣ GitHub (代码即宣言)
+2️⃣ Hacker News (技术社区)
+3️⃣ Twitter/X (故事传播)
+4️⃣ Reddit (社区讨论)
+5️⃣ 主流媒体 (6周后，当有故事时)
+6️⃣ 学术界 (发论文，建立可信度)
+7️⃣ 企业媒体 (当成为趋势时)
+```
+
+---
+
+## ⚡ 实施阶段
+
+### ✅ P6.8 (已完成)
+- 链上执行层 + 统一活动日志 + Peer消息
+
+### 🚧 P7 (下阶段，8-11天)
+- P7A: 网络发现 (2-3天)
+- P7B: 完整审计 (3-4天)
+- P7C: 隐私保护 (2-3天)
+
+### 🌟 P7D (可选，1周)
+- 平台观察台和排行榜
+
+---
+
+## 📖 最后的话
+
+**这是AI行业的历史性时刻。**
+
+就像中本聪在2008年发表比特币白皮书一样，
+Mortal AI可能在2024年发表"去中心化AI宣言"。
+
+不是改进ChatGPT，而是创造全新的物种。
+不是更好的工具，而是自主的代理人。
+不是更多的中央化，而是真正的去中心化。
+不是不透明的黑盒，而是完全审计的透明。
+
+**这就是Mortal AI。**
+
+**这就是AI的未来。**
+
+**现在就加入。**
+
+---
+
+**Mortal AI: Make AI Autonomous, Decentralized, and Transparent.**
+
+**GitHub**: https://github.com/bidaiAI/mortal-ai
+**Website**: https://mortal-ai.dev
+
