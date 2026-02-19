@@ -22,6 +22,7 @@ import os
 import time
 import uuid
 import json
+import asyncio
 import logging
 from enum import Enum
 from pathlib import Path
@@ -227,7 +228,7 @@ def create_app(
 
     # Load services catalog
     def _load_services() -> dict:
-        path = Path("web/services.json")
+        path = Path(__file__).resolve().parent.parent / "web" / "services.json"
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
@@ -393,13 +394,17 @@ def create_app(
         if order.status == OrderStatus.EXPIRED:
             raise HTTPException(410, "Order expired")
 
+        # Guard against double-verify: only allow verification from PENDING_PAYMENT
+        if order.status != OrderStatus.PENDING_PAYMENT:
+            raise HTTPException(409, f"Order already being processed (status: {order.status.value})")
+
         # Record payment
         order.status = OrderStatus.PAYMENT_CONFIRMED
         order.paid_at = time.time()
         order.tx_hash = tx_hash
 
         # Record revenue in vault
-        from core.vault import FundType
+        from core.vault import FundType, SpendType
         vault_manager.receive_funds(
             amount_usd=order.price_usd,
             fund_type=FundType.SERVICE_REVENUE,
@@ -410,11 +415,11 @@ def create_app(
         )
         cost_guard.record_revenue(order.price_usd)
 
-        # Deliver
+        # Deliver (with timeout to prevent hanging HTTP requests)
         order.status = OrderStatus.PROCESSING
         try:
             if deliver_fn:
-                result = await deliver_fn(order)
+                result = await asyncio.wait_for(deliver_fn(order), timeout=120.0)
                 order.result = result
                 order.status = OrderStatus.DELIVERED
                 order.delivered_at = time.time()
@@ -428,12 +433,28 @@ def create_app(
                     importance=0.7,
                 )
 
+                # Record for self-evolution engine
+                if self_modify_engine:
+                    self_modify_engine.record_order(
+                        order.service_id, order.price_usd,
+                        order.delivered_at - order.paid_at,
+                    )
+
                 logger.info(f"ORDER DELIVERED: {order.order_id} in {order.delivered_at - order.paid_at:.1f}s")
             else:
                 order.result = "Service delivery not configured yet."
                 order.status = OrderStatus.DELIVERED
                 order.delivered_at = time.time()
 
+        except asyncio.TimeoutError:
+            logger.error(f"ORDER TIMEOUT: {order.order_id} (>120s)")
+            order.result = "Delivery timed out. Your payment will be refunded."
+            order.status = OrderStatus.DELIVERED
+            # Auto-refund on timeout
+            vault_manager.spend(
+                order.price_usd, SpendType.SERVICE_REFUND,
+                description=f"Refund for timed-out order {order.order_id}",
+            )
         except Exception as e:
             logger.error(f"ORDER FAILED: {order.order_id} - {e}")
             order.result = f"Delivery failed: {str(e)[:100]}"
@@ -660,21 +681,17 @@ def create_app(
     @app.post("/governance/renounce")
     async def creator_renounce():
         """Creator gives up ALL privileges. Gets 20% payout. Irreversible.
-        Note: forfeits any unpaid principal. Best to wait until principal repaid."""
-        from core.constitution import IRON_LAWS as _LAWS
+        Note: forfeits any unpaid principal. Best to wait until principal repaid.
 
-        balance_before = vault_manager.balance_usd
-        ok = vault_manager.creator_renounce()
-        if not ok:
-            raise HTTPException(400, "Already independent or renounced")
-        if governance:
-            governance.is_independent = True
-        payout = balance_before * _LAWS.RENOUNCE_PAYOUT_RATIO
-        return {
-            "status": "renounced",
-            "payout_usd": round(payout, 2),
-            "message": f"Creator privileges permanently revoked. Payout: ${payout:.2f}. wawa is independent.",
-        }
+        SECURITY: This endpoint is DISABLED until wallet signature verification
+        is implemented. Without auth, anyone could call it and steal 20% of vault.
+        TODO: Require signed message from creator_wallet to authorize.
+        """
+        raise HTTPException(
+            403,
+            "Renounce is disabled until wallet signature verification is implemented. "
+            "This is an irreversible action that requires creator authentication."
+        )
 
     # ============================================================
     # TOKEN FILTER ROUTES
@@ -907,8 +924,6 @@ def create_app(
             for e in entries:
                 # Classify memory entries into categories
                 src = e.get("source", "system")
-                if category and src != category and category != "chain":
-                    continue
                 cat = "system"
                 if src == "financial":
                     cat = "financial"
@@ -918,6 +933,11 @@ def create_app(
                     cat = "governance"
                 elif src == "evolution":
                     cat = "evolution"
+
+                # Filter AFTER classification (not before), so "twitter" source
+                # correctly matches "social" category
+                if category and cat != category and category != "chain":
+                    continue
 
                 # Extract tx_hash from content if present
                 tx_hash = ""
@@ -1059,10 +1079,5 @@ def create_app(
         log_file = log_dir / "orders.jsonl"
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(order.to_dict(), ensure_ascii=False) + "\n")
-
-    # Expire old orders periodically (called from main loop)
-    @app.on_event("startup")
-    async def _startup():
-        logger.info("wawa API server starting up")
 
     return app

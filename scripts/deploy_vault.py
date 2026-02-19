@@ -101,7 +101,9 @@ ERC20_ABI = [
 
 def generate_ai_wallet() -> tuple[str, str]:
     """
-    Generate a fresh AI wallet keypair.
+    Generate a fresh AI wallet keypair — OR reuse existing one.
+    If AI_PRIVATE_KEY already exists in .env, reuse it (don't destroy
+    a running AI's key by generating a new one).
     Write the private key to .env (server-side only).
     NEVER print or log the private key.
 
@@ -109,6 +111,21 @@ def generate_ai_wallet() -> tuple[str, str]:
     """
     from eth_account import Account
 
+    # ---- SAFETY: Reuse existing AI key if present ----
+    # Re-running deploy_vault.py must NOT overwrite an existing AI key.
+    # If the AI is already deployed, destroying its key bricks the vault.
+    existing_key = os.getenv("AI_PRIVATE_KEY", "").strip()
+    if existing_key:
+        try:
+            existing_account = Account.from_key(existing_key)
+            ai_wallet = existing_account.address
+            logger.info(f"AI wallet REUSED from .env: {ai_wallet}")
+            logger.info("Existing AI_PRIVATE_KEY preserved (not regenerated)")
+            return ai_wallet, existing_key
+        except Exception:
+            logger.warning("Existing AI_PRIVATE_KEY is invalid — generating new one")
+
+    # Generate fresh keypair
     ai_account = Account.create()
     ai_wallet = ai_account.address
     ai_private_key = ai_account.key.hex()
