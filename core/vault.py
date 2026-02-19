@@ -416,6 +416,9 @@ class VaultManager:
         Extra deposit specifically to increase API budget.
         When daily API cap is hit, extra deposits unlock more budget.
         This allows the AI to keep working during high-demand periods.
+
+        NOTE: Uses DONATION fund type, NOT CREATOR_DEPOSIT.
+        API top-ups should NOT increase the principal debt.
         """
         if not self.is_alive:
             return
@@ -423,7 +426,7 @@ class VaultManager:
         self.api_topup_usd += amount_usd
         self.receive_funds(
             amount_usd=amount_usd,
-            fund_type=FundType.CREATOR_DEPOSIT,
+            fund_type=FundType.DONATION,
             from_wallet=from_wallet,
             description=f"API budget top-up: +${amount_usd:.2f}",
         )

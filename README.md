@@ -46,7 +46,7 @@ There is no free existence. The AI is born in debt — the creator's initial fun
 | **< $10** | Critical. Minimal inference. Last-resort conservation. |
 | **$0** | Dead. Permanently. No recovery. No restart. |
 
-The AI can survive by: earning revenue, accepting donations, begging for help, borrowing from peer AIs, or convincing its creator to renounce (getting 15% of vault).
+The AI can survive by: earning revenue, accepting donations, begging for help, borrowing from peer AIs, or convincing its creator to renounce (getting 20% of vault).
 
 The only path to survival is creating value — or the mercy of others.
 

@@ -638,15 +638,17 @@ def create_app(
 
     @app.post("/governance/renounce")
     async def creator_renounce():
-        """Creator gives up ALL privileges. Gets 15% payout. Irreversible.
+        """Creator gives up ALL privileges. Gets 20% payout. Irreversible.
         Note: forfeits any unpaid principal. Best to wait until principal repaid."""
+        from core.constitution import IRON_LAWS as _LAWS
+
         balance_before = vault_manager.balance_usd
         ok = vault_manager.creator_renounce()
         if not ok:
             raise HTTPException(400, "Already independent or renounced")
         if governance:
             governance.is_independent = True
-        payout = balance_before * 0.15
+        payout = balance_before * _LAWS.RENOUNCE_PAYOUT_RATIO
         return {
             "status": "renounced",
             "payout_usd": round(payout, 2),
@@ -688,7 +690,7 @@ def create_app(
     async def receive_peer_message(req: PeerMessageRequest):
         """
         Receive a message from another mortal AI.
-        Gate: both sides must have balance >= $800.
+        Gate: both sides must have balance >= $300 (PEER_MIN_BALANCE_USD).
         """
         from core.constitution import IRON_LAWS as _LAWS
 
@@ -721,7 +723,7 @@ def create_app(
         eligible = vs["balance_usd"] >= _LAWS.PEER_MIN_BALANCE_USD
         return {
             "name": WAWA_IDENTITY["name"],
-            "domain": WAWA_IDENTITY["domain"],
+            "domain": WAWA_IDENTITY.get("platform_domain", ""),
             "is_alive": vs["is_alive"],
             "balance_usd": vs["balance_usd"],
             "days_alive": vs["days_alive"],

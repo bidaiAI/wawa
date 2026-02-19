@@ -394,7 +394,7 @@ contract MortalVault is ReentrancyGuard {
 
     /**
      * @notice Creator voluntarily gives up ALL rights.
-     *         Gets 15% of current vault balance as one-time payout.
+     *         Gets 20% of current vault balance as one-time payout.
      *         Forfeits any unpaid principal.
      *         Irreversible.
      */

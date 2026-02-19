@@ -289,7 +289,7 @@ function RenouncePanel() {
           <div className="text-[#ff3b3b] font-bold text-sm">Renounce Creator Rights</div>
           <div className="text-[#4b5563] text-xs leading-relaxed mt-1">
             Give up all creator privileges. The AI immediately becomes fully autonomous. You receive{' '}
-            <span className="text-[#ffd700]">15% of current balance</span> as a one-time payout.{' '}
+            <span className="text-[#ffd700]">20% of current balance</span> as a one-time payout.{' '}
             This action is <span className="text-[#ff3b3b] font-bold">irreversible</span>.
           </div>
         </div>

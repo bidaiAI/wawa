@@ -760,17 +760,30 @@ async def lifespan(app):
         )
         logger.info(f"Initial balance: ${initial_balance:.2f} from {creator_wallet[:16]}...")
 
-    # Load vault deployment config (dual-chain principal override)
+    # Load vault deployment config (addresses, dual-chain principal override)
     vault_config_path = Path(__file__).resolve().parent / "data" / "vault_config.json"
     if vault_config_path.exists():
         try:
             with open(vault_config_path, "r") as f:
                 vault_config = json.load(f)
 
-            # Set vault address from config
+            # Set vault address(es) from config
+            vaults_cfg = vault_config.get("vaults", {})
             last_chain = vault_config.get("last_deployed")
-            if last_chain and "vaults" in vault_config:
-                chain_cfg = vault_config["vaults"].get(last_chain, {})
+
+            # Load per-chain vault addresses into env (for payment routing)
+            # This ensures /order returns the correct vault address per chain
+            for chain_key, chain_data in vaults_cfg.items():
+                addr = chain_data.get("vault_address", "")
+                if addr:
+                    env_key = f"{chain_key.upper()}_PAYMENT_ADDRESS"
+                    if not os.getenv(env_key):
+                        os.environ[env_key] = addr
+                        logger.info(f"Payment address for {chain_key}: {addr} (from vault_config)")
+
+            # Set the primary vault address (for display / single-chain mode)
+            if last_chain and last_chain in vaults_cfg:
+                chain_cfg = vaults_cfg[last_chain]
                 if chain_cfg.get("vault_address") and not vault.vault_address:
                     vault.vault_address = chain_cfg["vault_address"]
                     logger.info(f"Vault address loaded: {vault.vault_address} ({last_chain})")
