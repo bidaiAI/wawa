@@ -166,6 +166,7 @@ export interface ChatResponse {
   session_id: string
   layer: string
   cost_usd: number
+  error?: boolean
 }
 
 export interface InternalStats {

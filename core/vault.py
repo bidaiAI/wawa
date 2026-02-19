@@ -271,7 +271,7 @@ class VaultManager:
             logger.warning(f"SPEND DENIED: ${amount_usd:.2f} [{spend_type.value}] - {reason}")
             return False
 
-        self.balance_usd -= amount_usd
+        self.balance_usd = max(0.0, self.balance_usd - amount_usd)
         self.daily_spent_usd += amount_usd
         self.total_spent_usd += amount_usd
 
@@ -352,7 +352,7 @@ class VaultManager:
             counterparty=creator_wallet,
             description=f"Independence payout: 30% of ${self.balance_usd:.2f}",
         ))
-        self.balance_usd -= payout
+        self.balance_usd = max(0.0, self.balance_usd - payout)
         self.total_spent_usd += payout
 
         self.is_independent = True
@@ -392,7 +392,7 @@ class VaultManager:
             counterparty=creator_wallet,
             description=f"Creator renounce payout: 20% of ${self.balance_usd:.2f}",
         ))
-        self.balance_usd -= payout
+        self.balance_usd = max(0.0, self.balance_usd - payout)
         self.total_spent_usd += payout
 
         self.creator_renounced = True
@@ -791,7 +791,7 @@ class VaultManager:
             logger.warning(f"REPAYMENT DENIED: ${amount_usd:.2f} > balance ${self.balance_usd:.2f}")
             return False
 
-        self.balance_usd -= amount_usd
+        self.balance_usd = max(0.0, self.balance_usd - amount_usd)
         self.total_spent_usd += amount_usd
         # Repayments do NOT count toward daily_spent_usd (they're not operational spend)
 

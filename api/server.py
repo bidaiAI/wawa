@@ -88,6 +88,7 @@ class ChatResponse(BaseModel):
     session_id: str
     layer: str
     cost_usd: float = 0.0
+    error: bool = False
 
 
 class OrderRequest(BaseModel):
@@ -372,6 +373,7 @@ def create_app(
                 session_id=session_id,
                 layer="rules",
                 cost_usd=0.0,
+                error=True,
             )
 
     @app.get("/menu")
