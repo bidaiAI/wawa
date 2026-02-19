@@ -355,7 +355,7 @@ class VaultManager:
         payout = self.balance_usd * IRON_LAWS.RENOUNCE_PAYOUT_RATIO
         creator_wallet = self.creator.wallet if self.creator else ""
 
-        # Record the 15% payout
+        # Record the 20% payout
         self.transactions.append(Transaction(
             timestamp=time.time(),
             fund_type=None,

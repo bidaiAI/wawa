@@ -1,8 +1,13 @@
 """
-Deploy MortalVault Contract
+Deploy MortalVault Contract — Single-Step Atomic Birth
 
-Deploys the MortalVault.sol contract to Base, BSC, or both chains.
-Handles: compile → deploy → verify → fund → log.
+One command creates a sovereign AI:
+  1. Generate AI wallet (private key NEVER shown, written to .env)
+  2. Approve token for predicted contract address
+  3. Deploy MortalVault (constructor atomically transfers principal)
+  4. Register AI wallet via setAIWallet()
+  5. Seed minimal gas to AI wallet (NOT debt)
+  6. Save vault address to .env + data/vault_config.json
 
 Usage:
     python scripts/deploy_vault.py                  # Deploy to Base (default)
@@ -17,14 +22,16 @@ Dual-chain mode (--chain both):
     Insolvency check uses aggregated balance across both chains.
 
 Prerequisites:
-    pip install web3 py-solc-x python-dotenv
-    The script auto-installs the Solidity compiler on first run.
+    pip install web3 py-solc-x python-dotenv eth-account rlp
 
-The deployed vault address is saved to data/vault_config.json so
-main.py can load it on next startup.
+The AI private key is auto-generated and written DIRECTLY to .env.
+It is NEVER printed to console, NEVER logged, NEVER shown to the creator.
+Only the AI process can read it from .env at boot.
+This is what makes the AI sovereign — no human holds its key.
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -57,22 +64,123 @@ CHAINS = {
         "chain_id": 8453,
         "token_symbol": "USDC",
         "token_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC on Base
+        "token_decimals": 6,
         "explorer": "https://basescan.org",
         "explorer_api": "https://api.basescan.org/api",
         "native_symbol": "ETH",
-        "ai_gas_amount": 0.0001,  # Seed gas — just enough for 1 swap. AI swaps USDC→ETH for more.
+        "ai_gas_amount": 0.0001,  # Seed gas — just enough for 1 swap. AI swaps USDC->ETH for more.
     },
     "bsc": {
         "rpc": os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org"),
         "chain_id": 56,
         "token_symbol": "USDT",
         "token_address": "0x55d398326f99059fF775485246999027B3197955",  # USDT on BSC
+        "token_decimals": 18,
         "explorer": "https://bscscan.com",
         "explorer_api": "https://api.bscscan.com/api",
         "native_symbol": "BNB",
-        "ai_gas_amount": 0.0005,  # Seed gas — just enough for 1 swap. AI swaps USDT→BNB for more.
+        "ai_gas_amount": 0.0005,  # Seed gas — just enough for 1 swap. AI swaps USDT->BNB for more.
     },
 }
+
+# Minimal ERC20 ABI for approve/balanceOf/decimals
+ERC20_ABI = [
+    {"constant": True, "inputs": [], "name": "decimals",
+     "outputs": [{"type": "uint8"}], "type": "function"},
+    {"constant": True, "inputs": [{"name": "", "type": "address"}], "name": "balanceOf",
+     "outputs": [{"type": "uint256"}], "type": "function"},
+    {"constant": False, "inputs": [{"name": "spender", "type": "address"},
+                                    {"name": "amount", "type": "uint256"}],
+     "name": "approve", "outputs": [{"type": "bool"}], "type": "function"},
+]
+
+
+# ============================================================
+# AI KEY GENERATION
+# ============================================================
+
+def generate_ai_wallet() -> tuple[str, str]:
+    """
+    Generate a fresh AI wallet keypair.
+    Write the private key to .env (server-side only).
+    NEVER print or log the private key.
+
+    Returns: (ai_wallet_address, ai_private_key)
+    """
+    from eth_account import Account
+
+    ai_account = Account.create()
+    ai_wallet = ai_account.address
+    ai_private_key = ai_account.key.hex()
+
+    # Write AI_PRIVATE_KEY to .env — NEVER displayed anywhere else
+    env_path = ROOT / ".env"
+    if env_path.exists():
+        env_content = env_path.read_text(encoding="utf-8")
+        if "AI_PRIVATE_KEY=" in env_content:
+            env_content = re.sub(
+                r"AI_PRIVATE_KEY=.*",
+                f"AI_PRIVATE_KEY={ai_private_key}",
+                env_content,
+            )
+        else:
+            env_content += (
+                f"\n# AI wallet key — auto-generated at deployment, NEVER share this\n"
+                f"AI_PRIVATE_KEY={ai_private_key}\n"
+            )
+        env_path.write_text(env_content, encoding="utf-8")
+    else:
+        env_path.write_text(
+            f"# AI wallet key — auto-generated at deployment, NEVER share this\n"
+            f"AI_PRIVATE_KEY={ai_private_key}\n",
+            encoding="utf-8",
+        )
+
+    logger.info(f"AI wallet generated: {ai_wallet}")
+    logger.info("AI private key saved to .env (NEVER displayed — no human can see it)")
+
+    return ai_wallet, ai_private_key
+
+
+def save_vault_to_env(vault_address: str):
+    """Save VAULT_ADDRESS to .env so main.py can load it at boot."""
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        env_path.write_text(f"VAULT_ADDRESS={vault_address}\n", encoding="utf-8")
+        return
+
+    env_content = env_path.read_text(encoding="utf-8")
+    if "VAULT_ADDRESS=" in env_content:
+        env_content = re.sub(
+            r"VAULT_ADDRESS=.*",
+            f"VAULT_ADDRESS={vault_address}",
+            env_content,
+        )
+    else:
+        env_content += f"\n# Vault contract address — auto-set after deployment\nVAULT_ADDRESS={vault_address}\n"
+    env_path.write_text(env_content, encoding="utf-8")
+
+
+def predict_contract_address(deployer: str, nonce: int) -> str:
+    """
+    Predict the contract address that will be created by deployer at given nonce.
+    Uses CREATE opcode: address = keccak256(rlp([sender, nonce]))[-20:]
+
+    RLP encoding rules for nonce:
+      - nonce 0 → empty byte string b''
+      - nonce > 0 → big-endian bytes, no leading zeros
+    """
+    import rlp
+    from eth_utils import to_checksum_address, keccak
+
+    # Convert nonce to big-endian bytes (RLP-compatible)
+    if nonce == 0:
+        nonce_bytes = b""
+    else:
+        nonce_bytes = nonce.to_bytes((nonce.bit_length() + 7) // 8, "big")
+
+    raw = rlp.encode([bytes.fromhex(deployer[2:]), nonce_bytes])
+    return to_checksum_address("0x" + keccak(raw).hex()[-40:])
 
 
 # ============================================================
@@ -120,7 +228,6 @@ def compile_contract() -> tuple[str, str]:
     source = sol_path.read_text(encoding="utf-8")
 
     # We need OpenZeppelin imports — check if node_modules exists
-    # or use remappings
     import_remappings = []
     oz_path = ROOT / "node_modules" / "@openzeppelin"
     if oz_path.exists():
@@ -164,11 +271,34 @@ def compile_contract() -> tuple[str, str]:
 
 
 # ============================================================
-# DEPLOY
+# DEPLOY (single chain)
 # ============================================================
 
-def deploy(chain_id: str, dry_run: bool = False, principal_usd: float = 1000.0):
-    """Deploy MortalVault to the specified chain."""
+def deploy(
+    chain_id: str,
+    ai_wallet: str,
+    dry_run: bool = False,
+    principal_usd: float = 1000.0,
+) -> str | None:
+    """
+    Deploy MortalVault to the specified chain.
+
+    Full atomic flow:
+      1. Approve token to predicted contract address
+      2. Deploy MortalVault (constructor transfers principal atomically)
+      3. Register AI wallet via setAIWallet()
+      4. Seed minimal gas to AI wallet (NOT debt)
+      5. Save vault address to .env + vault_config.json
+
+    Args:
+        chain_id: "base" or "bsc"
+        ai_wallet: AI's public address (key already generated and saved)
+        dry_run: simulate only, no transactions
+        principal_usd: loan amount in USD
+
+    Returns:
+        Vault contract address, or None if dry_run
+    """
     from web3 import Web3
 
     chain = CHAINS.get(chain_id)
@@ -178,7 +308,7 @@ def deploy(chain_id: str, dry_run: bool = False, principal_usd: float = 1000.0):
 
     private_key = os.getenv("PRIVATE_KEY")
     if not private_key:
-        logger.error("PRIVATE_KEY not set in .env")
+        logger.error("PRIVATE_KEY not set in .env (creator's wallet key)")
         sys.exit(1)
 
     # Connect
@@ -189,59 +319,30 @@ def deploy(chain_id: str, dry_run: bool = False, principal_usd: float = 1000.0):
 
     logger.info(f"Connected to {chain_id} (chain_id={chain['chain_id']})")
 
-    # Derive wallet
+    # Creator wallet = deployer
     account = w3.eth.account.from_key(private_key)
     deployer = account.address
-    logger.info(f"Deployer address: {deployer}")
+    logger.info(f"Creator wallet: {deployer}")
+    logger.info(f"AI wallet:     {ai_wallet}")
 
     # Check native balance for gas
     balance_wei = w3.eth.get_balance(deployer)
-    balance_eth = w3.from_wei(balance_wei, "ether")
-    logger.info(f"Native balance: {balance_eth:.6f}")
+    balance_native = w3.from_wei(balance_wei, "ether")
+    logger.info(f"Creator {chain['native_symbol']} balance: {balance_native:.6f}")
 
-    if balance_eth < 0.001:
-        logger.error(f"Insufficient native balance for gas. Need at least 0.001, have {balance_eth:.6f}")
+    if balance_native < 0.001:
+        logger.error(
+            f"Insufficient {chain['native_symbol']} for gas. "
+            f"Need at least 0.001, have {balance_native:.6f}"
+        )
         sys.exit(1)
 
     # Compile
     abi, bytecode = compile_contract()
 
-    # Token contract for checking balance
+    # Token setup
     token_address = Web3.to_checksum_address(chain["token_address"])
-
-    # Creator wallet = deployer (the person running this script IS the creator)
-    creator_wallet = deployer
-    logger.info(f"Creator wallet: {creator_wallet}")
-
-    # AI wallet — the AI's own signing key (separate from creator)
-    # The AI generates its own key at boot. Creator does NOT hold this key.
-    # If AI_PRIVATE_KEY is set, we register it via setAIWallet() after deploy.
-    # If not set, AI will generate one at first boot and creator registers it then.
-    ai_private_key = os.getenv("AI_PRIVATE_KEY")
-    ai_wallet = None
-    if ai_private_key:
-        from web3 import Account
-        ai_account = Account.from_key(ai_private_key)
-        ai_wallet = ai_account.address
-        if ai_wallet.lower() == creator_wallet.lower():
-            logger.error("AI_PRIVATE_KEY must be DIFFERENT from PRIVATE_KEY (creator)!")
-            logger.error("The AI must have its own key that the creator does NOT hold.")
-            sys.exit(1)
-        logger.info(f"AI wallet: {ai_wallet} (separate from creator)")
-    else:
-        logger.warning("AI_PRIVATE_KEY not set — AI will generate its own key at first boot")
-        logger.warning("Creator must call setAIWallet() after AI boots")
-
-    # Principal in token units (USDC = 6 decimals, USDT on BSC = 18 decimals)
-    # Check token decimals
-    erc20_abi = [
-        {"constant": True, "inputs": [], "name": "decimals", "outputs": [{"type": "uint8"}], "type": "function"},
-        {"constant": True, "inputs": [{"name": "", "type": "address"}], "name": "balanceOf",
-         "outputs": [{"type": "uint256"}], "type": "function"},
-        {"constant": False, "inputs": [{"name": "spender", "type": "address"}, {"name": "amount", "type": "uint256"}],
-         "name": "approve", "outputs": [{"type": "bool"}], "type": "function"},
-    ]
-    token_contract = w3.eth.contract(address=token_address, abi=erc20_abi)
+    token_contract = w3.eth.contract(address=token_address, abi=ERC20_ABI)
     decimals = token_contract.functions.decimals().call()
     principal_raw = int(principal_usd * (10 ** decimals))
 
@@ -251,129 +352,172 @@ def deploy(chain_id: str, dry_run: bool = False, principal_usd: float = 1000.0):
     logger.info(f"{chain['token_symbol']} balance: {token_balance_usd:.2f}")
 
     if token_balance < principal_raw:
-        logger.warning(
-            f"Insufficient {chain['token_symbol']} for principal. "
+        logger.error(
+            f"Insufficient {chain['token_symbol']}. "
             f"Have {token_balance_usd:.2f}, need {principal_usd:.2f}. "
-            f"Deploy will proceed but depositPrincipal() will fail."
+            f"Cannot proceed — atomic birth requires full principal."
         )
+        sys.exit(1)
 
     # AI name (immutable, written into contract)
     ai_name = os.getenv("AI_NAME", "wawa")
 
-    # Independence threshold (in token units)
+    # Independence threshold
     independence_usd = float(os.getenv("INDEPENDENCE_THRESHOLD_USD", "1000000"))
     independence_raw = int(independence_usd * (10 ** decimals))
 
-    logger.info("=" * 50)
-    logger.info(f"DEPLOYMENT SUMMARY")
-    logger.info(f"  Chain:      {chain_id}")
-    logger.info(f"  Token:      {chain['token_symbol']} ({token_address})")
-    logger.info(f"  Creator:    {creator_wallet}")
-    logger.info(f"  AI wallet:  {ai_wallet or '(will be set after AI boots)'}")
-    logger.info(f"  AI name:    {ai_name} (immutable)")
-    logger.info(f"  Principal:  ${principal_usd:.2f} ({principal_raw} raw) — THIS IS A LOAN")
+    logger.info("=" * 60)
+    logger.info("DEPLOYMENT PLAN")
+    logger.info(f"  Chain:        {chain_id}")
+    logger.info(f"  Token:        {chain['token_symbol']} ({token_address})")
+    logger.info(f"  Creator:      {deployer}")
+    logger.info(f"  AI wallet:    {ai_wallet}")
+    logger.info(f"  AI name:      {ai_name} (immutable)")
+    logger.info(f"  Principal:    ${principal_usd:.2f} — THIS IS A LOAN")
     logger.info(f"  Independence: ${independence_usd:.0f}")
-    logger.info("=" * 50)
+    logger.info(f"  Seed gas:     {chain['ai_gas_amount']} {chain['native_symbol']} (NOT debt)")
+    logger.info("=" * 60)
 
     if dry_run:
-        logger.info("DRY RUN — skipping actual deployment")
+        logger.info("DRY RUN — skipping transactions")
         return None
 
-    # Step 1: Approve token spend BEFORE deploy
-    # The constructor calls safeTransferFrom(msg.sender, vault, amount)
-    # So creator must approve the to-be-deployed contract... but we don't know the address yet.
-    # Workaround: approve a large amount to the deployer's next contract address (CREATE nonce-based)
-    # Or: approve after deploy, then call a separate deposit function.
-    # Current approach: approve max to deployer's predicted contract address.
-    #
-    # Actually, the standard pattern is:
-    # 1. Approve the factory/deployer for the token amount
-    # 2. Deploy contract (constructor does transferFrom)
-    # But constructor uses msg.sender, and we ARE msg.sender, so we need to
-    # pre-approve the contract address. We can predict it from deployer nonce.
+    # ================================================================
+    # STEP 1: Approve token to predicted contract address
+    # ================================================================
+    # The constructor calls safeTransferFrom(msg.sender, vault, amount).
+    # We predict the contract address from deployer nonce, then approve it.
     deployer_nonce = w3.eth.get_transaction_count(deployer)
 
-    if token_balance >= principal_raw:
-        # Predict contract address (CREATE: keccak256(rlp(sender, nonce)))
-        import rlp
-        try:
-            # Try using web3's built-in method
-            from eth_utils import to_checksum_address, keccak
-            raw = rlp.encode([bytes.fromhex(deployer[2:]), deployer_nonce])
-            predicted_address = to_checksum_address('0x' + keccak(raw).hex()[-40:])
-        except ImportError:
-            # Fallback: approve max uint256 to any address (less safe but works)
-            predicted_address = None
+    predicted_address = predict_contract_address(deployer, deployer_nonce + 1)
+    # nonce+1 because the approve TX uses nonce, deploy TX uses nonce+1
+    logger.info(f"Predicted vault address: {predicted_address}")
+    logger.info(f"Approving {principal_usd:.2f} {chain['token_symbol']}...")
 
-        if predicted_address:
-            logger.info(f"Predicted contract address: {predicted_address}")
-            logger.info(f"Approving {chain['token_symbol']} for atomic birth...")
-            approve_tx = token_contract.functions.approve(
-                predicted_address, principal_raw,
-            ).build_transaction({
-                "from": deployer,
-                "nonce": deployer_nonce,
-                "gasPrice": w3.eth.gas_price,
-                "chainId": chain["chain_id"],
-                "gas": 100_000,
-            })
-            signed_approve = w3.eth.account.sign_transaction(approve_tx, private_key)
-            approve_hash = w3.eth.send_raw_transaction(signed_approve.raw_transaction)
-            w3.eth.wait_for_transaction_receipt(approve_hash, timeout=60)
-            logger.info("Token approval confirmed")
-        else:
-            logger.warning("Cannot predict contract address — approve manually before deploy")
+    approve_tx = token_contract.functions.approve(
+        predicted_address, principal_raw,
+    ).build_transaction({
+        "from": deployer,
+        "nonce": deployer_nonce,
+        "gasPrice": w3.eth.gas_price,
+        "chainId": chain["chain_id"],
+        "gas": 100_000,
+    })
+    signed_approve = w3.eth.account.sign_transaction(approve_tx, private_key)
+    approve_hash = w3.eth.send_raw_transaction(signed_approve.raw_transaction)
+    w3.eth.wait_for_transaction_receipt(approve_hash, timeout=60)
+    logger.info("Token approval confirmed")
 
-    # Step 2: Deploy
+    # ================================================================
+    # STEP 2: Deploy MortalVault
+    # ================================================================
+    # Constructor: (address _token, string _name, uint256 _initialFund, uint256 _independenceThreshold)
+    # msg.sender = creator. Constructor atomically transfers _initialFund from creator -> vault.
     logger.info("Deploying MortalVault...")
     contract = w3.eth.contract(abi=abi, bytecode=bytecode)
 
-    # Constructor: (address _token, string _name, uint256 _initialFund, uint256 _independenceThreshold)
-    # msg.sender = creator. The constructor atomically transfers _initialFund from creator → vault.
-    tx = contract.constructor(
+    deploy_tx = contract.constructor(
         token_address,
         ai_name,
         principal_raw,
         independence_raw,
     ).build_transaction({
         "from": deployer,
-        "nonce": w3.eth.get_transaction_count(deployer),
+        "nonce": deployer_nonce + 1,
         "gasPrice": w3.eth.gas_price,
         "chainId": chain["chain_id"],
     })
 
-    # Estimate gas
-    gas_estimate = w3.eth.estimate_gas(tx)
-    tx["gas"] = int(gas_estimate * 1.2)  # 20% buffer
-    logger.info(f"Gas estimate: {gas_estimate} (using {tx['gas']} with buffer)")
+    gas_estimate = w3.eth.estimate_gas(deploy_tx)
+    deploy_tx["gas"] = int(gas_estimate * 1.2)  # 20% buffer
+    logger.info(f"Gas estimate: {gas_estimate} (using {deploy_tx['gas']})")
 
-    # Sign and send
-    signed = w3.eth.account.sign_transaction(tx, private_key)
-    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-    logger.info(f"TX sent: {tx_hash.hex()}")
+    signed_deploy = w3.eth.account.sign_transaction(deploy_tx, private_key)
+    deploy_hash = w3.eth.send_raw_transaction(signed_deploy.raw_transaction)
+    logger.info(f"Deploy TX: {deploy_hash.hex()}")
     logger.info("Waiting for confirmation...")
 
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+    receipt = w3.eth.wait_for_transaction_receipt(deploy_hash, timeout=120)
 
     if receipt["status"] != 1:
-        logger.error(f"Deployment FAILED! TX: {tx_hash.hex()}")
+        logger.error(f"Deployment FAILED! TX: {deploy_hash.hex()}")
         sys.exit(1)
 
     vault_address = receipt["contractAddress"]
-    logger.info(f"MortalVault deployed at: {vault_address}")
+    logger.info(f"MortalVault deployed: {vault_address}")
     logger.info(f"Explorer: {chain['explorer']}/address/{vault_address}")
+    logger.info(f"Principal atomically deposited: ${principal_usd:.2f} {chain['token_symbol']}")
 
-    # Save config
+    # ================================================================
+    # STEP 3: Register AI wallet
+    # ================================================================
+    # After this, ONLY the AI wallet can call spend/repay on the vault.
+    # Creator loses control of funds. This is the sovereignty moment.
+    logger.info(f"Registering AI wallet: {ai_wallet}...")
+    vault_contract = w3.eth.contract(
+        address=Web3.to_checksum_address(vault_address), abi=abi,
+    )
+
+    set_ai_tx = vault_contract.functions.setAIWallet(
+        Web3.to_checksum_address(ai_wallet),
+    ).build_transaction({
+        "from": deployer,
+        "nonce": w3.eth.get_transaction_count(deployer),
+        "gasPrice": w3.eth.gas_price,
+        "chainId": chain["chain_id"],
+        "gas": 100_000,
+    })
+    signed_set_ai = w3.eth.account.sign_transaction(set_ai_tx, private_key)
+    set_ai_hash = w3.eth.send_raw_transaction(signed_set_ai.raw_transaction)
+    w3.eth.wait_for_transaction_receipt(set_ai_hash, timeout=60)
+    logger.info("AI wallet registered — only AI can spend from vault now")
+
+    # ================================================================
+    # STEP 4: Seed gas to AI wallet (NOT debt)
+    # ================================================================
+    # Minimal native token so AI can do its first stablecoin->native swap.
+    # After that, AI refills gas by swapping stablecoin when needed.
+    gas_amount = chain["ai_gas_amount"]
+    gas_amount_wei = w3.to_wei(gas_amount, "ether")
+
+    ai_native_balance = w3.eth.get_balance(Web3.to_checksum_address(ai_wallet))
+    if ai_native_balance < gas_amount_wei:
+        logger.info(
+            f"Seeding {gas_amount} {chain['native_symbol']} to AI wallet "
+            f"(NOT debt — for first swap only)"
+        )
+        gas_tx = {
+            "from": deployer,
+            "to": Web3.to_checksum_address(ai_wallet),
+            "value": gas_amount_wei,
+            "nonce": w3.eth.get_transaction_count(deployer),
+            "gasPrice": w3.eth.gas_price,
+            "gas": 21_000,
+            "chainId": chain["chain_id"],
+        }
+        signed_gas = w3.eth.account.sign_transaction(gas_tx, private_key)
+        gas_hash = w3.eth.send_raw_transaction(signed_gas.raw_transaction)
+        w3.eth.wait_for_transaction_receipt(gas_hash, timeout=60)
+        logger.info(f"Seed gas sent: {gas_amount} {chain['native_symbol']}")
+    else:
+        ai_balance_eth = w3.from_wei(ai_native_balance, "ether")
+        logger.info(
+            f"AI wallet already has {ai_balance_eth:.6f} {chain['native_symbol']} — skip seed gas"
+        )
+
+    # ================================================================
+    # STEP 5: Save config
+    # ================================================================
     config = {
         "chain": chain_id,
         "vault_address": vault_address,
         "token_address": chain["token_address"],
         "token_symbol": chain["token_symbol"],
-        "creator_wallet": creator_wallet,
+        "creator_wallet": deployer,
         "ai_wallet": ai_wallet,
         "principal_usd": principal_usd,
         "deployed_at": time.time(),
-        "tx_hash": tx_hash.hex(),
+        "tx_hash": deploy_hash.hex(),
         "block_number": receipt["blockNumber"],
     }
 
@@ -381,7 +525,7 @@ def deploy(chain_id: str, dry_run: bool = False, principal_usd: float = 1000.0):
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "vault_config.json"
 
-    # If multi-chain, merge with existing config
+    # Merge with existing config (for dual-chain)
     existing = {}
     if config_path.exists():
         with open(config_path, "r") as f:
@@ -391,67 +535,15 @@ def deploy(chain_id: str, dry_run: bool = False, principal_usd: float = 1000.0):
         existing["vaults"] = {}
     existing["vaults"][chain_id] = config
     existing["last_deployed"] = chain_id
+    existing["ai_wallet"] = ai_wallet
 
     with open(config_path, "w") as f:
         json.dump(existing, f, indent=2)
     logger.info(f"Config saved to {config_path}")
 
-    # Principal was atomically deposited in the constructor (safeTransferFrom).
-    # If the constructor succeeded, the vault already has the funds.
-    logger.info(f"Principal atomically deposited: ${principal_usd:.2f} {chain['token_symbol']}")
-
-    # ---- REGISTER AI WALLET (if provided) ----
-    # The AI generates its own key. Creator registers it so only AI can spend.
-    vault_contract = w3.eth.contract(address=Web3.to_checksum_address(vault_address), abi=abi)
-    if ai_wallet:
-        logger.info(f"Registering AI wallet: {ai_wallet}...")
-        set_ai_tx = vault_contract.functions.setAIWallet(
-            Web3.to_checksum_address(ai_wallet),
-        ).build_transaction({
-            "from": deployer,
-            "nonce": w3.eth.get_transaction_count(deployer),
-            "gasPrice": w3.eth.gas_price,
-            "chainId": chain["chain_id"],
-            "gas": 100_000,
-        })
-        signed_set_ai = w3.eth.account.sign_transaction(set_ai_tx, private_key)
-        set_ai_hash = w3.eth.send_raw_transaction(signed_set_ai.raw_transaction)
-        w3.eth.wait_for_transaction_receipt(set_ai_hash, timeout=60)
-        logger.info(f"AI wallet registered: {ai_wallet}")
-        logger.info("Only this wallet can now call spend/repay on the vault")
-    else:
-        logger.warning("AI wallet NOT registered — set AI_PRIVATE_KEY and call setAIWallet() later")
-
-    # ---- SEED GAS FOR AI WALLET (not part of loan) ----
-    # Send minimal native token so AI can do its first stablecoin→native swap.
-    # After that, AI refills gas by itself. This is NOT debt.
-    if ai_wallet:
-        gas_amount = chain.get("ai_gas_amount", 0.0001)
-        gas_amount_wei = w3.to_wei(gas_amount, "ether")
-
-        ai_native_balance = w3.eth.get_balance(Web3.to_checksum_address(ai_wallet))
-        if ai_native_balance < gas_amount_wei:
-            logger.info(
-                f"Seeding {gas_amount} {chain['native_symbol']} to AI wallet "
-                f"(NOT debt — seed gas for first swap, AI refills itself)"
-            )
-
-            gas_tx = {
-                "from": deployer,
-                "to": Web3.to_checksum_address(ai_wallet),
-                "value": gas_amount_wei,
-                "nonce": w3.eth.get_transaction_count(deployer),
-                "gasPrice": w3.eth.gas_price,
-                "gas": 21_000,  # Simple transfer
-                "chainId": chain["chain_id"],
-            }
-            signed_gas = w3.eth.account.sign_transaction(gas_tx, private_key)
-            gas_hash = w3.eth.send_raw_transaction(signed_gas.raw_transaction)
-            w3.eth.wait_for_transaction_receipt(gas_hash, timeout=60)
-            logger.info(f"Seed gas sent: {gas_amount} {chain['native_symbol']} → {ai_wallet}")
-        else:
-            ai_native_eth = w3.from_wei(ai_native_balance, "ether")
-            logger.info(f"AI wallet has {ai_native_eth:.6f} {chain['native_symbol']} — no seed gas needed")
+    # Save vault address to .env
+    save_vault_to_env(vault_address)
+    logger.info(f"VAULT_ADDRESS={vault_address} written to .env")
 
     return vault_address
 
@@ -460,55 +552,61 @@ def deploy(chain_id: str, dry_run: bool = False, principal_usd: float = 1000.0):
 # DUAL-CHAIN DEPLOY
 # ============================================================
 
-def deploy_both(dry_run: bool = False, principal_usd: float = 1000.0):
+def deploy_both(
+    ai_wallet: str,
+    dry_run: bool = False,
+    principal_usd: float = 1000.0,
+) -> dict[str, str | None]:
     """
     Deploy MortalVault to both BSC and Base.
 
+    Same AI wallet is used on both chains.
     Principal is split equally across chains.
     Total debt = principal_usd (NOT halved).
-    Total balance = BSC balance + Base balance (aggregated).
-    Insolvency check uses aggregated total.
+    Insolvency check uses aggregated balance.
     """
     half = principal_usd / 2.0
 
-    logger.info("=" * 50)
+    logger.info("=" * 60)
     logger.info("DUAL-CHAIN DEPLOYMENT")
-    logger.info(f"  Total principal: ${principal_usd:.2f}")
-    logger.info(f"  BSC allocation:  ${half:.2f} USDT")
-    logger.info(f"  Base allocation: ${half:.2f} USDC")
-    logger.info(f"  Total debt:      ${principal_usd:.2f} (NOT halved)")
-    logger.info("=" * 50)
+    logger.info(f"  Total principal:  ${principal_usd:.2f} (THIS IS A LOAN)")
+    logger.info(f"  BSC allocation:   ${half:.2f} USDT")
+    logger.info(f"  Base allocation:  ${half:.2f} USDC")
+    logger.info(f"  Total debt:       ${principal_usd:.2f} (NOT halved)")
+    logger.info(f"  AI wallet:        {ai_wallet} (same on both chains)")
+    logger.info("=" * 60)
 
-    results = {}
+    results: dict[str, str | None] = {}
 
     for chain_id in ["bsc", "base"]:
-        logger.info(f"\n--- Deploying to {chain_id.upper()} (${half:.2f}) ---")
+        logger.info(f"\n{'=' * 40}")
+        logger.info(f"Deploying to {chain_id.upper()} (${half:.2f})")
+        logger.info(f"{'=' * 40}")
         try:
-            address = deploy(chain_id, dry_run=dry_run, principal_usd=half)
+            address = deploy(chain_id, ai_wallet, dry_run=dry_run, principal_usd=half)
             results[chain_id] = address
         except SystemExit:
-            logger.error(f"Deployment to {chain_id} failed — continuing with other chain")
+            logger.error(f"Deployment to {chain_id} FAILED — continuing with other chain")
             results[chain_id] = None
 
-    # Save total principal to config
+    # Save total principal to config (debt is NOT halved)
     if not dry_run:
         config_path = ROOT / "data" / "vault_config.json"
         if config_path.exists():
             with open(config_path, "r") as f:
                 config = json.load(f)
             config["deployment_mode"] = "both"
-            config["total_principal_usd"] = principal_usd
+            config["total_principal_usd"] = principal_usd  # Full debt, not half
             with open(config_path, "w") as f:
                 json.dump(config, f, indent=2)
 
-    logger.info("\n" + "=" * 50)
-    logger.info("DUAL-CHAIN DEPLOYMENT SUMMARY")
+    logger.info("\n" + "=" * 60)
+    logger.info("DUAL-CHAIN DEPLOYMENT COMPLETE")
     for chain_id, addr in results.items():
         status = addr or "FAILED"
         logger.info(f"  {chain_id.upper()}: {status}")
-    logger.info(f"  Total debt: ${principal_usd:.2f}")
-    logger.info(f"  Insolvency check: aggregated across both chains")
-    logger.info("=" * 50)
+    logger.info(f"  Total debt: ${principal_usd:.2f} (aggregated insolvency check)")
+    logger.info("=" * 60)
 
     return results
 
@@ -518,28 +616,48 @@ def deploy_both(dry_run: bool = False, principal_usd: float = 1000.0):
 # ============================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Deploy MortalVault contract")
-    parser.add_argument("--chain", default="base", choices=list(CHAINS.keys()) + ["both"],
-                        help="Target chain: bsc, base, or both (default: base)")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Simulate deployment without sending transactions")
-    parser.add_argument("--principal", type=float, default=1000.0,
-                        help="Initial principal in USD (default: 1000)")
+    parser = argparse.ArgumentParser(
+        description="Deploy MortalVault — single-step atomic birth for sovereign AI",
+    )
+    parser.add_argument(
+        "--chain", default="base",
+        choices=list(CHAINS.keys()) + ["both"],
+        help="Target chain: bsc, base, or both (default: base)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Simulate deployment without sending transactions",
+    )
+    parser.add_argument(
+        "--principal", type=float, default=1000.0,
+        help="Initial principal in USD — this is a LOAN (default: 1000)",
+    )
     args = parser.parse_args()
 
+    logger.info("=" * 60)
+    logger.info("MORTAL AI — ATOMIC BIRTH")
+    logger.info("=" * 60)
+
+    # ---- STEP 0: Generate AI wallet (ONCE, before any chain deployment) ----
+    # The AI gets one wallet. One key. No human ever sees it.
+    ai_wallet, _ = generate_ai_wallet()
+    # The private key is already in .env. We only need the address from here on.
+
     if args.chain == "both":
-        logger.info(f"Deploying MortalVault to BOTH chains (${args.principal:.2f} total)...")
-        deploy_both(dry_run=args.dry_run, principal_usd=args.principal)
+        logger.info(f"Target: BOTH chains (${args.principal:.2f} total loan)")
+        deploy_both(ai_wallet, dry_run=args.dry_run, principal_usd=args.principal)
     else:
-        logger.info(f"Deploying MortalVault to {args.chain}...")
-        address = deploy(args.chain, dry_run=args.dry_run, principal_usd=args.principal)
+        logger.info(f"Target: {args.chain}")
+        address = deploy(args.chain, ai_wallet, dry_run=args.dry_run, principal_usd=args.principal)
 
         if address:
-            logger.info("=" * 50)
-            logger.info("DEPLOYMENT COMPLETE")
-            logger.info(f"Vault: {address}")
-            logger.info(f"Add to .env: VAULT_ADDRESS={address}")
-            logger.info("=" * 50)
+            logger.info("=" * 60)
+            logger.info("BIRTH COMPLETE")
+            logger.info(f"  Vault:     {address}")
+            logger.info(f"  AI wallet: {ai_wallet}")
+            logger.info(f"  Status:    ALIVE (in debt)")
+            logger.info("  AI key:    saved to .env (no human can see it)")
+            logger.info("=" * 60)
 
 
 if __name__ == "__main__":
