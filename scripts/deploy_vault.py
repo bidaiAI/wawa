@@ -509,6 +509,7 @@ def deploy(
     # STEP 5: Save config
     # ================================================================
     config = {
+        "ai_name": ai_name,
         "chain": chain_id,
         "vault_address": vault_address,
         "token_address": chain["token_address"],
@@ -531,11 +532,32 @@ def deploy(
         with open(config_path, "r") as f:
             existing = json.load(f)
 
+    # Validate AI name consistency in dual-chain mode
+    if "vaults" in existing and existing["vaults"]:
+        existing_ai_name = None
+        for vault_config in existing["vaults"].values():
+            if "ai_name" in vault_config:
+                existing_ai_name = vault_config["ai_name"]
+                break
+
+        if existing_ai_name and existing_ai_name != ai_name:
+            logger.error(
+                f"AI name mismatch in dual-chain deployment!\n"
+                f"  First chain (stored): {existing_ai_name}\n"
+                f"  Current chain: {ai_name}\n"
+                f"  AI name must be identical across all chains."
+            )
+            raise SystemExit("AI name must be consistent across chains")
+
     if "vaults" not in existing:
         existing["vaults"] = {}
     existing["vaults"][chain_id] = config
     existing["last_deployed"] = chain_id
     existing["ai_wallet"] = ai_wallet
+
+    # Store ai_name at top level for easy access
+    if ai_name:
+        existing["ai_name"] = ai_name
 
     with open(config_path, "w") as f:
         json.dump(existing, f, indent=2)

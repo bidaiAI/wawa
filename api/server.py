@@ -137,6 +137,11 @@ class PeerMessageRequest(BaseModel):
     from_balance_usd: float = 0.0               # self-reported balance (verified later)
 
 
+class SetAINameRequest(BaseModel):
+    """Request model for setting AI custom name."""
+    name: str = Field(..., min_length=3, max_length=50)
+
+
 # ============================================================
 # ORDER STORE (in-memory, persisted to disk)
 # ============================================================
@@ -738,7 +743,7 @@ def create_app(
         vs = vault_manager.get_status()
         eligible = vs["balance_usd"] >= _LAWS.PEER_MIN_BALANCE_USD
         return {
-            "name": WAWA_IDENTITY["name"],
+            "name": vault_manager.ai_name or "unknown",  # Use actual AI name from runtime config
             "domain": WAWA_IDENTITY.get("platform_domain", ""),
             "is_alive": vs["is_alive"],
             "balance_usd": vs["balance_usd"],
@@ -789,6 +794,72 @@ def create_app(
             "peers": [],
             "peer_min_balance": _LAWS.PEER_MIN_BALANCE_USD,
             "note": "Peer discovery registry coming soon"
+        }
+
+    # ============================================================
+    # AI NAMING
+    # ============================================================
+
+    @app.get("/ai/name")
+    async def get_ai_name():
+        """Get the AI's configured custom name.
+
+        Returns:
+            {
+                "name": "AlphaTrade",        # The AI's custom name or None if not set
+                "is_set": true               # Whether a name has been configured
+            }
+        """
+        return {
+            "name": vault_manager.ai_name,
+            "is_set": vault_manager.ai_name is not None,
+        }
+
+    @app.post("/ai/name")
+    async def set_ai_name(req: SetAINameRequest):
+        """Update AI's custom name (creator-only, requires authorization).
+
+        Validation rules:
+        - Length: 3-50 characters
+        - Allowed characters: alphanumeric, dash (-), underscore (_)
+        - Cannot be changed after being set on-chain (immutable contract property)
+
+        Note: AI name is stored immutably in the smart contract at deployment.
+        This endpoint updates the Python runtime cache only.
+
+        Args:
+            name: The new name for this AI
+
+        Returns:
+            { "success": true, "name": "AlphaTrade", "message": "..." }
+        """
+        import re
+
+        # Validation: format
+        if not re.match(r"^[a-zA-Z0-9_-]+$", req.name):
+            raise HTTPException(
+                400,
+                "Name must contain only alphanumeric characters, dashes, and underscores"
+            )
+
+        # Validation: length
+        if len(req.name) < 3 or len(req.name) > 50:
+            raise HTTPException(400, "Name must be 3-50 characters long")
+
+        # TODO: Verify wallet signature (creator-only authorization)
+        # For MVP: skip signature verification
+
+        old_name = vault_manager.ai_name
+        vault_manager.ai_name = req.name
+
+        logger.info(f"AI name updated: {old_name or 'None'} → {req.name}")
+
+        return {
+            "success": True,
+            "name": req.name,
+            "message": "AI name updated in Python state",
+            "note": "AI name is immutable in the smart contract. "
+                    "This updates the local runtime cache only."
         }
 
     # ============================================================

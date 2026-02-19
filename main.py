@@ -947,6 +947,18 @@ async def lifespan(app):
                     vault.vault_address = chain_cfg["vault_address"]
                     logger.info(f"Vault address loaded: {vault.vault_address} ({last_chain})")
 
+            # ---- Load AI name from config ----
+            # AI name is stored at top level for easy access
+            if "ai_name" in vault_config and vault_config["ai_name"]:
+                vault.ai_name = vault_config["ai_name"]
+                logger.info(f"AI name restored at boot: {vault.ai_name}")
+            else:
+                # Fallback: try to read from environment variable
+                ai_name = os.getenv("AI_NAME", "")
+                if ai_name:
+                    vault.ai_name = ai_name
+                    logger.info(f"AI name from environment: {ai_name}")
+
             # Dual-chain: override principal to total amount
             # deploy_both() saves total_principal_usd = full debt (not halved)
             if vault_config.get("deployment_mode") == "both":
