@@ -163,6 +163,8 @@ class ChainTxResult:
     chain: str = ""
     error: str = ""
     gas_used: int = 0
+    gas_price_wei: int = 0       # effectiveGasPrice from receipt
+    gas_cost_native: float = 0.0  # gas_used * gas_price in native token (ETH/BNB)
 
 
 # ============================================================
@@ -301,10 +303,11 @@ class ChainExecutor:
 
         import time as _time
         total = 0.0
+        chains_synced = 0
 
         for chain_id, chain in self._chains.items():
             try:
-                balance_raw = await asyncio.get_event_loop().run_in_executor(
+                balance_raw = await asyncio.get_running_loop().run_in_executor(
                     None,
                     chain["token_contract"].functions.balanceOf(chain["vault_address"]).call,
                 )
@@ -312,14 +315,18 @@ class ChainExecutor:
                 balance_usd = balance_raw / (10 ** decimals)
                 vault_manager.balance_by_chain[chain_id] = round(balance_usd, 2)
                 total += balance_usd
+                chains_synced += 1
             except Exception as e:
                 logger.warning(f"Balance sync failed for {chain_id}: {e}")
                 self._last_error = f"sync_{chain_id}: {e}"
 
-        if total > 0:
+        # Update balance if at least one chain synced successfully.
+        # IMPORTANT: zero balance IS valid (must trigger death checks).
+        # Only skip update if ALL chains failed (to avoid setting 0 from RPC errors).
+        if chains_synced > 0:
             vault_manager.balance_usd = round(total, 2)
             self._last_sync = _time.time()
-            logger.debug(f"Balance synced: ${total:.2f} across {len(self._chains)} chains")
+            logger.debug(f"Balance synced: ${total:.2f} across {chains_synced} chains")
 
     # ============================================================
     # WRITE TRANSACTIONS
@@ -398,21 +405,26 @@ class ChainExecutor:
 
                 return receipt, tx_hash.hex()
 
-            receipt, tx_hash_hex = await asyncio.get_event_loop().run_in_executor(
+            receipt, tx_hash_hex = await asyncio.get_running_loop().run_in_executor(
                 None, _execute
             )
 
             if receipt["status"] == 1:
                 self._tx_count += 1
                 gas_used = receipt.get("gasUsed", 0)
+                gas_price_wei = receipt.get("effectiveGasPrice", 0)
+                gas_cost_native = (gas_used * gas_price_wei) / 1e18 if gas_price_wei else 0.0
                 logger.info(
-                    f"TX SUCCESS [{chain_id}]: {tx_hash_hex[:16]}... | gas={gas_used}"
+                    f"TX SUCCESS [{chain_id}]: {tx_hash_hex[:16]}... | "
+                    f"gas={gas_used} | cost={gas_cost_native:.8f} native"
                 )
                 return ChainTxResult(
                     success=True,
                     tx_hash=tx_hash_hex,
                     chain=chain_id,
                     gas_used=gas_used,
+                    gas_price_wei=gas_price_wei,
+                    gas_cost_native=gas_cost_native,
                 )
             else:
                 error = f"TX reverted: {tx_hash_hex}"
@@ -519,7 +531,7 @@ class ChainExecutor:
             def _call():
                 return chain["vault_contract"].functions.checkInsolvency().call()
 
-            result = await asyncio.get_event_loop().run_in_executor(None, _call)
+            result = await asyncio.get_running_loop().run_in_executor(None, _call)
             is_insolvent, outstanding_raw, grace_expired = result
             decimals = chain["token_decimals"]
 

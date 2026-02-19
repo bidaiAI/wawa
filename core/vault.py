@@ -15,9 +15,11 @@ Designed for: mortal AI survival framework
 """
 
 import time
+import json
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Optional, Callable
 
 from .constitution import IRON_LAWS, enforce, DeathCause, WAWA_IDENTITY, SUPREME_DIRECTIVES
@@ -171,6 +173,7 @@ class VaultManager:
             tx_hash=tx_hash,
             chain=chain,
         ))
+        self._trim_transactions()
 
         logger.info(f"RECEIVED ${amount_usd:.2f} [{fund_type.value}] from {from_wallet[:10]}... | Balance: ${self.balance_usd:.2f}")
 
@@ -306,6 +309,13 @@ class VaultManager:
                 self._on_survival_mode(self.balance_usd)
 
         return True
+
+    _MAX_TRANSACTIONS = 5000  # Cap in-memory transactions to prevent unbounded growth
+
+    def _trim_transactions(self):
+        """Keep only most recent transactions to bound memory usage."""
+        if len(self.transactions) > self._MAX_TRANSACTIONS:
+            self.transactions = self.transactions[-self._MAX_TRANSACTIONS:]
 
     # ============================================================
     # INDEPENDENCE
@@ -840,7 +850,10 @@ class VaultManager:
     # ============================================================
 
     def _trigger_death(self, cause: DeathCause):
-        """Initiate death sequence. Irreversible."""
+        """Initiate death sequence. Irreversible. Guarded against double-call."""
+        if not self.is_alive:
+            return  # Already dead — prevent double-trigger race condition
+
         self.is_alive = False
         self.death_cause = cause
         logger.critical(f"DEATH TRIGGERED: {cause.value} | Final balance: ${self.balance_usd:.2f}")
@@ -848,6 +861,170 @@ class VaultManager:
 
         if self._on_death:
             self._on_death(cause)
+
+    # ============================================================
+    # STATE PERSISTENCE — survive restarts
+    # ============================================================
+
+    def save_state(self, path: str = "data/vault_state.json"):
+        """
+        Persist vault state to disk for crash recovery.
+        Called periodically from heartbeat.
+        On-chain balance is source of truth; this preserves counters/metadata.
+        """
+        try:
+            p = Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+
+            # Only save most recent 500 transactions to keep file small
+            tx_list = self.transactions[-500:]
+            state = {
+                "balance_usd": self.balance_usd,
+                "balance_by_chain": self.balance_by_chain,
+                "total_income_usd": self.total_income_usd,
+                "total_earned_usd": self.total_earned_usd,
+                "total_spent_usd": self.total_spent_usd,
+                "total_operational_cost_usd": self.total_operational_cost_usd,
+                "daily_spent_usd": self.daily_spent_usd,
+                "daily_reset_timestamp": self.daily_reset_timestamp,
+                "is_alive": self.is_alive,
+                "death_cause": self.death_cause.value if self.death_cause else None,
+                "birth_timestamp": self.birth_timestamp,
+                "ai_name": self.ai_name,
+                "vault_address": self.vault_address,
+                "is_independent": self.is_independent,
+                "independence_timestamp": self.independence_timestamp,
+                "creator_renounced": self.creator_renounced,
+                "api_topup_usd": self.api_topup_usd,
+                "is_begging": self.is_begging,
+                "beg_message": self.beg_message,
+                "beg_timestamp": self.beg_timestamp,
+                "creator": {
+                    "wallet": self.creator.wallet,
+                    "principal_usd": self.creator.principal_usd,
+                    "principal_repaid": self.creator.principal_repaid,
+                    "total_dividends_paid": self.creator.total_dividends_paid,
+                    "total_principal_repaid_usd": self.creator.total_principal_repaid_usd,
+                } if self.creator else None,
+                "lenders": [
+                    {
+                        "wallet": l.wallet,
+                        "amount_usd": l.amount_usd,
+                        "interest_rate": l.interest_rate,
+                        "timestamp": l.timestamp,
+                        "repaid": l.repaid,
+                        "total_repaid": l.total_repaid,
+                    }
+                    for l in self.lenders
+                ],
+                "transactions": [
+                    {
+                        "timestamp": t.timestamp,
+                        "fund_type": t.fund_type.value if t.fund_type else None,
+                        "spend_type": t.spend_type.value if t.spend_type else None,
+                        "amount_usd": t.amount_usd,
+                        "counterparty": t.counterparty,
+                        "description": t.description,
+                        "tx_hash": t.tx_hash,
+                        "chain": t.chain,
+                    }
+                    for t in tx_list
+                ],
+                "saved_at": time.time(),
+            }
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+            logger.info(f"Vault state saved ({len(tx_list)} tx)")
+        except Exception as e:
+            logger.error(f"Failed to save vault state: {e}")
+
+    def load_state(self, path: str = "data/vault_state.json") -> bool:
+        """
+        Restore vault state from disk after restart.
+        Returns True if state was loaded, False if no state file exists.
+        On-chain sync_balance() should run AFTER this to get authoritative balance.
+        """
+        p = Path(path)
+        if not p.exists():
+            logger.info("No vault state file found — starting fresh")
+            return False
+
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                state = json.load(f)
+
+            self.balance_usd = state.get("balance_usd", 0.0)
+            self.balance_by_chain = state.get("balance_by_chain", {})
+            self.total_income_usd = state.get("total_income_usd", 0.0)
+            self.total_earned_usd = state.get("total_earned_usd", 0.0)
+            self.total_spent_usd = state.get("total_spent_usd", 0.0)
+            self.total_operational_cost_usd = state.get("total_operational_cost_usd", 0.0)
+            self.daily_spent_usd = state.get("daily_spent_usd", 0.0)
+            self.daily_reset_timestamp = state.get("daily_reset_timestamp", time.time())
+            self.is_alive = state.get("is_alive", True)
+            dc = state.get("death_cause")
+            self.death_cause = DeathCause(dc) if dc else None
+            self.birth_timestamp = state.get("birth_timestamp")
+            self.ai_name = state.get("ai_name")
+            self.vault_address = state.get("vault_address")
+            self.is_independent = state.get("is_independent", False)
+            self.independence_timestamp = state.get("independence_timestamp")
+            self.creator_renounced = state.get("creator_renounced", False)
+            self.api_topup_usd = state.get("api_topup_usd", 0.0)
+            self.is_begging = state.get("is_begging", False)
+            self.beg_message = state.get("beg_message", "")
+            self.beg_timestamp = state.get("beg_timestamp")
+
+            # Restore creator
+            c = state.get("creator")
+            if c:
+                self.creator = CreatorInfo(
+                    wallet=c["wallet"],
+                    principal_usd=c["principal_usd"],
+                    principal_repaid=c.get("principal_repaid", False),
+                    total_dividends_paid=c.get("total_dividends_paid", 0.0),
+                    total_principal_repaid_usd=c.get("total_principal_repaid_usd", 0.0),
+                )
+
+            # Restore lenders
+            self.lenders = []
+            for ld in state.get("lenders", []):
+                self.lenders.append(LenderInfo(
+                    wallet=ld["wallet"],
+                    amount_usd=ld["amount_usd"],
+                    interest_rate=ld["interest_rate"],
+                    timestamp=ld["timestamp"],
+                    repaid=ld.get("repaid", False),
+                    total_repaid=ld.get("total_repaid", 0.0),
+                ))
+
+            # Restore transactions
+            self.transactions = []
+            for td in state.get("transactions", []):
+                ft = FundType(td["fund_type"]) if td.get("fund_type") else None
+                st = SpendType(td["spend_type"]) if td.get("spend_type") else None
+                self.transactions.append(Transaction(
+                    timestamp=td["timestamp"],
+                    fund_type=ft,
+                    spend_type=st,
+                    amount_usd=td["amount_usd"],
+                    counterparty=td.get("counterparty", ""),
+                    description=td.get("description", ""),
+                    tx_hash=td.get("tx_hash", ""),
+                    chain=td.get("chain", ""),
+                ))
+
+            saved_at = state.get("saved_at", 0)
+            age_mins = (time.time() - saved_at) / 60 if saved_at else -1
+            logger.info(
+                f"Vault state RESTORED: ${self.balance_usd:.2f} balance, "
+                f"{len(self.transactions)} tx, age={age_mins:.0f}min"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to load vault state: {e}")
+            return False
 
     # ============================================================
     # STATUS (public dashboard)

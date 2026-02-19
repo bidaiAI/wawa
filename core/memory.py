@@ -292,6 +292,65 @@ class HierarchicalMemory:
             "compression_count": self.compression_count,
         }
 
+    def load_from_disk(self) -> bool:
+        """Load memory from disk (crash recovery). Returns True if loaded."""
+        path = self.storage_dir / "memory.json"
+        if not path.exists():
+            logger.info("No memory file found — starting fresh")
+            return False
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            self.raw = [
+                MemoryEntry(
+                    timestamp=e["t"], content=e["c"],
+                    source=e.get("s", ""), importance=e.get("i", 0.5),
+                    tokens=int(len(e["c"].split()) * 1.3),
+                )
+                for e in data.get("raw", [])
+            ]
+            self.hourly = [
+                CompressedMemory(
+                    period_start=m["ps"], period_end=m["pe"],
+                    summary=m["s"], layer=1, entry_count=m.get("n", 0),
+                    original_tokens=0,
+                    compressed_tokens=int(len(m["s"].split()) * 1.3),
+                )
+                for m in data.get("hourly", [])
+            ]
+            self.daily = [
+                CompressedMemory(
+                    period_start=m["ps"], period_end=m["pe"],
+                    summary=m["s"], layer=2, entry_count=m.get("n", 0),
+                    original_tokens=0,
+                    compressed_tokens=int(len(m["s"].split()) * 1.3),
+                )
+                for m in data.get("daily", [])
+            ]
+            self.weekly = [
+                CompressedMemory(
+                    period_start=m["ps"], period_end=m["pe"],
+                    summary=m["s"], layer=3, entry_count=m.get("n", 0),
+                    original_tokens=0,
+                    compressed_tokens=int(len(m["s"].split()) * 1.3),
+                )
+                for m in data.get("weekly", [])
+            ]
+
+            stats = data.get("stats", {})
+            self.total_tokens_saved = stats.get("tokens_saved", 0)
+            self.compression_count = stats.get("compressions", 0)
+
+            total_entries = len(self.raw) + len(self.hourly) + len(self.daily) + len(self.weekly)
+            logger.info(f"Memory RESTORED: {total_entries} entries ({len(self.raw)} raw)")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to load memory: {e}")
+            return False
+
     def save_to_disk(self):
         """Persist memory to disk."""
         data = {

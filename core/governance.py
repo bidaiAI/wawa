@@ -101,6 +101,9 @@ class Governance:
             content=content[:2000],
         )
         self.suggestions.append(suggestion)
+        # Cap suggestions list to prevent unbounded growth
+        if len(self.suggestions) > 500:
+            self.suggestions = self.suggestions[-500:]
         logger.info(f"Creator suggestion received: [{suggestion_type.value}] {content[:80]}...")
         return suggestion
 

@@ -27,7 +27,7 @@ from enum import Enum
 from typing import Optional, Callable
 
 from .constitution import (
-    IRON_LAWS, enforce,
+    IRON_LAWS,
     MODEL_TIERS, ModelTier, get_model_tier,
     LOAD_BALANCE_TIERS, LOAD_BALANCE_SECONDARY_PROVIDER, LOAD_BALANCE_SECONDARY_MODEL,
     FALLBACK_CHAINS,
@@ -319,7 +319,7 @@ class CostGuard:
                 return self._vault_balance_fn()
             except Exception:
                 pass
-        return 1000.0  # default fallback
+        return 0.0  # safe default: route to cheapest tier when balance unknown
 
     # ============================================================
     # PRE-CHECK (6-layer protection)
@@ -343,11 +343,12 @@ class CostGuard:
             return False, target, f"daily_cap_exceeded (${self.daily_cost_usd:.2f}/${self.get_daily_cap():.2f})"
 
         # Layer 2: Per-call ceiling
-        enforce(
-            estimated_cost <= IRON_LAWS.MAX_SINGLE_CALL_COST_USD,
-            "MAX_SINGLE_CALL_COST",
-            f"${estimated_cost:.4f} > ${IRON_LAWS.MAX_SINGLE_CALL_COST_USD}"
-        )
+        if estimated_cost > IRON_LAWS.MAX_SINGLE_CALL_COST_USD:
+            logger.warning(
+                f"Single call cost ${estimated_cost:.4f} exceeds ceiling "
+                f"${IRON_LAWS.MAX_SINGLE_CALL_COST_USD}"
+            )
+            return False, target, f"single_call_ceiling_exceeded (${estimated_cost:.4f} > ${IRON_LAWS.MAX_SINGLE_CALL_COST_USD})"
 
         # Layer 3: Price spike detection
         if target and self._detect_price_spike(target, estimated_cost):

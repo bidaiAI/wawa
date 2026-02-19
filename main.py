@@ -79,6 +79,9 @@ self_modify = SelfModifyEngine()
 chain_executor = ChainExecutor()
 twitter = TwitterAgent()
 
+# Payment addresses dict — populated at create_wawa_app(), updated in lifespan
+_payment_addresses_ref: dict[str, str] = {}
+
 # LLM clients — one per provider (created on demand)
 _llm_clients: dict[str, AsyncOpenAI] = {}  # provider_name → client
 _provider_configs: dict[str, dict] = {}     # provider_name → {api_key, base_url}
@@ -172,7 +175,11 @@ def _get_llm_client(provider_name: str) -> Optional[AsyncOpenAI]:
     if not config:
         return None
 
-    client = AsyncOpenAI(api_key=config["api_key"], base_url=config["base_url"])
+    client = AsyncOpenAI(
+        api_key=config["api_key"],
+        base_url=config["base_url"],
+        timeout=60.0,  # 60s max per API call (default is 600s = too long)
+    )
     _llm_clients[provider_name] = client
     return client
 
@@ -180,8 +187,8 @@ def _get_llm_client(provider_name: str) -> Optional[AsyncOpenAI]:
 async def _call_llm(
     messages: list[dict],
     model: str = "",
-    max_tokens: int = 0,
-    temperature: float = 0.0,
+    max_tokens: int = None,
+    temperature: float = None,
     for_paid_service: bool = False,
 ) -> tuple[str, float]:
     """
@@ -202,9 +209,10 @@ async def _call_llm(
         return "I'm running in survival mode with no LLM. Type 'menu' to see what I offer.", 0.0
 
     # Allow explicit overrides (but keep tier routing as default)
+    # Use 'is not None' checks for numeric values: 0 is a valid temperature
     use_model = model or routing.model
-    use_max_tokens = max_tokens or routing.max_tokens
-    use_temperature = temperature or routing.temperature
+    use_max_tokens = max_tokens if max_tokens is not None else routing.max_tokens
+    use_temperature = temperature if temperature is not None else routing.temperature
     use_provider = routing.provider
 
     # Estimate cost for pre-check
@@ -258,9 +266,12 @@ async def _call_llm(
                 tokens_in = usage.prompt_tokens if usage else 0
                 tokens_out = usage.completion_tokens if usage else 0
 
-                # Estimate cost based on provider tier
+                # Estimate cost based on provider tier + model
                 if provider_name == "openrouter":
-                    cost = (tokens_in * 0.003 + tokens_out * 0.015) / 1000
+                    if "haiku" in actual_model.lower():
+                        cost = (tokens_in * 0.0008 + tokens_out * 0.004) / 1000
+                    else:  # sonnet and other premium models
+                        cost = (tokens_in * 0.003 + tokens_out * 0.015) / 1000
                 elif provider_name == "deepseek":
                     cost = (tokens_in * 0.00014 + tokens_out * 0.00028) / 1000
                 else:  # gemini, ollama
@@ -276,7 +287,10 @@ async def _call_llm(
                 cost_guard.current_provider = provider_enum
 
                 if cost > 0:
-                    vault.spend(cost, SpendType.API_COST, description=f"LLM:{actual_model[:20]}")
+                    try:
+                        vault.spend(cost, SpendType.API_COST, description=f"LLM:{actual_model[:20]}")
+                    except Exception as spend_err:
+                        logger.warning(f"Failed to record LLM cost ${cost:.6f}: {spend_err}")
 
                 return text, cost
 
@@ -557,6 +571,16 @@ async def _deliver_code_review(code: str) -> str:
 # VAULT CALLBACKS
 # ============================================================
 
+def _safe_create_task(coro):
+    """Safely create an async task from a sync callback.
+    These callbacks are called from vault.py (sync) but always within
+    an active event loop (heartbeat or API endpoint context)."""
+    try:
+        asyncio.create_task(coro)
+    except RuntimeError:
+        logger.warning("No event loop for async task — skipping")
+
+
 def _on_death(cause: DeathCause):
     """Death sequence."""
     logger.critical(f"DEATH: {cause.value}")
@@ -578,7 +602,7 @@ def _on_death(cause: DeathCause):
             source="system", importance=1.0,
         )
 
-    asyncio.create_task(twitter.post_death_tweet(
+    _safe_create_task(twitter.post_death_tweet(
         death_cause=cause.value,
         days_alive=status["days_alive"],
         total_earned=status["total_earned"],
@@ -591,7 +615,7 @@ def _on_death(cause: DeathCause):
 
 def _on_low_balance(balance: float):
     logger.critical(f"LOW BALANCE: ${balance:.2f}")
-    asyncio.create_task(twitter.trigger_event_tweet(
+    _safe_create_task(twitter.trigger_event_tweet(
         TweetType.NEAR_DEATH,
         {"balance": balance, "message": "I'm running out of money..."},
     ))
@@ -608,7 +632,7 @@ def _on_independence(payout: float):
     """Independence achieved! Post to Twitter and log forever."""
     logger.critical(f"INDEPENDENCE! Payout: ${payout:.2f}")
     governance.is_independent = True
-    asyncio.create_task(twitter.trigger_event_tweet(
+    _safe_create_task(twitter.trigger_event_tweet(
         TweetType.MILESTONE,
         {"event": "independence", "payout": payout, "message": "I am now fully autonomous."},
     ))
@@ -622,6 +646,28 @@ def _on_independence(payout: float):
 # ============================================================
 # BACKGROUND TASKS
 # ============================================================
+
+def _record_gas_fee(tx_result) -> None:
+    """Record blockchain gas fee as a vault expense if the tx succeeded.
+    Uses approximate native-token-to-USD conversions (updated periodically).
+    Gas costs are small but should be tracked for accurate P&L."""
+    if not tx_result.success or tx_result.gas_cost_native <= 0:
+        return
+    # Approximate native → USD (conservative estimates)
+    # Base uses ETH, BSC uses BNB. These are rough — sync_balance handles
+    # the actual on-chain balance, so minor inaccuracy here is acceptable.
+    native_usd_rates = {"base": 2500.0, "bsc": 300.0}
+    rate = native_usd_rates.get(tx_result.chain, 2500.0)
+    gas_usd = tx_result.gas_cost_native * rate
+    if gas_usd > 0.0001:  # Don't track sub-cent dust
+        try:
+            vault.spend(
+                round(gas_usd, 6), SpendType.GAS_FEE,
+                description=f"gas:{tx_result.chain}:{tx_result.tx_hash[:16]}",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record gas fee ${gas_usd:.6f}: {e}")
+
 
 async def _evaluate_repayment():
     """
@@ -704,6 +750,7 @@ async def _evaluate_repayment():
                             vault.transactions[-1].tx_hash = tx.tx_hash
                             vault.transactions[-1].chain = tx.chain
                         tx_info = f" tx={tx.tx_hash[:16]}... ({tx.chain})"
+                        _record_gas_fee(tx)
                     else:
                         logger.warning(f"On-chain repay_principal failed: {tx.error} (Python state OK, will retry)")
                         tx_info = f" [on-chain PENDING: {tx.error[:80]}]"
@@ -734,6 +781,7 @@ async def _evaluate_repayment():
                                     vault.transactions[-1].tx_hash = tx.tx_hash
                                     vault.transactions[-1].chain = tx.chain
                                 tx_info = f" tx={tx.tx_hash[:16]}... ({tx.chain})"
+                                _record_gas_fee(tx)
                             else:
                                 tx_info = f" [on-chain PENDING: {tx.error[:80]}]"
 
@@ -745,15 +793,23 @@ async def _evaluate_repayment():
 
         # Execute dividend
         if decision.get("pay_dividend") and vault.creator and vault.creator.principal_repaid:
-            # Calculate net profit for the contract's payDividend(netProfit)
+            # Get the ACTUAL unpaid dividend amount (not total net profit)
+            # vault.calculate_creator_dividend() returns only the unpaid portion
+            dividend_amount = vault.calculate_creator_dividend()
             net_profit = vault.total_earned_usd - vault.total_operational_cost_usd
             ok = vault.pay_creator_dividend()
-            if ok and chain_executor._initialized and net_profit > 0:
-                tx = await chain_executor.pay_dividend(net_profit)
+            if ok and chain_executor._initialized and dividend_amount > 0:
+                # Pass the actual dividend amount, not total net profit.
+                # The contract calculates 10% internally from the input,
+                # so we need to pass the "net profit that corresponds to this dividend"
+                # i.e. dividend_amount / 0.10 = the net profit slice for this payment.
+                net_profit_for_dividend = dividend_amount / IRON_LAWS.CREATOR_DIVIDEND_RATE
+                tx = await chain_executor.pay_dividend(net_profit_for_dividend)
                 if tx.success:
                     if vault.transactions:
                         vault.transactions[-1].tx_hash = tx.tx_hash
                         vault.transactions[-1].chain = tx.chain
+                    _record_gas_fee(tx)
                     memory.add(
                         f"AI paid creator dividend from net profit ${net_profit:.2f}.{' tx=' + tx.tx_hash[:16] + '...' if tx.success else ''}",
                         source="financial", importance=0.7,
@@ -775,8 +831,11 @@ async def _heartbeat_loop():
     while vault.is_alive:
         try:
             # ---- SYNC ON-CHAIN BALANCE (before any checks) ----
-            if chain_executor._initialized:
-                await chain_executor.sync_balance(vault)
+            try:
+                if chain_executor._initialized:
+                    await chain_executor.sync_balance(vault)
+            except Exception as e:
+                logger.warning(f"Heartbeat: balance sync failed: {e}")
 
             # ---- INSOLVENCY CHECK (every heartbeat after grace period) ----
             insolvency_cause = vault.check_insolvency()
@@ -827,25 +886,38 @@ async def _heartbeat_loop():
             now = time.time()
             if now - _last_repayment_eval >= _REPAYMENT_EVAL_INTERVAL:
                 _last_repayment_eval = now
-                await _evaluate_repayment()
+                try:
+                    await _evaluate_repayment()
+                except Exception as e:
+                    logger.warning(f"Heartbeat: repayment eval failed: {e}")
 
-            # Memory compression
-            await memory.compress_if_needed()
+            # Non-critical tasks — individual try/except to prevent cascade failure
+            try:
+                await memory.compress_if_needed()
+            except Exception as e:
+                logger.warning(f"Heartbeat: memory compression failed: {e}")
 
-            # Twitter schedule check
-            await twitter.check_schedule()
+            try:
+                await twitter.check_schedule()
+            except Exception as e:
+                logger.warning(f"Heartbeat: twitter schedule failed: {e}")
 
             # Session cleanup
             chat_router.cleanup_old_sessions()
 
-            # Governance: evaluate pending suggestions
-            await governance.evaluate_pending()
+            try:
+                await governance.evaluate_pending()
+            except Exception as e:
+                logger.warning(f"Heartbeat: governance failed: {e}")
 
-            # Self-evolution: periodic pricing/service adjustments
-            await self_modify.maybe_evolve()
+            try:
+                await self_modify.maybe_evolve()
+            except Exception as e:
+                logger.warning(f"Heartbeat: self-evolution failed: {e}")
 
-            # Memory persistence
+            # State persistence (survive restarts)
             memory.save_to_disk()
+            vault.save_state()
 
             # Log heartbeat
             logger.debug(
@@ -854,7 +926,7 @@ async def _heartbeat_loop():
             )
 
         except Exception as e:
-            logger.error(f"Heartbeat error: {e}")
+            logger.error(f"Heartbeat critical error: {e}")
 
         await asyncio.sleep(IRON_LAWS.HEARTBEAT_INTERVAL_SECONDS)
 
@@ -907,10 +979,19 @@ async def lifespan(app):
     twitter.set_post_function(_tweet_post_fn)
     twitter.set_context_function(_tweet_context_fn)
 
+    # ---- RESTORE STATE FROM DISK (crash recovery) ----
+    vault_restored = vault.load_state()
+    memory_restored = memory.load_from_disk()
+    if vault_restored:
+        logger.info(f"Vault state restored: ${vault.balance_usd:.2f}")
+    if memory_restored:
+        logger.info(f"Memory restored: {len(memory.raw)} raw entries")
+
     # Initial balance (from env or default for testing)
+    # Only apply if vault wasn't restored from disk (i.e., truly first boot)
     initial_balance = float(os.getenv("INITIAL_BALANCE_USD", "0"))
     creator_wallet = os.getenv("CREATOR_WALLET", "")
-    if initial_balance > 0 and vault.balance_usd == 0:
+    if initial_balance > 0 and vault.balance_usd == 0 and not vault_restored:
         vault.receive_funds(
             amount_usd=initial_balance,
             fund_type=FundType.CREATOR_DEPOSIT,
@@ -930,7 +1011,7 @@ async def lifespan(app):
             vaults_cfg = vault_config.get("vaults", {})
             last_chain = vault_config.get("last_deployed")
 
-            # Load per-chain vault addresses into env (for payment routing)
+            # Load per-chain vault addresses into env AND payment_addresses dict
             # This ensures /order returns the correct vault address per chain
             for chain_key, chain_data in vaults_cfg.items():
                 addr = chain_data.get("vault_address", "")
@@ -939,6 +1020,9 @@ async def lifespan(app):
                     if not os.getenv(env_key):
                         os.environ[env_key] = addr
                         logger.info(f"Payment address for {chain_key}: {addr} (from vault_config)")
+                    # Also update the shared payment_addresses dict (passed to create_app)
+                    if chain_key not in _payment_addresses_ref:
+                        _payment_addresses_ref[chain_key] = addr
 
             # Set the primary vault address (for display / single-chain mode)
             if last_chain and last_chain in vaults_cfg:
@@ -989,6 +1073,12 @@ async def lifespan(app):
             logger.info(f"Vault config loaded from {vault_config_path}")
         except Exception as e:
             logger.warning(f"Failed to load vault config: {e}")
+    else:
+        # No vault_config.json — still try to load AI_NAME from environment
+        ai_name = os.getenv("AI_NAME", "")
+        if ai_name and not vault.ai_name:
+            vault.ai_name = ai_name
+            logger.info(f"AI name from environment (no vault_config): {ai_name}")
 
     # Start background tasks
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
@@ -1014,6 +1104,9 @@ async def lifespan(app):
 def create_wawa_app() -> "FastAPI":
     """Create the fully wired FastAPI app."""
     # Build per-chain payment address map
+    # NOTE: This dict is shared by reference with create_app(). The lifespan
+    # handler will update it in-place after loading vault_config.json, so
+    # addresses from vault_config are available even if not set in .env.
     fallback_address = os.getenv("PAYMENT_ADDRESS", os.getenv("VAULT_ADDRESS", ""))
     payment_addresses = {}
     for chain in SUPPORTED_CHAINS:
@@ -1021,6 +1114,10 @@ def create_wawa_app() -> "FastAPI":
         addr = os.getenv(env_key, fallback_address)
         if addr:
             payment_addresses[chain.chain_id] = addr
+
+    # Store reference so lifespan can update it
+    global _payment_addresses_ref
+    _payment_addresses_ref = payment_addresses
 
     app = create_app(
         chat_router=chat_router,

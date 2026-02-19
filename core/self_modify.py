@@ -157,8 +157,10 @@ class SelfModifyEngine:
         else:
             logger.debug("LLM evolution not configured")
 
-        # Log all decisions
+        # Log all decisions (capped to prevent unbounded growth)
         self.evolution_log.extend(records)
+        if len(self.evolution_log) > 500:
+            self.evolution_log = self.evolution_log[-500:]
         logger.info(f"EVOLUTION CYCLE complete. Total log size: {len(self.evolution_log)}, New: {len(records)}")
 
         if records:

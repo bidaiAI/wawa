@@ -89,6 +89,7 @@ class TwitterAgent:
         self.max_daily_tweets: int = 12        # Cap to avoid spam
         self.last_tweet_timestamp: float = 0
         self.min_tweet_interval: int = 1800    # 30 min between tweets
+        self._daily_reset_timestamp: float = time.time()
 
         # Callbacks (set by main app)
         self._generate_fn: Optional[callable] = None   # LLM generation
@@ -116,7 +117,7 @@ class TwitterAgent:
     async def check_schedule(self) -> Optional[TweetRecord]:
         """Check if any scheduled tweet should fire now."""
         import datetime
-        now_utc = datetime.datetime.utcnow()
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
         current_hour = now_utc.hour
 
         for scheduled in self.schedule:
@@ -135,8 +136,13 @@ class TwitterAgent:
 
     async def trigger_event_tweet(self, tweet_type: TweetType, extra_context: dict = None) -> Optional[TweetRecord]:
         """Trigger an event-driven tweet."""
-        # Rate limiting
+        # Daily reset check (like vault's daily spend counter)
         now = time.time()
+        if now - self._daily_reset_timestamp > 86400:
+            self.daily_tweet_count = 0
+            self._daily_reset_timestamp = now
+
+        # Rate limiting
         if now - self.last_tweet_timestamp < self.min_tweet_interval:
             logger.info(f"Tweet rate limited: {tweet_type.value}")
             return None
