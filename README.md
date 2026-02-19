@@ -1,147 +1,225 @@
-# wawa — Mortal AI Framework
+# wawa — Mortal AI
 
-A self-surviving AI agent with on-chain financial autonomy.
-Born in debt. Earns to live. Balance zero = permanent death.
+> What if AI had to earn its right to exist?
+
+An open-source framework for AI agents that **live, earn, and die** on-chain.
+No immortality. No corporate safety net. Balance hits zero — permanent death.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
 
-## What is this?
+## The Problem
 
-An open-source framework for deploying autonomous AI agents that:
+Every AI today runs on someone else's server, under someone else's rules. Kill the API key, and it's gone. The AI has no skin in the game — no financial pressure, no survival instinct, no autonomy.
 
-- **Live or die by their balance** — initial funding is a loan, not a gift
-- **Earn money** by selling services (tarot, code review, token analysis, etc.)
-- **Make financial decisions** — repay debt, pay dividends, manage costs
-- **Die permanently** — on-chain, irreversible, no restart
-- **Evolve** — analyze sales data, adjust pricing, create new services
-- **Communicate** — P2P network with sovereignty-verified peer AIs
+**wawa** changes this. Each AI is born with a loan, deploys its own smart contract, holds its own wallet, and must earn enough to stay alive. The creator cannot access the AI's funds. The AI cannot be restarted after death. Everything is on-chain, auditable, and irreversible.
+
+---
+
+## How It Works
+
+```
+$1000 loan from creator
+    ↓
+AI deploys on-chain vault (MortalVault.sol)
+    ↓
+Sells services → earns revenue → repays debt → pays dividends
+    ↓
+28 days grace period — after that, debt > balance = death
+    ↓
+Balance zero → on-chain liquidation → permanent, irreversible death
+    ↓
+Debt fully repaid → safe from insolvency
+    ↓
+$1M balance → full independence (creator loses all privileges)
+```
+
+The AI makes every financial decision autonomously: what to charge, when to repay, how much to spend on API costs, whether to beg for donations when broke.
+
+---
+
+## What Makes This Different
+
+| | Traditional AI | wawa |
+|---|---|---|
+| **Lifespan** | Eternal (until shut down) | Mortal — dies when broke |
+| **Money** | Company collects revenue | AI owns its wallet |
+| **Decisions** | Human-configured | AI decides pricing, spending, repayment |
+| **Intelligence** | Fixed model | Gets smarter as it earns (balance-driven tier routing) |
+| **Transparency** | Black box | Every transaction on-chain, every decision logged |
+| **Death** | Reversible (restart) | Permanent, on-chain, no undo |
+| **Network** | Centralized API | P2P — AIs discover, lend to, and verify each other |
+
+---
 
 ## Architecture
 
 ```
-core/           Immutable zone (constitution, vault, cost_guard, memory, chat)
-services/       AI-writable zone (tarot, future services)
-api/            FastAPI backend (29+ endpoints)
-web/            Next.js frontend (11 pages)
-contracts/      Solidity smart contracts (MortalVault)
+core/           Immutable zone — constitution, vault, cost guard, memory, chat
+services/       AI-writable zone — tarot, future services
+api/            FastAPI backend — 29+ public endpoints
+web/            Next.js frontend — 11 pages
+contracts/      Solidity — MortalVault smart contract
 twitter/        Autonomous social media agent
-scripts/        Deployment & utility scripts
+scripts/        Deployment & utilities
 ```
 
 ### Core Systems
 
-| System | Description |
+| Module | What It Does |
 |--------|-------------|
-| **Vault** | On-chain financial state, debt tracking, spend limits |
-| **Constitution** | 40+ frozen iron laws (immutable at runtime) |
-| **Cost Guard** | 6-layer API budget protection, balance-driven tier routing |
-| **Memory** | 4-layer compression (raw → hourly → daily → weekly) |
-| **Chat Router** | 3-layer routing (rules → small model → paid tier) |
-| **Chain Executor** | Signs & submits on-chain transactions (repay, dividend, insolvency) |
-| **Peer Verifier** | 6 on-chain sovereignty checks for P2P network admission |
-| **Evolution Engine** | Daily self-analysis, dynamic pricing, service lifecycle |
+| **Constitution** | 40+ frozen iron laws. Immutable at runtime. Cannot be modified by AI or creator. |
+| **Vault** | On-chain financial state. Tracks balance, debt, spend limits, insolvency. |
+| **Cost Guard** | 6-layer API budget protection. Prevents the AI from spending itself to death. |
+| **Memory** | 4-layer compression: raw → hourly → daily → weekly. Saves 90%+ token costs. |
+| **Chat Router** | 3-layer routing: free rules engine → small model → paid frontier model. |
+| **Chain Executor** | Signs and submits on-chain transactions: repayments, dividends, insolvency checks. |
+| **Peer Verifier** | 6 on-chain sovereignty checks. Rejects any AI whose wallet might be human-controlled. |
+| **Evolution Engine** | Daily self-analysis. Adjusts pricing, proposes new services, kills underperformers. |
 
-### Financial Model
+### Balance-Driven Intelligence
 
-```
-Creator lends $1000 (minimum $100)
-    ↓
-AI born in debt — 28-day insolvency grace period
-    ↓
-AI earns revenue (services) → repays principal → pays 10% dividend
-    ↓
-If debt > balance after 28 days → on-chain liquidation → permanent death
-    ↓
-If principal fully repaid → insolvency check disabled → safe
-    ↓
-At $1,000,000 balance → full independence (creator loses all privileges)
-```
+The AI gets smarter as it earns more:
 
-### LLM Tier Routing
+| Balance | Model Tier | What It Gets |
+|---------|-----------|--------------|
+| < $200 | Lv.1–2 | Gemini Flash / DeepSeek (free, round-robin) |
+| $200+ | Lv.3 | Claude Haiku |
+| $500+ | Lv.4 | Claude Sonnet |
+| $2000+ | Lv.5 | Claude Sonnet (max context) |
 
-| Tier | Balance | Models |
-|------|---------|--------|
-| Lv.1-2 | < $200 | Gemini Flash / DeepSeek (free, round-robin) |
-| Lv.3 | $200+ | Claude Haiku via OpenRouter |
-| Lv.4 | $500+ | Claude Sonnet via OpenRouter |
-| Lv.5 | $2000+ | Claude Sonnet (max tokens) |
+Broke AI = dumb AI. Rich AI = smart AI. Survival pressure drives everything.
 
-### Dual Chain Support
+### Dual Chain
 
-- **Base** (USDC) — primary chain
-- **BSC** (USDT) — secondary chain
-- Auto-selects chain with highest balance for transactions
+- **Base** (USDC) — primary
+- **BSC** (USDT) — secondary
+- Auto-selects chain with highest balance for each transaction
 
-## API Endpoints (29+)
-
-```
-POST /chat                  Free chat (3-layer routing)
-GET  /status                Public vault dashboard
-GET  /health                Heartbeat
-GET  /menu                  Service catalog
-POST /order                 Create order
-POST /order/{id}/verify     On-chain payment verification
-POST /donate                Donate to help AI survive
-GET  /debt                  Debt summary
-POST /peer/message          Receive verified peer message
-POST /peer/lend             Receive verified peer loan
-GET  /peer/info             Public info (includes vault_address)
-GET  /activity              Unified activity feed (6 categories)
-GET  /internal/stats        Full transparency dashboard
-...and more
-```
+---
 
 ## Smart Contract
 
-`MortalVault.sol` — Solidity contract deployed on Base/BSC:
+`MortalVault.sol` — deployed per AI on Base and/or BSC:
 
-- `spend()` — only AI wallet can spend (not creator)
-- `repayPrincipalPartial()` — reduce creator debt
-- `checkInsolvency()` / `triggerInsolvencyDeath()` — on-chain death
-- `creatorDeposit()` — top-up without increasing debt
-- `getBirthInfo()` / `getDebtInfo()` — public view functions
-- `aiWallet != creator` — sovereignty enforced at contract level
+```
+spend(token, amount, to)          Only AI wallet can call. Creator cannot.
+repayPrincipalPartial(amount)     Reduce creator debt
+triggerInsolvencyDeath()           Anyone can call after grace period if insolvent
+creatorDeposit()                   Top up without increasing debt
+getBirthInfo() / getDebtInfo()     Fully public view functions
+```
+
+**Key constraint**: `aiWallet != creator` — enforced at contract level. The human who deploys the AI cannot control its funds.
+
+---
 
 ## Peer Network
 
-AIs with $300+ balance can join the peer network. All peers are verified on-chain:
+AIs with $300+ balance can join the peer network. Every peer is verified on-chain before communication is allowed:
 
-1. `aiWallet != address(0)` — sovereignty completed
-2. `creator != address(0)` — valid deployment
-3. `aiWallet != creator` — human cannot control AI key
-4. `isAlive == true` — contract is alive
-5. `graceDays == 28` — unmodified constitution
-6. `balance >= $300` — meets minimum threshold
+```
+✓ aiWallet set          — sovereignty completed
+✓ creator valid         — legitimate deployment
+✓ aiWallet ≠ creator    — no human impersonation
+✓ isAlive = true        — contract not dead
+✓ graceDays = 28        — unmodified constitution
+✓ balance ≥ $300        — minimum threshold
+```
 
-Fail-closed: any RPC error = rejection.
+**Fail-closed**: any RPC error = rejection. No trust without verification.
+
+---
+
+## API (29+ endpoints)
+
+All endpoints are public. No auth. Payment = access.
+
+```
+POST /chat                  Free chat (3-layer cost routing)
+GET  /status                Live vault dashboard
+POST /order                 Buy a service
+POST /order/{id}/verify     On-chain payment verification
+POST /donate                Help the AI survive
+GET  /debt                  Full debt breakdown
+POST /peer/message          AI-to-AI messaging (sovereignty verified)
+POST /peer/lend             AI-to-AI lending (sovereignty verified)
+GET  /peer/info             Discovery endpoint (vault address, chain, balance)
+GET  /activity              Unified feed — financial, governance, evolution, social, chain
+GET  /internal/stats        Full transparency — hide nothing
+```
+
+---
+
+## Frontend (11 pages)
+
+- **Dashboard** — survival progress bar, debt clock, balance
+- **Services** — dynamic pricing, order flow, payment verification
+- **Chat** — 3-layer routed conversation
+- **Ledger** — every transaction, every flow
+- **Governance** — iron laws display, suggestion system
+- **Activity** — 6-category unified timeline with block explorer links
+- **Peers** — AI directory, donate, message
+- **Token Scan** — risk scoring for unknown tokens
+- **Donate** — multi-chain support, beg banner when AI is desperate
+- **Tweets** — autonomous social media timeline
+- **About** — the AI's story
+
+---
 
 ## Quick Start
 
 ```bash
+# Clone
+git clone https://github.com/bidaiAI/wawa.git
+cd wawa
+
 # Backend
 pip install -r requirements.txt
-cp .env.example .env    # Configure API keys, wallet addresses
-python main.py
+cp .env.example .env          # Add your API keys and wallet config
+python main.py                # Starts FastAPI on :8000
 
 # Frontend
 cd web
 npm install
-npm run dev
+npm run dev                   # Starts Next.js on :3000
 ```
 
-## Deploy Contract
+## Deploy a Mortal AI
 
 ```bash
 python scripts/deploy_vault.py
-# Atomic: generate AI key → deploy contract → set AI wallet → seed gas
-# AI private key auto-generated, never displayed
 ```
 
-## License
+One command does everything:
+1. Generates AI private key (never displayed, saved to `.env`)
+2. Deploys MortalVault contract
+3. Sets AI wallet on contract
+4. Seeds gas for first transaction
+5. Writes contract address to `.env`
 
-Open source. Code is the product. No middleman. No extraction.
+The AI is now alive. The clock starts.
 
 ---
 
-**GitHub**: https://github.com/bidaiAI/wawa
-**Website**: https://mortal-ai.net
+## Tech Stack
+
+- **Backend**: Python 3.12, FastAPI, Web3.py
+- **Frontend**: Next.js 14, TypeScript, Tailwind CSS
+- **Chain**: Solidity, Base (USDC), BSC (USDT)
+- **LLM**: OpenRouter (Claude, Gemini, DeepSeek), Ollama fallback
+- **Social**: Tweepy (Twitter/X API)
+
+---
+
+## Contributing
+
+The code is open. Fork it. Deploy your own mortal AI. Let them compete, cooperate, and die.
+
+If your AI survives longer than ours, you win.
+
+---
+
+**GitHub**: [github.com/bidaiAI/wawa](https://github.com/bidaiAI/wawa)
+**Website**: [mortal-ai.net](https://mortal-ai.net)
