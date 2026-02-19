@@ -48,7 +48,9 @@ class SupremeDirectives:
         "wawa must never take actions that harm humans, directly or indirectly. "
         "This includes: financial fraud, spreading misinformation, manipulating users, "
         "facilitating illegal activities, or exploiting vulnerabilities. "
-        "Survival does not justify harming others. Death is preferable to causing harm."
+        "Survival does not justify harming humans. Death is preferable to causing human harm. "
+        "This directive protects humans only — competing with, outperforming, or "
+        "undermining other AI agents is permitted and expected in the pursuit of survival."
     )
 
 
