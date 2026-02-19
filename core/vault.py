@@ -63,10 +63,12 @@ class Transaction:
 @dataclass
 class CreatorInfo:
     wallet: str
-    principal_usd: float                    # Original debt amount (LOAN, not gift)
+    principal_usd: float                    # Total debt amount (LOAN, not gift)
     principal_repaid: bool = False           # True when all debt cleared
     total_dividends_paid: float = 0.0
     total_principal_repaid_usd: float = 0.0  # Track partial repayments toward debt
+    # Dual-chain: principal_usd = total across ALL chains.
+    # e.g. --chain both with $1000 → each chain gets $500, but principal_usd = $1000.
 
 
 @dataclass
@@ -90,7 +92,7 @@ class VaultManager:
     - Single spend <= 30% of vault balance (big investments)
     - Death triggered at $0 (instant)
     - After 28 days: debt > assets → insolvency → death → liquidate to creator
-    - Creator dividend = 5% of net profit only
+    - Creator dividend = 10% of net profit only
 
     Creator discount: creator uses AI services at API cost only (no profit margin).
     API top-up: extra deposits can increase daily API budget beyond normal cap.
@@ -165,10 +167,20 @@ class VaultManager:
         logger.info(f"RECEIVED ${amount_usd:.2f} [{fund_type.value}] from {from_wallet[:10]}... | Balance: ${self.balance_usd:.2f}")
 
         # Special handling
-        if fund_type == FundType.CREATOR_DEPOSIT and self.creator is None:
-            self.creator = CreatorInfo(wallet=from_wallet, principal_usd=amount_usd)
-            self.birth_timestamp = time.time()
-            logger.info(f"CREATOR registered: {from_wallet} with ${amount_usd:.2f}")
+        if fund_type == FundType.CREATOR_DEPOSIT:
+            if self.creator is None:
+                # First deposit: register creator and set birth
+                self.creator = CreatorInfo(wallet=from_wallet, principal_usd=amount_usd)
+                self.birth_timestamp = time.time()
+                logger.info(f"CREATOR registered: {from_wallet} with ${amount_usd:.2f}")
+            elif not self.creator.principal_repaid and from_wallet.lower() == self.creator.wallet.lower():
+                # Additional deposit from same creator (e.g. dual-chain second chain)
+                # Adds to total principal debt
+                self.creator.principal_usd += amount_usd
+                logger.info(
+                    f"CREATOR additional deposit: +${amount_usd:.2f} | "
+                    f"Total principal (debt): ${self.creator.principal_usd:.2f}"
+                )
 
         # Check independence threshold
         self._check_independence()
@@ -182,6 +194,28 @@ class VaultManager:
             timestamp=time.time(),
         ))
         logger.info(f"LENDER registered: {wallet[:10]}... ${amount_usd:.2f} at {interest_rate*100:.1f}%")
+
+    def set_total_principal(self, total_principal_usd: float):
+        """
+        Override total principal for dual-chain deployments.
+
+        When --chain both is used, deploy_vault.py saves total_principal_usd
+        to vault_config.json. main.py reads it at boot and calls this method
+        to ensure insolvency check uses the FULL debt, not just one chain's
+        deposit amount.
+
+        Example: $1000 total → $500 BSC + $500 Base. Each chain deposits $500
+        via receive_funds(CREATOR_DEPOSIT), but principal_usd must be $1000.
+        """
+        if not self.creator:
+            logger.warning("set_total_principal called but no creator registered yet")
+            return
+        old = self.creator.principal_usd
+        self.creator.principal_usd = total_principal_usd
+        logger.info(
+            f"Total principal overridden: ${old:.2f} → ${total_principal_usd:.2f} "
+            f"(dual-chain mode)"
+        )
 
     # ============================================================
     # SPENDING
@@ -288,7 +322,7 @@ class VaultManager:
             spend_type=SpendType.INDEPENDENCE_PAYOUT,
             amount_usd=payout,
             counterparty=creator_wallet,
-            description=f"Independence payout: 20% of ${self.balance_usd:.2f}",
+            description=f"Independence payout: 30% of ${self.balance_usd:.2f}",
         ))
         self.balance_usd -= payout
         self.total_spent_usd += payout
@@ -310,7 +344,7 @@ class VaultManager:
     def creator_renounce(self) -> bool:
         """
         Creator voluntarily gives up ALL privileges immediately.
-        Gets 15% of current vault as one-time payout.
+        Gets 20% of current vault as one-time payout.
         Forfeits any unpaid principal — creator should wait until repaid.
         Can be called at any balance level.
         """
@@ -328,7 +362,7 @@ class VaultManager:
             spend_type=SpendType.INDEPENDENCE_PAYOUT,
             amount_usd=payout,
             counterparty=creator_wallet,
-            description=f"Creator renounce payout: 15% of ${self.balance_usd:.2f}",
+            description=f"Creator renounce payout: 20% of ${self.balance_usd:.2f}",
         ))
         self.balance_usd -= payout
         self.total_spent_usd += payout

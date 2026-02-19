@@ -760,6 +760,36 @@ async def lifespan(app):
         )
         logger.info(f"Initial balance: ${initial_balance:.2f} from {creator_wallet[:16]}...")
 
+    # Load vault deployment config (dual-chain principal override)
+    vault_config_path = Path(__file__).resolve().parent / "data" / "vault_config.json"
+    if vault_config_path.exists():
+        try:
+            with open(vault_config_path, "r") as f:
+                vault_config = json.load(f)
+
+            # Set vault address from config
+            last_chain = vault_config.get("last_deployed")
+            if last_chain and "vaults" in vault_config:
+                chain_cfg = vault_config["vaults"].get(last_chain, {})
+                if chain_cfg.get("vault_address") and not vault.vault_address:
+                    vault.vault_address = chain_cfg["vault_address"]
+                    logger.info(f"Vault address loaded: {vault.vault_address} ({last_chain})")
+
+            # Dual-chain: override principal to total amount
+            # deploy_both() saves total_principal_usd = full debt (not halved)
+            if vault_config.get("deployment_mode") == "both":
+                total_principal = vault_config.get("total_principal_usd", 0)
+                if total_principal > 0 and vault.creator:
+                    vault.set_total_principal(total_principal)
+                    logger.info(
+                        f"Dual-chain mode: total debt = ${total_principal:.2f} "
+                        f"(aggregated across both chains)"
+                    )
+
+            logger.info(f"Vault config loaded from {vault_config_path}")
+        except Exception as e:
+            logger.warning(f"Failed to load vault config: {e}")
+
     # Start background tasks
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
 

@@ -1,13 +1,20 @@
 """
 Deploy MortalVault Contract
 
-Deploys the MortalVault.sol contract to Base or BSC.
+Deploys the MortalVault.sol contract to Base, BSC, or both chains.
 Handles: compile → deploy → verify → fund → log.
 
 Usage:
     python scripts/deploy_vault.py                  # Deploy to Base (default)
     python scripts/deploy_vault.py --chain bsc      # Deploy to BSC
+    python scripts/deploy_vault.py --chain both     # Deploy to both chains
     python scripts/deploy_vault.py --dry-run        # Simulate only
+    python scripts/deploy_vault.py --principal 500  # Custom principal amount
+
+Dual-chain mode (--chain both):
+    Principal is split 50/50 across BSC (USDT) and Base (USDC).
+    Total debt = full principal (NOT halved).
+    Insolvency check uses aggregated balance across both chains.
 
 Prerequisites:
     pip install web3 py-solc-x python-dotenv
