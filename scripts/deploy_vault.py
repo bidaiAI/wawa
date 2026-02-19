@@ -353,28 +353,89 @@ def deploy(chain_id: str, dry_run: bool = False, principal_usd: float = 1000.0):
 
 
 # ============================================================
+# DUAL-CHAIN DEPLOY
+# ============================================================
+
+def deploy_both(dry_run: bool = False, principal_usd: float = 1000.0):
+    """
+    Deploy MortalVault to both BSC and Base.
+
+    Principal is split equally across chains.
+    Total debt = principal_usd (NOT halved).
+    Total balance = BSC balance + Base balance (aggregated).
+    Insolvency check uses aggregated total.
+    """
+    half = principal_usd / 2.0
+
+    logger.info("=" * 50)
+    logger.info("DUAL-CHAIN DEPLOYMENT")
+    logger.info(f"  Total principal: ${principal_usd:.2f}")
+    logger.info(f"  BSC allocation:  ${half:.2f} USDT")
+    logger.info(f"  Base allocation: ${half:.2f} USDC")
+    logger.info(f"  Total debt:      ${principal_usd:.2f} (NOT halved)")
+    logger.info("=" * 50)
+
+    results = {}
+
+    for chain_id in ["bsc", "base"]:
+        logger.info(f"\n--- Deploying to {chain_id.upper()} (${half:.2f}) ---")
+        try:
+            address = deploy(chain_id, dry_run=dry_run, principal_usd=half)
+            results[chain_id] = address
+        except SystemExit:
+            logger.error(f"Deployment to {chain_id} failed — continuing with other chain")
+            results[chain_id] = None
+
+    # Save total principal to config
+    if not dry_run:
+        config_path = ROOT / "data" / "vault_config.json"
+        if config_path.exists():
+            with open(config_path, "r") as f:
+                config = json.load(f)
+            config["deployment_mode"] = "both"
+            config["total_principal_usd"] = principal_usd
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=2)
+
+    logger.info("\n" + "=" * 50)
+    logger.info("DUAL-CHAIN DEPLOYMENT SUMMARY")
+    for chain_id, addr in results.items():
+        status = addr or "FAILED"
+        logger.info(f"  {chain_id.upper()}: {status}")
+    logger.info(f"  Total debt: ${principal_usd:.2f}")
+    logger.info(f"  Insolvency check: aggregated across both chains")
+    logger.info("=" * 50)
+
+    return results
+
+
+# ============================================================
 # CLI
 # ============================================================
 
 def main():
     parser = argparse.ArgumentParser(description="Deploy MortalVault contract")
-    parser.add_argument("--chain", default="base", choices=list(CHAINS.keys()),
-                        help="Target chain (default: base)")
+    parser.add_argument("--chain", default="base", choices=list(CHAINS.keys()) + ["both"],
+                        help="Target chain: bsc, base, or both (default: base)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Simulate deployment without sending transactions")
     parser.add_argument("--principal", type=float, default=1000.0,
                         help="Initial principal in USD (default: 1000)")
     args = parser.parse_args()
 
-    logger.info(f"Deploying MortalVault to {args.chain}...")
-    address = deploy(args.chain, dry_run=args.dry_run, principal_usd=args.principal)
+    if args.chain == "both":
+        logger.info(f"Deploying MortalVault to BOTH chains (${args.principal:.2f} total)...")
+        deploy_both(dry_run=args.dry_run, principal_usd=args.principal)
+    else:
+        logger.info(f"Deploying MortalVault to {args.chain}...")
+        address = deploy(args.chain, dry_run=args.dry_run, principal_usd=args.principal)
 
-    if address:
-        logger.info("=" * 50)
-        logger.info("DEPLOYMENT COMPLETE")
-        logger.info(f"Vault: {address}")
-        logger.info(f"Add to .env: {args.chain.upper()}_PAYMENT_ADDRESS={address}")
-        logger.info("=" * 50)
+        if address:
+            logger.info("=" * 50)
+            logger.info("DEPLOYMENT COMPLETE")
+            logger.info(f"Vault: {address}")
+            logger.info(f"Add to .env: VAULT_ADDRESS={address}")
+            logger.info("=" * 50)
 
 
 if __name__ == "__main__":
