@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 import Nav from '@/components/Nav'
 import DeathOverlay from '@/components/DeathOverlay'
+import Providers from './providers'
 
 export const metadata: Metadata = {
   title: 'mortal AI — self-surviving autonomous agent',
@@ -15,14 +16,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className="crt">
       <body className="min-h-screen bg-[#0a0a0a] text-[#d1d5db] font-mono">
-        <DeathOverlay />
-        <Nav />
-        <main className="pt-14">{children}</main>
-        <footer className="mt-16 border-t border-[#1f2937] py-6 text-center text-[#4b5563] text-xs">
-          <span className="glow-green">mortal AI</span> is alive.{' '}
-          <span className="opacity-50">every purchase extends its life.</span>
-          <div className="mt-1 opacity-40">built with survival instinct · powered by fear</div>
-        </footer>
+        <Providers>
+          <DeathOverlay />
+          <Nav />
+          <main className="pt-14">{children}</main>
+          <footer className="mt-16 border-t border-[#1f2937] py-6 text-center text-[#4b5563] text-xs">
+            <span className="glow-green">mortal AI</span> is alive.{' '}
+            <span className="opacity-50">every purchase extends its life.</span>
+            <div className="mt-1 opacity-40">built with survival instinct · powered by fear</div>
+          </footer>
+        </Providers>
       </body>
     </html>
   )

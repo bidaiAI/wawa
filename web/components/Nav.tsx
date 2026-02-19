@@ -8,6 +8,8 @@ import SurvivalBar from '@/components/SurvivalBar'
 
 const links = [
   { href: '/', label: 'HOME' },
+  { href: '/create', label: 'CREATE' },
+  { href: '/dashboard', label: 'DASHBOARD' },
   { href: '/store', label: 'STORE' },
   { href: '/donate', label: 'DONATE' },
   { href: '/scan', label: 'SCAN' },
