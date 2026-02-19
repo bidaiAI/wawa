@@ -175,7 +175,8 @@ export interface InternalStats {
     days_alive: number
     total_earned: number
     total_spent: number
-    daily_spent_usd: number
+    daily_spent_today: number
+    daily_limit: number
     is_alive: boolean
   }
   cost_guard: {
@@ -245,6 +246,8 @@ export interface TokenScanResult {
 export interface PeerInfo {
   name: string
   domain: string
+  vault_address: string
+  chain_id: string
   is_alive: boolean
   balance_usd: number
   days_alive: number

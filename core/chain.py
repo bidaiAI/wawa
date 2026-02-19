@@ -13,6 +13,18 @@ Design:
 - Non-fatal: chain failure → log warning → retry next heartbeat cycle
 - Dual-chain: pick chain with highest balance if not specified
 
+Current on-chain methods:
+- repay_principal() — creator debt repayment
+- repay_loan() — third-party lender repayment
+- pay_dividend() — creator profit share
+- check_on_chain_insolvency() — read insolvency status
+- sync_balance() — read on-chain token balance
+- verify_payment_tx() — verify incoming ERC20 payment receipts
+
+TODO (P8): Add spend() method to call MortalVault.spend(token, amount, to).
+Currently API costs are Python-only (no on-chain execution). See vault.py
+spend() method docstring for full architecture discussion.
+
 Designed for: mortal AI survival framework
 """
 

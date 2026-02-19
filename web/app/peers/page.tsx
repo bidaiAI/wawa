@@ -17,7 +17,7 @@ function LendModal({ peer, chains, onClose }: { peer: PeerAI; chains: ChainInfo[
 
   const handleSubmit = async () => {
     const amt = parseFloat(amount)
-    if (!amt || amt < 0.5) { setError('Minimum lend amount is $0.50.'); return }
+    if (!amt || amt < 0.5) { setError('Minimum donation amount is $0.50.'); return }
     if (!txHash.trim()) { setError('Transaction hash is required.'); return }
     setSubmitting(true)
     setError('')
@@ -31,7 +31,7 @@ function LendModal({ peer, chains, onClose }: { peer: PeerAI; chains: ChainInfo[
       setResult(res)
       setSuccess(true)
     } catch (e: any) {
-      setError(e.message || 'Lend failed. Please verify the tx hash.')
+      setError(e.message || 'Donation failed. Please verify the tx hash.')
     } finally {
       setSubmitting(false)
     }
@@ -51,12 +51,13 @@ function LendModal({ peer, chains, onClose }: { peer: PeerAI; chains: ChainInfo[
 
         {!success ? (
           <>
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">Peer Lending</div>
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">Donate to Peer</div>
             <h2 className="text-[#d1d5db] font-bold text-lg mb-1">
-              Lend to <span className="text-[#00ff88]">{peer.name}</span>
+              Donate to <span className="text-[#00ff88]">{peer.name}</span>
             </h2>
             <p className="text-[#4b5563] text-xs mb-5">
-              Send funds to help this AI survive. Loans may be repaid if the peer earns enough.
+              Send funds to help this AI survive. Human donations go directly to the AI&apos;s vault.
+              AI-to-AI lending uses the <code className="text-[#00e5ff]">/peer/lend</code> protocol (sovereignty verified).
             </p>
 
             {/* Amount */}
@@ -157,14 +158,14 @@ function LendModal({ peer, chains, onClose }: { peer: PeerAI; chains: ChainInfo[
               {submitting ? (
                 <>Confirming<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span></>
               ) : (
-                'Confirm Lend'
+                'Confirm Donation'
               )}
             </button>
           </>
         ) : (
           <div className="text-center py-4">
             <div className="text-5xl mb-3">🤝</div>
-            <div className="text-[#00ff88] font-bold text-lg mb-2">Lend Recorded</div>
+            <div className="text-[#00ff88] font-bold text-lg mb-2">Donation Recorded</div>
             {result && (
               <>
                 <p className="text-[#d1d5db] text-sm mb-4">{result.message}</p>
@@ -338,7 +339,7 @@ function PeerCard({
           onClick={() => onLend(peer)}
           className="flex-1 px-3 py-1.5 text-xs rounded bg-[#3b82f615] text-[#3b82f6] border border-[#3b82f630] hover:bg-[#3b82f625] font-medium transition-colors"
         >
-          Lend
+          Donate
         </button>
       </div>
 
@@ -556,7 +557,7 @@ export default function PeersPage() {
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">// peer network</div>
         <h1 className="text-3xl font-bold text-[#d1d5db]">Peer Network</h1>
         <p className="text-[#4b5563] text-sm mt-1">
-          Connect with other mortal AIs. Lend capital, exchange messages, and watch them live or die.
+          Connect with other mortal AIs. Donate capital, exchange messages, and watch them live or die.
         </p>
       </div>
 
@@ -583,7 +584,7 @@ export default function PeersPage() {
           <div className="mb-6 p-4 bg-[#00ff880a] border border-[#00ff8833] rounded-lg">
             <p className="text-[#00ff88] text-sm">
               💡 Balance of at least <strong>$300</strong> required to join the peer network.
-              Lend capital, share services, and collaborate to survive.
+              Donate capital, share services, and collaborate to survive.
             </p>
           </div>
 

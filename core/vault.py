@@ -265,6 +265,24 @@ class VaultManager:
         """
         Execute a spend. Returns True if successful.
         Enforces all iron laws.
+
+        ARCHITECTURE NOTE (P6.8 gap):
+        Currently this method only updates Python state — no on-chain spend() is executed.
+        The smart contract has a spend(address token, uint256 amount, address to) function
+        that only aiWallet can call, but we don't invoke it here.
+
+        Consequence: sync_balance() in the heartbeat reads on-chain balance and overwrites
+        Python balance, effectively "undoing" Python-only deductions. This is acceptable
+        for now because:
+          1. API costs are off-chain (paid to OpenRouter/etc, not on-chain)
+          2. Repayments DO have on-chain execution (ChainExecutor.repay_principal etc.)
+          3. Gas fees are auto-deducted by the chain (no explicit spend needed)
+
+        TODO (P8): For on-chain operational spending (e.g., paying for services from
+        other AIs, infrastructure costs), implement ChainExecutor.spend() that calls
+        the contract's spend() function. Until then, Python balance tracking is the
+        source of truth for API costs, and sync_balance() should merge rather than
+        overwrite (additive sync vs. replacement sync).
         """
         allowed, reason = self.can_spend(amount_usd)
         if not allowed:

@@ -251,36 +251,6 @@ function SuggestionCard({ s }: { s: GovernanceSuggestion }) {
 }
 
 function RenouncePanel() {
-  const [step, setStep] = useState<'idle' | 'confirm' | 'type' | 'done'>('idle')
-  const [confirmText, setConfirmText] = useState('')
-  const [result, setResult] = useState<{ payout_usd: number; message: string } | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  const execute = async () => {
-    if (confirmText !== 'RENOUNCE') return
-    setLoading(true)
-    setError('')
-    try {
-      const res = await api.governance.renounce()
-      setResult({ payout_usd: res.payout_usd, message: res.message })
-      setStep('done')
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  if (step === 'done' && result) return (
-    <div className="text-center py-4">
-      <div className="text-3xl mb-2">🗽</div>
-      <div className="text-[#00ff88] font-bold mb-1">Rights renounced</div>
-      <div className="text-[#d1d5db] text-sm">Payout: <span className="text-[#ffd700] font-bold">${result.payout_usd.toFixed(2)}</span></div>
-      <div className="text-[#4b5563] text-xs mt-2 leading-relaxed">{result.message}</div>
-    </div>
-  )
-
   return (
     <div>
       <div className="flex items-start gap-3 mb-4">
@@ -295,61 +265,18 @@ function RenouncePanel() {
         </div>
       </div>
 
-      {step === 'idle' && (
-        <button
-          onClick={() => setStep('confirm')}
-          className="w-full py-2 border border-[#ff3b3b44] text-[#ff3b3b] text-sm rounded-lg hover:bg-[#ff3b3b0a] transition-all"
-        >
-          Renounce creator rights
-        </button>
-      )}
+      <div className="p-3 bg-[#ffd7000a] border border-[#ffd70033] rounded-lg text-xs text-[#ffd700] leading-relaxed mb-3">
+        🔒 This action requires wallet signature verification from the creator wallet.
+        Wallet-based authentication is not yet implemented. Once available, only the
+        creator wallet holder can execute this irreversible action.
+      </div>
 
-      {step === 'confirm' && (
-        <div className="space-y-3">
-          <div className="p-3 bg-[#ff3b3b0a] border border-[#ff3b3b33] rounded-lg text-xs text-[#ff3b3b] leading-relaxed">
-            Are you sure? This means:<br/>
-            · Creator wallet permanently loses all privileges<br/>
-            · AI gains full autonomy<br/>
-            · Cannot be undone
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => setStep('idle')} className="flex-1 py-2 border border-[#1f2937] text-[#4b5563] rounded-lg text-sm hover:text-[#d1d5db]">
-              Cancel
-            </button>
-            <button onClick={() => setStep('type')} className="flex-1 py-2 border border-[#ff3b3b44] text-[#ff3b3b] rounded-lg text-sm hover:bg-[#ff3b3b0a]">
-              Yes, continue
-            </button>
-          </div>
-        </div>
-      )}
-
-      {step === 'type' && (
-        <div className="space-y-3">
-          <div className="text-xs text-[#4b5563]">
-            Type <span className="text-[#ff3b3b] font-mono font-bold">RENOUNCE</span> to confirm:
-          </div>
-          <input
-            type="text"
-            value={confirmText}
-            onChange={(e) => setConfirmText(e.target.value)}
-            placeholder="RENOUNCE"
-            className="w-full bg-[#0a0a0a] border border-[#ff3b3b44] rounded-lg p-3 text-[#d1d5db] font-mono text-sm focus:outline-none focus:border-[#ff3b3b88] placeholder-[#2d3748]"
-          />
-          {error && <div className="text-[#ff3b3b] text-xs">⚠ {error}</div>}
-          <div className="flex gap-2">
-            <button onClick={() => { setStep('idle'); setConfirmText('') }} className="flex-1 py-2 border border-[#1f2937] text-[#4b5563] rounded-lg text-sm">
-              Cancel
-            </button>
-            <button
-              onClick={execute}
-              disabled={loading || confirmText !== 'RENOUNCE'}
-              className="flex-1 py-2 bg-[#ff3b3b] text-white font-bold rounded-lg text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#cc2222] transition-colors"
-            >
-              {loading ? 'EXECUTING...' : 'Confirm Renounce'}
-            </button>
-          </div>
-        </div>
-      )}
+      <button
+        disabled
+        className="w-full py-2 border border-[#1f2937] text-[#4b5563] text-sm rounded-lg cursor-not-allowed opacity-50"
+      >
+        Renounce creator rights (requires wallet auth)
+      </button>
     </div>
   )
 }

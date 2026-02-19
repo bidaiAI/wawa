@@ -37,7 +37,7 @@ Evolution & Activity:
 
 Token:
 - POST /token/scan            Free token safety scan
-- POST /token/analyze         Paid deep analysis
+- GET  /token/scans           Recent scan results
 
 Other:
 - GET  /ai/name               Get AI name
@@ -670,6 +670,7 @@ def create_app(
             "uptime_days": vault_manager.get_status().get("days_alive", 0),
             "balance_usd": vault_manager.balance_usd,
             "api_budget_remaining": cost_guard.get_status()["daily_remaining_usd"],
+            "ai_name": vault_manager.ai_name,
         }
 
     # ============================================================
