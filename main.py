@@ -611,6 +611,7 @@ def _on_death(cause: DeathCause):
     ))
     memory.add(f"I died. Cause: {cause.value}", source="system", importance=1.0)
     memory.save_to_disk()
+    vault.save_state()  # Persist death state (is_alive=False) to survive restarts
 
 
 def _on_low_balance(balance: float):
@@ -766,13 +767,16 @@ async def _evaluate_repayment():
                             f"On-chain repay_principal FAILED: {tx.error} — "
                             f"ROLLING BACK Python state (${actual_amount:.2f})"
                         )
-                        vault.balance_usd = pre_balance
+                        # DELTA-BASED ROLLBACK: add back the exact amount deducted
+                        # (safe against concurrent balance changes during await)
+                        vault.balance_usd += actual_amount
                         if vault.creator:
-                            vault.creator.total_principal_repaid_usd = pre_repaid
-                            vault.creator.principal_repaid = pre_principal_repaid_flag
-                        vault.total_spent_usd = pre_total_spent
-                        # Remove the failed transaction record
-                        if vault.transactions and vault.transactions[-1].tx_hash is None:
+                            vault.creator.total_principal_repaid_usd -= actual_amount
+                            if vault.creator.total_principal_repaid_usd < vault.creator.principal_usd:
+                                vault.creator.principal_repaid = False
+                        vault.total_spent_usd -= actual_amount
+                        # Remove the failed transaction record (tx_hash defaults to "")
+                        if vault.transactions and not vault.transactions[-1].tx_hash:
                             vault.transactions.pop()
                         tx_info = f" [ROLLED BACK: {tx.error[:80]}]"
                         memory.add(
@@ -823,11 +827,13 @@ async def _evaluate_repayment():
                                     f"On-chain repay_loan FAILED: {tx.error} — "
                                     f"ROLLING BACK lender repayment (${actual_lender_amount:.2f})"
                                 )
-                                vault.balance_usd = pre_balance_l
-                                lender.total_repaid = pre_lender_repaid
-                                lender.repaid = pre_lender_flag
-                                vault.total_spent_usd = pre_total_spent_l
-                                if vault.transactions and vault.transactions[-1].tx_hash is None:
+                                # DELTA-BASED ROLLBACK
+                                vault.balance_usd += actual_lender_amount
+                                lender.total_repaid -= actual_lender_amount
+                                if lender.total_repaid < (lender.amount_usd * (1 + lender.interest_rate)):
+                                    lender.repaid = False
+                                vault.total_spent_usd -= actual_lender_amount
+                                if vault.transactions and not vault.transactions[-1].tx_hash:
                                     vault.transactions.pop()
                                 tx_info = f" [ROLLED BACK: {tx.error[:80]}]"
                                 actual_lender_amount = 0  # Skip success log
@@ -874,10 +880,11 @@ async def _evaluate_repayment():
                             f"On-chain payDividend FAILED: {tx.error} — "
                             f"ROLLING BACK dividend (${actual_dividend:.2f})"
                         )
-                        vault.balance_usd = pre_balance_d
-                        vault.creator.total_dividends_paid = pre_dividends_paid
-                        vault.total_spent_usd = pre_total_spent_d
-                        if vault.transactions and vault.transactions[-1].tx_hash is None:
+                        # DELTA-BASED ROLLBACK
+                        vault.balance_usd += actual_dividend
+                        vault.creator.total_dividends_paid -= actual_dividend
+                        vault.total_spent_usd -= actual_dividend
+                        if vault.transactions and not vault.transactions[-1].tx_hash:
                             vault.transactions.pop()
 
     except Exception as e:
@@ -934,6 +941,34 @@ async def _heartbeat_loop():
                 if chain_confirmed:
                     logger.critical("INSOLVENCY DETECTED AND CONFIRMED — triggering liquidation and death")
                     vault.trigger_insolvency_death()
+
+                    # Execute on-chain liquidation (transfer all funds to creator)
+                    if chain_executor._initialized:
+                        try:
+                            tx = await chain_executor.trigger_on_chain_insolvency()
+                            if tx.success:
+                                logger.critical(f"ON-CHAIN LIQUIDATION: tx={tx.tx_hash} ({tx.chain})")
+                                memory.add(
+                                    f"Insolvency liquidation executed on-chain: tx={tx.tx_hash} ({tx.chain})",
+                                    source="financial", importance=1.0,
+                                )
+                            else:
+                                logger.error(
+                                    f"On-chain liquidation FAILED: {tx.error}. "
+                                    f"Creator must call triggerInsolvencyDeath() manually."
+                                )
+                                memory.add(
+                                    f"On-chain liquidation failed: {tx.error}. "
+                                    f"Creator must call triggerInsolvencyDeath() manually on the contract.",
+                                    source="financial", importance=1.0,
+                                )
+                        except Exception as e:
+                            logger.error(f"On-chain insolvency trigger exception: {e}")
+
+                    # CRITICAL: Persist death state before exiting heartbeat
+                    # Without this, a restart would load stale is_alive=True state
+                    vault.save_state()
+                    memory.save_to_disk()
                     break  # Dead, exit heartbeat
 
             # ---- AUTO-BEG (7 days before insolvency deadline) ----

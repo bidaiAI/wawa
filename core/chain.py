@@ -148,6 +148,14 @@ VAULT_ABI = [
         "stateMutability": "view",
         "type": "function",
     },
+    # triggerInsolvencyDeath() — public, liquidates all to creator
+    {
+        "inputs": [],
+        "name": "triggerInsolvencyDeath",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
 ]
 
 
@@ -654,6 +662,36 @@ class ChainExecutor:
         except Exception as e:
             logger.warning(f"checkInsolvency failed on {picked}: {e}")
             return None
+
+    async def trigger_on_chain_insolvency(self, chain_id: Optional[str] = None) -> ChainTxResult:
+        """
+        Execute on-chain triggerInsolvencyDeath() — liquidates all vault funds to creator.
+        This is a PUBLIC function (no onlyAI modifier) — anyone can call it after grace period.
+        Called from heartbeat AFTER Python confirms insolvency.
+        """
+        if not self._initialized:
+            return ChainTxResult(success=False, error="chain executor not initialized")
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return ChainTxResult(success=False, error="no chain available")
+
+        chain = self._chains[picked]
+        tx_fn = chain["vault_contract"].functions.triggerInsolvencyDeath()
+        result = await self._send_tx(picked, tx_fn)
+
+        if result.success:
+            logger.critical(
+                f"ON-CHAIN INSOLVENCY EXECUTED [{picked}]: tx={result.tx_hash} — "
+                f"all vault funds liquidated to creator"
+            )
+        else:
+            logger.error(
+                f"ON-CHAIN INSOLVENCY FAILED [{picked}]: {result.error} — "
+                f"creator must call triggerInsolvencyDeath() manually"
+            )
+
+        return result
 
     # ============================================================
     # STATUS

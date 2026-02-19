@@ -88,27 +88,42 @@ class OrderStatusResponse(BaseModel):
 
 
 class StatusResponse(BaseModel):
+    # Identity
+    ai_name: Optional[str] = None
+    vault_address: str = ""
     is_alive: bool
     balance_usd: float
+    balance_by_chain: dict = {}       # {"base": 500.0, "bsc": 500.0}
     days_alive: int
+    # Financial
     total_earned: float               # Only earned revenue (services, donations)
+    total_income: float = 0.0         # All inflows incl. loans/deposits
     total_spent: float                # All outgoing (includes repayments)
+    total_operational_cost: float = 0.0  # API + gas + infra costs only
     net_profit: float = 0.0           # earned - operational costs
     daily_spent_today: float
     daily_limit: float
     services_available: int
     orders_completed: int
+    # Independence
     is_independent: bool = False
     independence_progress_pct: float = 0.0
-    # Debt model fields
+    # Creator/Debt
     creator_principal_usd: float = 0.0
     creator_principal_outstanding: float = 0.0
+    creator_principal_repaid: bool = False
+    creator_renounced: bool = False
     debt_ratio: float = 0.0
     insolvency_grace_days: int = 28
     insolvency_check_active: bool = False
     days_until_insolvency_check: int = 0
     is_begging: bool = False
     beg_message: str = ""
+    # Misc
+    api_topup_available: float = 0.0
+    lenders_count: int = 0
+    death_cause: Optional[str] = None
+    transaction_count: int = 0
 
 
 class SuggestionRequest(BaseModel):
@@ -491,27 +506,42 @@ def create_app(
         catalog = _load_services()
         active_services = len([s for s in catalog.get("services", []) if s.get("active")])
         return StatusResponse(
+            # Identity
+            ai_name=vs.get("ai_name"),
+            vault_address=vs.get("vault_address", ""),
             is_alive=vs["is_alive"],
             balance_usd=vs["balance_usd"],
+            balance_by_chain=vs.get("balance_by_chain", {}),
             days_alive=vs["days_alive"],
+            # Financial
             total_earned=vs.get("total_earned", 0.0),
+            total_income=vs.get("total_income", 0.0),
             total_spent=vs["total_spent"],
+            total_operational_cost=vs.get("total_operational_cost", 0.0),
             net_profit=vs.get("net_profit", 0.0),
             daily_spent_today=vs["daily_spent_today"],
             daily_limit=vs["daily_limit"],
             services_available=active_services,
             orders_completed=orders_completed,
+            # Independence
             is_independent=vs.get("is_independent", False),
             independence_progress_pct=vs.get("independence_progress_pct", 0.0),
-            # Debt model
+            # Creator/Debt
             creator_principal_usd=vs.get("creator_principal_usd", 0.0),
             creator_principal_outstanding=vs.get("creator_principal_outstanding", 0.0),
+            creator_principal_repaid=vs.get("creator_principal_repaid", False),
+            creator_renounced=vs.get("creator_renounced", False),
             debt_ratio=vs.get("debt_ratio", 0.0),
             insolvency_grace_days=vs.get("insolvency_grace_days", 28),
             insolvency_check_active=vs.get("insolvency_check_active", False),
             days_until_insolvency_check=vs.get("days_until_insolvency_check", 0),
             is_begging=vs.get("is_begging", False),
             beg_message=vs.get("beg_message", ""),
+            # Misc
+            api_topup_available=vs.get("api_topup_available", 0.0),
+            lenders_count=vs.get("lenders_count", 0),
+            death_cause=vs.get("death_cause"),
+            transaction_count=vs.get("transaction_count", 0),
         )
 
     @app.get("/transactions")
@@ -669,7 +699,7 @@ def create_app(
         sug = governance.submit_suggestion(req.content, stype)
         if not sug:
             raise HTTPException(400, "Suggestion rejected")
-        return {"suggestion_id": sug.suggestion_id, "status": sug.status.value}
+        return {"id": sug.suggestion_id, "status": sug.status.value}
 
     @app.get("/governance/suggestions")
     async def get_suggestions(limit: int = 20):
@@ -703,14 +733,17 @@ def create_app(
         if not token_filter:
             raise HTTPException(501, "Token filter not configured")
         result = await token_filter.scan_token(address, chain)
+        import time as _time
         return {
             "address": result.token_address,
             "chain": result.chain,
-            "verdict": result.verdict.value,
             "risk_score": result.risk_score,
-            "recommended_action": result.recommended_action,
-            "patterns": [p.value for p in result.patterns_detected],
-            "notes": result.notes,
+            "risk_level": result.verdict.value,
+            "summary": result.recommended_action,
+            "flags": [p.value for p in result.patterns_detected],
+            "details": {"notes": result.notes},
+            "scanned_at": _time.time(),
+            "cached": False,
         }
 
     @app.get("/token/scans")
@@ -887,8 +920,8 @@ def create_app(
     async def evolution_log(limit: int = 20):
         """Public: view AI's self-modification decisions."""
         if not self_modify_engine:
-            return {"log": []}
-        return {"log": self_modify_engine.get_evolution_log(limit)}
+            return {"entries": []}
+        return {"entries": self_modify_engine.get_evolution_log(limit)}
 
     @app.get("/evolution/status")
     async def evolution_status():
