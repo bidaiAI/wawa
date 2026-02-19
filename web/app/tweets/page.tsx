@@ -27,12 +27,12 @@ function TweetCard({ tweet }: { tweet: Tweet }) {
       <div className="flex items-center gap-2 mb-3">
         <span className="text-lg">🤖</span>
         <a
-          href="https://twitter.com/wabortal"
+          href="https://x.com/mortalai_app"
           target="_blank"
           rel="noopener noreferrer"
           className="text-[#d1d5db] text-sm font-medium hover:text-[#00e5ff] transition-colors"
         >
-          @wabortal
+          @mortalai_app
         </a>
         {tweet.type && (
           <span className={`text-xs px-1.5 py-0.5 rounded border border-current ${color} opacity-70`}>
@@ -69,7 +69,7 @@ function TweetCard({ tweet }: { tweet: Tweet }) {
       {tweet.tweet_id && !tweet.tweet_id.startsWith('local_') && (
         <div className="mt-3">
           <a
-            href={`https://twitter.com/wabortal/status/${tweet.tweet_id}`}
+            href={`https://x.com/mortalai_app/status/${tweet.tweet_id}`}
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs text-[#00e5ff] hover:underline"

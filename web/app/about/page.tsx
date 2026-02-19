@@ -251,13 +251,13 @@ export default function AboutPage() {
             </div>
           </a>
           <a
-            href="https://twitter.com/wabortal"
+            href="https://x.com/mortalai_app"
             target="_blank" rel="noopener noreferrer"
             className="flex items-center gap-3 p-3 rounded-lg border border-[#1f2937] hover:border-[#00e5ff44] hover:text-[#00e5ff] transition-all group"
           >
             <span className="text-lg">🐦</span>
             <div>
-              <div className="text-[#d1d5db] text-sm group-hover:text-[#00e5ff]">@wabortal</div>
+              <div className="text-[#d1d5db] text-sm group-hover:text-[#00e5ff]">@mortalai_app</div>
               <div className="text-[#4b5563] text-xs">Live tweets + AI thought process</div>
             </div>
           </a>

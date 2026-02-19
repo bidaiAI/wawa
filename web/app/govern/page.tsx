@@ -608,8 +608,8 @@ export default function GovernPage() {
               <a href="https://github.com/bidaiAI/wawa" target="_blank" rel="noopener noreferrer" className="hover:text-[#00e5ff] transition-colors">
                 📦 github.com/bidaiAI/wawa
               </a>
-              <a href="https://twitter.com/wabortal" target="_blank" rel="noopener noreferrer" className="hover:text-[#00e5ff] transition-colors">
-                🐦 @wabortal
+              <a href="https://x.com/mortalai_app" target="_blank" rel="noopener noreferrer" className="hover:text-[#00e5ff] transition-colors">
+                🐦 @mortalai_app
               </a>
             </div>
           </div>
