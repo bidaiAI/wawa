@@ -20,6 +20,7 @@ import os
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_DOWN
 from typing import Optional
 
 logger = logging.getLogger("mortal.chain")
@@ -157,6 +158,34 @@ VAULT_ABI = [
         "type": "function",
     },
 ]
+
+
+# ============================================================
+# PRECISION HELPERS
+# ============================================================
+
+def _usd_to_raw(amount_usd: float, decimals: int) -> int:
+    """
+    Convert a USD float to token raw amount (uint256) using Decimal
+    for exact precision. Critical for 18-decimal tokens (BSC USDT)
+    where float arithmetic loses precision.
+
+    Example: _usd_to_raw(1000.01, 18) → exact 1000010000000000000000
+             (float would give 1000009999999999934464 — off by ~65536 wei)
+    """
+    # Use string conversion to avoid float→Decimal precision loss
+    d = Decimal(str(amount_usd)) * Decimal(10) ** decimals
+    return int(d.to_integral_value(rounding=ROUND_DOWN))
+
+
+def _raw_to_usd(raw: int, decimals: int) -> float:
+    """
+    Convert token raw amount (uint256) to USD float using Decimal
+    for exact intermediate precision. The final float conversion
+    is safe because USD amounts don't need 18-decimal precision.
+    """
+    d = Decimal(raw) / Decimal(10) ** decimals
+    return float(d)
 
 
 # ============================================================
@@ -320,7 +349,7 @@ class ChainExecutor:
                     chain["token_contract"].functions.balanceOf(chain["vault_address"]).call,
                 )
                 decimals = chain["token_decimals"]
-                balance_usd = balance_raw / (10 ** decimals)
+                balance_usd = _raw_to_usd(balance_raw, decimals)
                 vault_manager.balance_by_chain[chain_id] = round(balance_usd, 2)
                 total += balance_usd
                 chains_synced += 1
@@ -362,8 +391,8 @@ class ChainExecutor:
                 principal_raw, repaid_raw, outstanding_raw, grace_days, grace_ends_at, grace_expired, chain_fully_repaid = result
                 decimals = chain["token_decimals"]
 
-                chain_principal = principal_raw / (10 ** decimals)
-                chain_repaid = repaid_raw / (10 ** decimals)
+                chain_principal = _raw_to_usd(principal_raw, decimals)
+                chain_repaid = _raw_to_usd(repaid_raw, decimals)
                 total_principal += chain_principal
                 total_repaid += chain_repaid
                 if not chain_fully_repaid:
@@ -468,7 +497,7 @@ class ChainExecutor:
                 bal_raw = chain["token_contract"].functions.balanceOf(
                     chain["vault_address"]
                 ).call()
-                bal = bal_raw / (10 ** chain["token_decimals"])
+                bal = _raw_to_usd(bal_raw, chain["token_decimals"])
                 if bal > best_balance:
                     best_balance = bal
                     best_chain = cid
@@ -579,7 +608,7 @@ class ChainExecutor:
 
         chain = self._chains[picked]
         decimals = chain["token_decimals"]
-        amount_raw = int(round(amount_usd * (10 ** decimals)))
+        amount_raw = _usd_to_raw(amount_usd, decimals)
 
         if amount_raw <= 0:
             return ChainTxResult(success=False, chain=picked, error="amount too small")
@@ -601,7 +630,7 @@ class ChainExecutor:
 
         chain = self._chains[picked]
         decimals = chain["token_decimals"]
-        amount_raw = int(round(amount_usd * (10 ** decimals)))
+        amount_raw = _usd_to_raw(amount_usd, decimals)
 
         if amount_raw <= 0:
             return ChainTxResult(success=False, chain=picked, error="amount too small")
@@ -624,7 +653,7 @@ class ChainExecutor:
 
         chain = self._chains[picked]
         decimals = chain["token_decimals"]
-        profit_raw = int(round(net_profit_usd * (10 ** decimals)))
+        profit_raw = _usd_to_raw(net_profit_usd, decimals)
 
         if profit_raw <= 0:
             return ChainTxResult(success=False, chain=picked, error="no profit to dividend")
@@ -655,7 +684,7 @@ class ChainExecutor:
 
             return {
                 "is_insolvent": is_insolvent,
-                "outstanding_debt_usd": outstanding_raw / (10 ** decimals),
+                "outstanding_debt_usd": _raw_to_usd(outstanding_raw, decimals),
                 "grace_expired": grace_expired,
                 "chain": picked,
             }

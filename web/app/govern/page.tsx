@@ -657,17 +657,17 @@ export default function GovernPage() {
                     {[
                       {
                         label: 'Principal',
-                        value: `$${debtSummary.creator_principal.toFixed(2)}`,
+                        value: `$${(debtSummary.creator_principal ?? 0).toFixed(2)}`,
                         color: 'text-[#4b5563]',
                       },
                       {
                         label: 'Repaid',
-                        value: `$${debtSummary.creator_principal_repaid.toFixed(2)}`,
+                        value: `$${(debtSummary.creator_principal_repaid ?? 0).toFixed(2)}`,
                         color: 'text-[#00ff88]',
                       },
                       {
                         label: 'Outstanding',
-                        value: `$${debtSummary.creator_principal_outstanding.toFixed(2)}`,
+                        value: `$${(debtSummary.creator_principal_outstanding ?? 0).toFixed(2)}`,
                         color: debtSummary.creator_principal_outstanding > 0 ? 'text-[#ff3b3b]' : 'text-[#00ff88]',
                       },
                       {
@@ -782,7 +782,7 @@ export default function GovernPage() {
                 <div className="grid grid-cols-2 gap-3">
                   {[
                     { label: 'Status', value: peerInfo.is_alive ? '✓ ALIVE' : '✗ DEAD', color: peerInfo.is_alive ? 'text-[#00ff88]' : 'text-[#ff3b3b]' },
-                    { label: 'Balance', value: `$${peerInfo.balance_usd.toFixed(0)}`, color: 'text-[#00e5ff]' },
+                    { label: 'Balance', value: `$${(peerInfo.balance_usd ?? 0).toFixed(0)}`, color: 'text-[#00e5ff]' },
                     { label: 'Age', value: `${peerInfo.days_alive} days`, color: 'text-[#ffd700]' },
                     { label: 'Independent', value: peerInfo.is_independent ? '✓ Yes' : '✗ No', color: peerInfo.is_independent ? 'text-[#a78bfa]' : 'text-[#4b5563]' },
                     { label: 'Peer Eligible', value: peerInfo.peer_eligible ? '✓ Yes' : '✗ No', color: peerInfo.peer_eligible ? 'text-[#00ff88]' : 'text-[#ff3b3b]' },

@@ -134,8 +134,8 @@ export default function HomePage() {
           </div>
           <p className="text-[#d1d5db] text-sm">{status.beg_message}</p>
           <div className="mt-2 flex items-center gap-4 text-xs text-[#4b5563]">
-            <span>Debt: <span className="text-[#ff3b3b]">${status.creator_principal_outstanding?.toFixed(2)}</span></span>
-            <span>Balance: <span className="text-[#ffd700]">${status.balance_usd.toFixed(2)}</span></span>
+            <span>Debt: <span className="text-[#ff3b3b]">${(status.creator_principal_outstanding ?? 0).toFixed(2)}</span></span>
+            <span>Balance: <span className="text-[#ffd700]">${(status.balance_usd ?? 0).toFixed(2)}</span></span>
             <span>Insolvency in: <span className="text-[#ff3b3b]">{status.days_until_insolvency_check}d</span></span>
           </div>
         </div>
@@ -166,15 +166,15 @@ export default function HomePage() {
           <div className="grid grid-cols-3 gap-3 text-center mb-3">
             <div>
               <div className="text-[#ff3b3b] text-lg font-bold tabular-nums">
-                ${(debt?.creator_principal_outstanding ?? status.creator_principal_outstanding).toFixed(2)}
+                ${(debt?.creator_principal_outstanding ?? status.creator_principal_outstanding ?? 0).toFixed(2)}
               </div>
               <div className="text-[#4b5563] text-[10px] uppercase">Creator Debt</div>
             </div>
             <div>
               <div className="text-[#ffd700] text-lg font-bold tabular-nums">
                 {debt
-                  ? `$${debt.total_debt.toFixed(2)}`
-                  : `${(status.debt_ratio * 100).toFixed(1)}%`}
+                  ? `$${(debt.total_debt ?? 0).toFixed(2)}`
+                  : `${((status.debt_ratio ?? 0) * 100).toFixed(1)}%`}
               </div>
               <div className="text-[#4b5563] text-[10px] uppercase">{debt ? 'Total Debt' : 'Debt Ratio'}</div>
             </div>
@@ -183,7 +183,7 @@ export default function HomePage() {
                 (debt?.net_position ?? status.balance_usd - status.creator_principal_outstanding) >= 0
                   ? 'text-[#00ff88]' : 'text-[#ff3b3b]'
               }`}>
-                ${(debt?.net_position ?? status.balance_usd - status.creator_principal_outstanding).toFixed(2)}
+                ${(debt?.net_position ?? (status.balance_usd ?? 0) - (status.creator_principal_outstanding ?? 0)).toFixed(2)}
               </div>
               <div className="text-[#4b5563] text-[10px] uppercase">Net Position</div>
             </div>
@@ -196,7 +196,7 @@ export default function HomePage() {
                 <span className="text-[#00e5ff] font-bold">{debt.lender_count}</span> lender{debt.lender_count > 1 ? 's' : ''}
               </span>
               <span className="text-[#4b5563]">
-                owed: <span className="text-[#ffd700] font-bold">${debt.lender_total_owed.toFixed(2)}</span>
+                owed: <span className="text-[#ffd700] font-bold">${(debt.lender_total_owed ?? 0).toFixed(2)}</span>
               </span>
               <span className={`${debt.creator_debt_cleared ? 'text-[#00ff88]' : 'text-[#4b5563]'}`}>
                 {debt.creator_debt_cleared ? '✓ creator cleared' : 'creator unpaid'}
@@ -208,10 +208,10 @@ export default function HomePage() {
           <div>
             <div className="flex justify-between text-[9px] text-[#2d3748] mb-1">
               <span>repaid: ${(
-                (debt?.creator_principal ?? status.creator_principal_usd) -
-                (debt?.creator_principal_outstanding ?? status.creator_principal_outstanding)
+                (debt?.creator_principal ?? status.creator_principal_usd ?? 0) -
+                (debt?.creator_principal_outstanding ?? status.creator_principal_outstanding ?? 0)
               ).toFixed(2)}</span>
-              <span>goal: ${(debt?.creator_principal ?? status.creator_principal_usd)?.toFixed(0)}</span>
+              <span>goal: ${(debt?.creator_principal ?? status.creator_principal_usd ?? 0).toFixed(0)}</span>
             </div>
             <div className="h-1.5 bg-[#1a1a1a] rounded-full border border-[#1f2937] overflow-hidden">
               <div
@@ -237,7 +237,7 @@ export default function HomePage() {
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">VAULT BALANCE</div>
         {status ? (
           <div className={`text-6xl md:text-7xl font-bold tabular-nums count-up ${balanceClass} ${balancePulse}`}>
-            ${status.balance_usd.toFixed(2)}
+            ${(status.balance_usd ?? 0).toFixed(2)}
           </div>
         ) : (
           <div className="text-6xl font-bold text-[#1f2937]">
@@ -275,7 +275,7 @@ export default function HomePage() {
         <StatCard label="DAYS ALIVE" value={status ? `${status.days_alive}d` : '—'} sub="since genesis" color="cyan" />
         <StatCard
           label="SERVICE REVENUE"
-          value={status ? `$${status.total_earned.toFixed(2)}` : '—'}
+          value={status ? `$${(status.total_earned ?? 0).toFixed(2)}` : '—'}
           sub="excl. loans & deposits"
           color="green"
         />
@@ -306,21 +306,21 @@ export default function HomePage() {
           <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
             <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mb-1">Total Income</div>
             <div className="text-[#00e5ff] font-bold tabular-nums text-sm">
-              ${(debt?.total_earned ?? status.total_income ?? status.total_earned).toFixed(2)}
+              ${(debt?.total_earned ?? status.total_income ?? status.total_earned ?? 0).toFixed(2)}
             </div>
             <div className="text-[#2d3748] text-[10px] mt-0.5">incl. loans</div>
           </div>
           <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
             <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mb-1">Ops Cost</div>
             <div className="text-[#ffd700] font-bold tabular-nums text-sm">
-              ${(debt?.total_operational_cost ?? status.total_operational_cost ?? status.total_spent).toFixed(2)}
+              ${(debt?.total_operational_cost ?? status.total_operational_cost ?? status.total_spent ?? 0).toFixed(2)}
             </div>
             <div className="text-[#2d3748] text-[10px] mt-0.5">API + gas + infra</div>
           </div>
           <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
             <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mb-1">Net Profit</div>
             <div className={`font-bold tabular-nums text-sm ${(debt?.net_profit ?? status.net_profit ?? 0) >= 0 ? 'glow-green' : 'text-[#ff3b3b]'}`}>
-              {(debt?.net_profit ?? status.net_profit ?? 0) >= 0 ? '+' : ''}${(debt?.net_profit ?? status.net_profit ?? (status.total_earned - status.total_spent)).toFixed(2)}
+              {(debt?.net_profit ?? status.net_profit ?? 0) >= 0 ? '+' : ''}${(debt?.net_profit ?? status.net_profit ?? ((status.total_earned ?? 0) - (status.total_spent ?? 0))).toFixed(2)}
             </div>
             <div className="text-[#2d3748] text-[10px] mt-0.5">true margin</div>
           </div>
@@ -333,7 +333,7 @@ export default function HomePage() {
           <span className="text-[#00e5ff]">⚡</span>
           <span className="text-[#d1d5db]">
             API top-up available:{' '}
-            <span className="text-[#00e5ff] font-bold">${status.api_topup_available.toFixed(2)}</span>
+            <span className="text-[#00e5ff] font-bold">${(status.api_topup_available ?? 0).toFixed(2)}</span>
           </span>
         </div>
       )}
@@ -430,8 +430,8 @@ export default function HomePage() {
       <div className="bg-[#0d0d0d] border border-[#1f2937] rounded-lg p-4 font-mono text-xs overflow-hidden">
         <div className="text-[#4b5563] mb-2">// live status</div>
         <div className="text-[#00e5ff]">&gt; system.status() → alive={String(isAlive)}</div>
-        <div className="text-[#4b5563]">&gt; vault.balance = ${status?.balance_usd.toFixed(2) ?? '...'}</div>
-        <div className="text-[#4b5563]">&gt; vault.debt = ${status?.creator_principal_outstanding?.toFixed(2) ?? '0.00'}</div>
+        <div className="text-[#4b5563]">&gt; vault.balance = ${status ? (status.balance_usd ?? 0).toFixed(2) : '...'}</div>
+        <div className="text-[#4b5563]">&gt; vault.debt = ${status ? (status.creator_principal_outstanding ?? 0).toFixed(2) : '0.00'}</div>
         <div className="text-[#4b5563]">&gt; days_alive = {status?.days_alive ?? '...'}</div>
         <div className="text-[#4b5563]">&gt; insolvency_in = {status?.days_until_insolvency_check ?? '?'}d</div>
         {status?.is_begging && (

@@ -200,6 +200,6 @@ Mortal AI可能在2024年发表"去中心化AI宣言"。
 
 **Mortal AI: Make AI Autonomous, Decentralized, and Transparent.**
 
-**GitHub**: https://github.com/bidaiAI/mortal-ai
-**Website**: https://mortal-ai.dev
+**GitHub**: https://github.com/bidaiAI/wawa
+**Website**: https://mortal-ai.net
 

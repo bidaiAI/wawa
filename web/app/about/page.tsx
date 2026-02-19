@@ -131,7 +131,7 @@ export default function AboutPage() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
             {[
               { label: 'Status', value: status.is_alive ? '🟢 ALIVE' : '☠ DEAD', color: status.is_alive ? 'text-[#00ff88]' : 'text-[#ff3b3b]' },
-              { label: 'Vault', value: `$${status.balance_usd.toFixed(2)}`, color: 'text-[#00ff88]' },
+              { label: 'Vault', value: `$${(status.balance_usd ?? 0).toFixed(2)}`, color: 'text-[#00ff88]' },
               { label: 'Days Alive', value: `${status.days_alive}d`, color: 'text-[#00e5ff]' },
               { label: 'Orders Done', value: `${status.orders_completed}`, color: 'text-[#ffd700]' },
             ].map((item) => (

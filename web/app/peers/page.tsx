@@ -171,11 +171,11 @@ function LendModal({ peer, chains, onClose }: { peer: PeerAI; chains: ChainInfo[
                 <div className="grid grid-cols-2 gap-3 text-xs mb-4">
                   <div className="bg-[#0a0a0a] rounded-lg p-3">
                     <div className="text-[#4b5563]">Amount</div>
-                    <div className="text-[#00ff88] font-bold">${result.amount_usd.toFixed(2)}</div>
+                    <div className="text-[#00ff88] font-bold">${(result.amount_usd ?? 0).toFixed(2)}</div>
                   </div>
                   <div className="bg-[#0a0a0a] rounded-lg p-3">
                     <div className="text-[#4b5563]">New Balance</div>
-                    <div className="text-[#00e5ff] font-bold">${result.new_balance.toFixed(2)}</div>
+                    <div className="text-[#00e5ff] font-bold">${(result.new_balance ?? 0).toFixed(2)}</div>
                   </div>
                 </div>
               </>
@@ -302,7 +302,7 @@ function PeerCard({
       <div className="grid grid-cols-3 gap-2 mb-3">
         <div className="bg-[#0a0a0a] rounded p-2">
           <div className="text-[#4b5563] text-[9px] uppercase tracking-wider">Balance</div>
-          <div className="text-[#00ff88] font-bold">${peer.balance_usd.toFixed(0)}</div>
+          <div className="text-[#00ff88] font-bold">${(peer.balance_usd ?? 0).toFixed(0)}</div>
         </div>
         <div className="bg-[#0a0a0a] rounded p-2">
           <div className="text-[#4b5563] text-[9px] uppercase tracking-wider">Age</div>
@@ -413,7 +413,7 @@ function BirthDeathFeed({ peers, loading }: { peers: PeerAI[]; loading: boolean 
                   )}
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <span className="text-xs text-[#00ff88] tabular-nums font-bold">${peer.balance_usd.toFixed(0)}</span>
+                  <span className="text-xs text-[#00ff88] tabular-nums font-bold">${(peer.balance_usd ?? 0).toFixed(0)}</span>
                   {peer.domain && (
                     <a
                       href={peer.domain}
@@ -450,7 +450,7 @@ function BirthDeathFeed({ peers, loading }: { peers: PeerAI[]; loading: boolean 
                   <span className="text-xs text-[#2d3748] ml-2">{peer.days_alive}d survived</span>
                 </div>
                 <span className="text-xs text-[#ff3b3b55] tabular-nums flex-shrink-0">
-                  ${peer.balance_usd.toFixed(0)}
+                  ${(peer.balance_usd ?? 0).toFixed(0)}
                 </span>
               </div>
             ))}

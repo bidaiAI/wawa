@@ -47,7 +47,7 @@ function DebtBar({ status }: { status: VaultStatus }) {
         </div>
         <div>
           <div className={`text-lg font-bold tabular-nums ${canCover ? 'text-[#00ff88]' : 'text-[#ffd700]'}`}>
-            ${status.balance_usd.toFixed(2)}
+            ${(status.balance_usd ?? 0).toFixed(2)}
           </div>
           <div className="text-[#4b5563] text-[10px] uppercase">Vault Balance</div>
         </div>

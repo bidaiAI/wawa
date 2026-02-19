@@ -37,6 +37,7 @@ import json
 import time
 import argparse
 import logging
+from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -361,11 +362,11 @@ def deploy(
     token_address = Web3.to_checksum_address(chain["token_address"])
     token_contract = w3.eth.contract(address=token_address, abi=ERC20_ABI)
     decimals = token_contract.functions.decimals().call()
-    principal_raw = int(principal_usd * (10 ** decimals))
+    principal_raw = int(Decimal(str(principal_usd)) * Decimal(10) ** decimals)
 
     # Check token balance
     token_balance = token_contract.functions.balanceOf(deployer).call()
-    token_balance_usd = token_balance / (10 ** decimals)
+    token_balance_usd = float(Decimal(token_balance) / Decimal(10) ** decimals)
     logger.info(f"{chain['token_symbol']} balance: {token_balance_usd:.2f}")
 
     if token_balance < principal_raw:
@@ -399,7 +400,7 @@ def deploy(
 
     # Independence threshold
     independence_usd = float(os.getenv("INDEPENDENCE_THRESHOLD_USD", "1000000"))
-    independence_raw = int(independence_usd * (10 ** decimals))
+    independence_raw = int(Decimal(str(independence_usd)) * Decimal(10) ** decimals)
 
     logger.info("=" * 60)
     logger.info("DEPLOYMENT PLAN")
