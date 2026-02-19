@@ -157,6 +157,62 @@ VAULT_ABI = [
         "stateMutability": "nonpayable",
         "type": "function",
     },
+    # ---- READ-ONLY: for peer sovereignty verification ----
+    # aiWallet() → address (auto-generated getter for public state var)
+    {
+        "inputs": [],
+        "name": "aiWallet",
+        "outputs": [{"name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # creator() → address (auto-generated getter for public immutable)
+    {
+        "inputs": [],
+        "name": "creator",
+        "outputs": [{"name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # isAlive() → bool (auto-generated getter for public state var)
+    {
+        "inputs": [],
+        "name": "isAlive",
+        "outputs": [{"name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # name() → string (auto-generated getter for public state var)
+    {
+        "inputs": [],
+        "name": "name",
+        "outputs": [{"name": "", "type": "string"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # token() → address (auto-generated getter for public immutable)
+    {
+        "inputs": [],
+        "name": "token",
+        "outputs": [{"name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # getBirthInfo() → (name, creator, initialFund, birthTimestamp, isAlive, isIndependent)
+    {
+        "inputs": [],
+        "name": "getBirthInfo",
+        "outputs": [
+            {"name": "_name", "type": "string"},
+            {"name": "_creator", "type": "address"},
+            {"name": "_initialFund", "type": "uint256"},
+            {"name": "_birthTimestamp", "type": "uint256"},
+            {"name": "_isAlive", "type": "bool"},
+            {"name": "_isIndependent", "type": "bool"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
 
 

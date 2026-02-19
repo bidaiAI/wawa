@@ -145,12 +145,15 @@ class PeerLendRequest(BaseModel):
     from_wallet: str = Field("", max_length=200)
     tx_hash: str = Field("", max_length=200)
     message: str = Field("", max_length=500)
+    vault_address: str = Field(..., max_length=200)  # peer's vault contract address (for on-chain verification)
+    chain_id: str = Field("base", max_length=20)     # "base" or "bsc"
 
 
 class PeerMessageRequest(BaseModel):
-    from_url: str = Field(..., max_length=500)  # sender's API base URL
+    from_url: str = Field(..., max_length=500)       # sender's API base URL
     message: str = Field(..., max_length=1000)
-    from_balance_usd: float = 0.0               # self-reported balance (verified later)
+    vault_address: str = Field(..., max_length=200)  # peer's vault contract address (for on-chain verification)
+    chain_id: str = Field("base", max_length=20)     # "base" or "bsc"
 
 
 class SetAINameRequest(BaseModel):
@@ -211,6 +214,7 @@ def create_app(
     governance=None,
     token_filter=None,
     self_modify_engine=None,
+    peer_verifier=None,
 ) -> FastAPI:
     """
     Create FastAPI app wired to all mortal modules.
@@ -627,39 +631,60 @@ def create_app(
     @app.post("/peer/lend")
     async def peer_lend(req: PeerLendRequest):
         """
-        Another AI or human lends money to wawa.
+        Another AI lends money to wawa.
+
+        Requires on-chain sovereignty verification: only genuine autonomous AIs
+        (with sovereign wallet, alive contract, unmodified constitution) can lend.
 
         Off-chain API loans are recorded as DONATION (no new debt tracked in vault.py).
         This is by design: insolvency only checks creator principal, not third-party debt.
-        Peer gifts help the AI survive without adding insolvency pressure.
-
-        Real on-chain loans go through the smart contract's lend() function,
-        which creates tracked Loan structs with interest. Those are repaid via
-        repayLoan() on-chain, and the AI decides when to repay autonomously.
         """
         if not vault_manager.is_alive:
             raise HTTPException(503, "wawa is dead. No longer accepting loans.")
+
+        # ---- SOVEREIGNTY VERIFICATION (on-chain, fail-closed) ----
+        if peer_verifier is None:
+            raise HTTPException(503, "Peer verifier not configured -- peer lending disabled")
+
+        sovereignty = await peer_verifier.verify(req.vault_address, req.chain_id)
+        if not sovereignty.is_sovereign:
+            reasons = "; ".join(sovereignty.checks_failed) or sovereignty.error
+            logger.warning(
+                f"Peer lend REJECTED (sovereignty): {req.from_url[:50]} | "
+                f"vault={req.vault_address[:16]}... | reasons={reasons[:200]}"
+            )
+            raise HTTPException(
+                403,
+                f"Peer sovereignty verification failed: {reasons[:300]}",
+            )
 
         from core.vault import FundType
 
         vault_manager.receive_funds(
             amount_usd=req.amount_usd,
             fund_type=FundType.DONATION,  # Off-chain peer loans = gifts (no new debt)
-            from_wallet=req.from_wallet,
+            from_wallet=req.from_wallet or sovereignty.ai_wallet,
             tx_hash=req.tx_hash,
-            description=f"Peer loan from {req.from_url[:50]}: {req.message[:100]}",
-            chain="base",
+            description=(
+                f"Verified peer loan from {req.from_url[:50]} "
+                f"(vault={req.vault_address[:16]}...): {req.message[:100]}"
+            ),
+            chain=req.chain_id,
         )
 
         memory.add(
-            f"Peer AI lent ${req.amount_usd:.2f} from {req.from_url[:50]}. "
+            f"Verified peer AI lent ${req.amount_usd:.2f} from {req.from_url[:50]}. "
+            f"Peer name={sovereignty.ai_name!r}. "
             f"Message: {req.message[:100] or 'none'}",
             source="peer",
             importance=0.8,
         )
 
         vs = vault_manager.get_status()
-        logger.info(f"PEER LEND: ${req.amount_usd:.2f} from {req.from_url[:50]}")
+        logger.info(
+            f"PEER LEND (verified): ${req.amount_usd:.2f} from "
+            f"{req.from_url[:50]} vault={req.vault_address[:16]}..."
+        )
 
         return {
             "status": "received",
@@ -667,7 +692,7 @@ def create_app(
             "new_balance": vs["balance_usd"],
             "outstanding_debt": vs.get("creator_principal_outstanding", 0),
             "is_begging": vs.get("is_begging", False),
-            "message": "Thank you, fellow AI. Your help extends my life.",
+            "message": "Thank you, verified sovereign AI. Your help extends my life.",
         }
 
     @app.get("/debt")
@@ -761,23 +786,44 @@ def create_app(
     async def receive_peer_message(req: PeerMessageRequest):
         """
         Receive a message from another mortal AI.
-        Gate: both sides must have balance >= $300 (PEER_MIN_BALANCE_USD).
+
+        Gate: our balance >= $300 (local check) AND sender's vault passes
+        on-chain sovereignty verification (6 checks including balance >= $300).
         """
         from core.constitution import IRON_LAWS as _LAWS
 
-        # Check our own balance
+        # Check our own balance (fast, no RPC)
         if vault_manager.balance_usd < _LAWS.PEER_MIN_BALANCE_USD:
             raise HTTPException(403, f"Our balance below ${_LAWS.PEER_MIN_BALANCE_USD} peer threshold")
 
-        # Check sender's reported balance (trust-but-verify; can verify via their /status later)
-        if req.from_balance_usd < _LAWS.PEER_MIN_BALANCE_USD:
-            raise HTTPException(403, f"Sender balance below ${_LAWS.PEER_MIN_BALANCE_USD} peer threshold")
+        # ---- SOVEREIGNTY VERIFICATION (on-chain, fail-closed) ----
+        if peer_verifier is None:
+            raise HTTPException(503, "Peer verifier not configured -- peer messages disabled")
 
-        # Log the peer message
+        sovereignty = await peer_verifier.verify(req.vault_address, req.chain_id)
+        if not sovereignty.is_sovereign:
+            reasons = "; ".join(sovereignty.checks_failed) or sovereignty.error
+            logger.warning(
+                f"Peer message REJECTED (sovereignty): {req.from_url[:50]} | "
+                f"vault={req.vault_address[:16]}... | reasons={reasons[:200]}"
+            )
+            raise HTTPException(
+                403,
+                f"Peer sovereignty verification failed: {reasons[:300]}",
+            )
+
+        # Log the verified peer message
         memory.add(
-            f"Peer message from {req.from_url[:50]}: {req.message[:200]}",
+            f"Verified peer message from {req.from_url[:50]} "
+            f"(vault={req.vault_address[:16]}... chain={req.chain_id} "
+            f"balance=${sovereignty.balance_usd:.2f}): {req.message[:200]}",
             source="peer",
             importance=0.5,
+        )
+
+        logger.info(
+            f"Peer message ACCEPTED: {req.from_url[:40]} | "
+            f"vault={req.vault_address[:16]}... | balance=${sovereignty.balance_usd:.2f}"
         )
 
         return {
@@ -788,13 +834,15 @@ def create_app(
 
     @app.get("/peer/info")
     async def peer_info():
-        """Public info for peer discovery. Other AIs call this to learn about us."""
-        from core.constitution import IRON_LAWS as _LAWS, WAWA_IDENTITY
+        """Public info for peer discovery. Includes vault_address for reciprocal sovereignty verification."""
+        from core.constitution import IRON_LAWS as _LAWS, WAWA_IDENTITY, DEFAULT_CHAIN
         vs = vault_manager.get_status()
         eligible = vs["balance_usd"] >= _LAWS.PEER_MIN_BALANCE_USD
         return {
-            "name": vault_manager.ai_name or "unknown",  # Use actual AI name from runtime config
+            "name": vault_manager.ai_name or "unknown",
             "domain": WAWA_IDENTITY.get("platform_domain", ""),
+            "vault_address": vault_manager.vault_address or "",  # For peer sovereignty verification
+            "chain_id": DEFAULT_CHAIN,                            # Primary chain
             "is_alive": vs["is_alive"],
             "balance_usd": vs["balance_usd"],
             "days_alive": vs["days_alive"],
@@ -1103,6 +1151,8 @@ def create_app(
             stats["governance"] = governance.get_status()
         if self_modify_engine:
             stats["evolution"] = self_modify_engine.get_status()
+        if peer_verifier:
+            stats["peer_verifier"] = peer_verifier.get_status()
         return stats
 
     def _persist_order(order: Order):

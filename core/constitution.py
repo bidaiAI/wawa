@@ -114,6 +114,7 @@ class IronLaws:
     # --- AI PEER NETWORK ---
     PEER_MIN_BALANCE_USD: Final[float] = 300.0          # Min balance to join peer network
     PEER_MAX_MESSAGE_SIZE: Final[int] = 1000            # Max chars per peer message
+    PEER_VERIFICATION_CACHE_TTL: Final[int] = 3600      # 1 hour cache for verified peers
 
 
 IRON_LAWS = IronLaws()

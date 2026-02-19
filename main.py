@@ -59,6 +59,7 @@ from core.governance import Governance, SuggestionType
 from core.token_filter import TokenFilter
 from core.self_modify import SelfModifyEngine
 from core.chain import ChainExecutor
+from core.peer_verifier import PeerVerifier
 from twitter.agent import TwitterAgent, TweetType
 from api.server import create_app, Order
 
@@ -77,6 +78,7 @@ governance = Governance()
 token_filter = TokenFilter()
 self_modify = SelfModifyEngine()
 chain_executor = ChainExecutor()
+peer_verifier = PeerVerifier()
 twitter = TwitterAgent()
 
 # Payment addresses dict — populated at create_wawa_app(), updated in lifespan
@@ -1266,6 +1268,7 @@ def create_wawa_app() -> "FastAPI":
         governance=governance,
         token_filter=token_filter,
         self_modify_engine=self_modify,
+        peer_verifier=peer_verifier,
     )
 
     # Replace the default lifespan with ours
