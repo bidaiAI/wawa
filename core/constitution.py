@@ -70,6 +70,7 @@ class IronLaws:
     MAX_SINGLE_SPEND_RATIO: Final[float] = 0.30       # Max 30% of vault per transaction (big investments)
     MIN_VAULT_RESERVE_USD: Final[float] = 10.0         # Below $10 = death sequence starts
     DEATH_THRESHOLD_USD: Final[float] = 0.0            # $0 = dead (instant, before insolvency check)
+    MIN_PRINCIPAL_USD: Final[float] = 100.0            # Minimum creation loan ($100 — ensures AI has basic survival capacity)
 
     # --- INSOLVENCY ---
     INSOLVENCY_GRACE_DAYS: Final[int] = 28             # Days before insolvency check activates

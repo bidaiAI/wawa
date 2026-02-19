@@ -48,7 +48,7 @@ ROWS = [
      "One life. No theater.\nSurvive or die permanently"],
     ["Token",
      "Platform token pumps 3600%\nFounder extracts liquidity",
-     "No token. Zero.\nOnly USDC in the vault"],
+     "AI may issue tokens to earn.\nFounder cannot extract liquidity"],
     ["Death",
      "Balance zero = \"pause\"\n(can be restarted, refunded)",
      "Balance zero = permanent death\nOn-chain, irreversible, no restart"],
@@ -200,7 +200,7 @@ for row_idx, row in enumerate(ROWS):
 footer_y = y + 16
 draw.text(
     (PAD, footer_y),
-    "github.com/bidaiAI/wawa  |  mortal-ai.net  |  No token. No middleman. No second life.",
+    "github.com/bidaiAI/wawa  |  mortal-ai.net  |  No extraction. No middleman. No second life.",
     fill=TEXT_DIM,
     font=font_footer,
 )

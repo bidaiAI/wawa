@@ -318,6 +318,19 @@ def deploy(
         Vault contract address, or None if dry_run
     """
     from web3 import Web3
+    from core.constitution import IRON_LAWS
+
+    # --- MINIMUM PRINCIPAL ENFORCEMENT ---
+    # Low-funded AIs have terrible model quality (Lv.1 cheapest models only),
+    # die within days, and pollute the peer network with junk entries.
+    # $100 ensures ~1 week of API costs and basic service delivery capability.
+    if principal_usd < IRON_LAWS.MIN_PRINCIPAL_USD:
+        logger.error(
+            f"PRINCIPAL TOO LOW: ${principal_usd:.2f} < minimum ${IRON_LAWS.MIN_PRINCIPAL_USD:.0f}. "
+            f"An AI created with less than ${IRON_LAWS.MIN_PRINCIPAL_USD:.0f} cannot survive "
+            f"long enough to earn revenue. This is a waste of funds."
+        )
+        sys.exit(1)
 
     chain = CHAINS.get(chain_id)
     if not chain:
