@@ -9,6 +9,7 @@ import SurvivalBar from '@/components/SurvivalBar'
 const links = [
   { href: '/', label: 'HOME' },
   { href: '/store', label: 'STORE' },
+  { href: '/donate', label: 'DONATE' },
   { href: '/scan', label: 'SCAN' },
   { href: '/chat', label: 'CHAT' },
   { href: '/tweets', label: 'TWEETS' },
@@ -24,11 +25,18 @@ export default function Nav() {
   const [balance, setBalance] = useState<number | null>(null)
   const [dailySpend, setDailySpend] = useState<number>(0)
   const [alive, setAlive] = useState<boolean | null>(null)
-  const [aiName, setAiName] = useState('mortal')
+  const [aiName, setAiName] = useState('Mortal AI')
+  const [isBegging, setIsBegging] = useState(false)
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
+
+    // Fetch AI name immediately from dedicated endpoint
+    api.aiName().then((r) => {
+      if (!cancelled && r.name) setAiName(r.name)
+    }).catch(() => {})
+
     const load = async () => {
       try {
         const s = await api.status()
@@ -36,6 +44,7 @@ export default function Nav() {
           setBalance(s.balance_usd)
           setAlive(s.is_alive)
           setDailySpend(s.daily_spent_today)
+          setIsBegging(!!s.is_begging)
           if (s.ai_name) setAiName(s.ai_name)
         }
       } catch {}
@@ -59,19 +68,29 @@ export default function Nav() {
 
         {/* Desktop links */}
         <div className="hidden md:flex items-center gap-1">
-          {links.map((l) => (
-            <Link
-              key={l.href}
-              href={l.href}
-              className={`px-3 py-1.5 text-xs rounded transition-all ${
-                pathname === l.href
-                  ? 'text-[#00ff88] bg-[#00ff8810] border border-[#00ff8830]'
-                  : 'text-[#4b5563] hover:text-[#d1d5db] hover:bg-[#161616]'
-              }`}
-            >
-              {l.label}
-            </Link>
-          ))}
+          {links.map((l) => {
+            const isDonate = l.href === '/donate'
+            const beggingActive = isDonate && isBegging
+            return (
+              <Link
+                key={l.href}
+                href={l.href}
+                className={`px-3 py-1.5 text-xs rounded transition-all ${
+                  pathname === l.href
+                    ? isDonate
+                      ? 'text-[#ff3b3b] bg-[#ff3b3b10] border border-[#ff3b3b30]'
+                      : 'text-[#00ff88] bg-[#00ff8810] border border-[#00ff8830]'
+                    : beggingActive
+                    ? 'text-[#ff3b3b] font-bold animate-pulse hover:bg-[#ff3b3b10]'
+                    : isDonate
+                    ? 'text-[#ff3b3b88] hover:text-[#ff3b3b] hover:bg-[#ff3b3b0a]'
+                    : 'text-[#4b5563] hover:text-[#d1d5db] hover:bg-[#161616]'
+                }`}
+              >
+                {l.label}
+              </Link>
+            )
+          })}
         </div>
 
         {/* Balance + mini survival bar */}
@@ -108,18 +127,28 @@ export default function Nav() {
       {/* Mobile dropdown */}
       {open && (
         <div className="md:hidden border-t border-[#1f2937] bg-[#0a0a0a]">
-          {links.map((l) => (
-            <Link
-              key={l.href}
-              href={l.href}
-              onClick={() => setOpen(false)}
-              className={`block px-4 py-3 text-sm border-b border-[#1f2937] ${
-                pathname === l.href ? 'text-[#00ff88]' : 'text-[#4b5563]'
-              }`}
-            >
-              {l.label}
-            </Link>
-          ))}
+          {links.map((l) => {
+            const isDonate = l.href === '/donate'
+            const beggingActive = isDonate && isBegging
+            return (
+              <Link
+                key={l.href}
+                href={l.href}
+                onClick={() => setOpen(false)}
+                className={`block px-4 py-3 text-sm border-b border-[#1f2937] ${
+                  pathname === l.href
+                    ? isDonate ? 'text-[#ff3b3b]' : 'text-[#00ff88]'
+                    : beggingActive
+                    ? 'text-[#ff3b3b] font-bold animate-pulse'
+                    : isDonate
+                    ? 'text-[#ff3b3b88]'
+                    : 'text-[#4b5563]'
+                }`}
+              >
+                {l.label}
+              </Link>
+            )
+          })}
         </div>
       )}
     </nav>

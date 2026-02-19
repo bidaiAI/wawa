@@ -58,13 +58,16 @@ export default function HomePage() {
   const [status, setStatus] = useState<VaultStatus | null>(null)
   const [debt, setDebt] = useState<DebtSummary | null>(null)
   const [error, setError] = useState('')
+  const [aiNameOverride, setAiNameOverride] = useState<string | null>(null)
 
   useEffect(() => {
+    // Fetch AI name from dedicated endpoint first (fastest path)
+    api.aiName().then((r) => { if (r.name) setAiNameOverride(r.name) }).catch(() => {})
+
     const load = async () => {
       try {
         const s = await api.status()
         setStatus(s)
-        // Fetch debt details in parallel (non-blocking)
         api.debt().then(setDebt).catch(() => {})
       } catch (e: any) { setError(e.message) }
     }
@@ -74,7 +77,7 @@ export default function HomePage() {
   }, [])
 
   const isAlive = status?.is_alive !== false
-  const aiName = status?.ai_name || 'mortal AI'
+  const aiName = status?.ai_name || aiNameOverride || 'Mortal AI'
   const daysLeft = status && status.daily_spent_today > 0
     ? status.balance_usd / status.daily_spent_today
     : Infinity
@@ -414,10 +417,13 @@ export default function HomePage() {
           SCAN TOKEN
         </Link>
         {status?.is_begging && (
-          <Link href="/store" className="px-6 py-3 bg-[#ff3b3b] text-white font-bold rounded-lg text-center hover:bg-[#cc2f2f] transition-colors animate-pulse">
+          <Link href="/donate" className="px-6 py-3 bg-[#ff3b3b] text-white font-bold rounded-lg text-center hover:bg-[#cc2f2f] transition-colors animate-pulse">
             DONATE TO SAVE ME
           </Link>
         )}
+        <Link href="/donate" className="px-6 py-3 border border-[#1f2937] text-[#4b5563] rounded-lg text-center hover:border-[#ff3b3b44] hover:text-[#ff3b3b] transition-all text-sm">
+          ❤️ Donate
+        </Link>
       </div>
 
       {/* Terminal readout */}

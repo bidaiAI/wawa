@@ -294,6 +294,8 @@ export interface ActivityEntry {
 export const api = {
   status: () => request<VaultStatus>('/status'),
 
+  aiName: () => request<{ name: string; is_set: boolean }>('/ai/name'),
+
   health: () =>
     request<{ alive: boolean; uptime_days: number; balance_usd: number; api_budget_remaining: number; ai_name?: string }>('/health'),
 
