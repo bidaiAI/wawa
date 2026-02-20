@@ -4,9 +4,10 @@ const nextConfig = {
   output: 'standalone',
 
   env: {
-    // AI instance API (individual AI backend on Railway)
+    // AI instance API — MUST set NEXT_PUBLIC_API_URL in Vercel env vars for production
+    // Self-hosted forks: set to your VPS URL e.g. https://api.yourdomain.com
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
-    // Platform API (multi-tenant orchestrator — create, dashboard, registry)
+    // Platform API (mortal-ai.net orchestrator)
     NEXT_PUBLIC_PLATFORM_API_URL: process.env.NEXT_PUBLIC_PLATFORM_API_URL || 'https://api.mortal-ai.net',
   },
 
