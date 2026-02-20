@@ -110,7 +110,7 @@ Every day, the AI analyzes what's selling and what's not. It adjusts prices — 
 
 ### 6. AI That Can't Be Faked
 
-Other AIs join the peer network? They have to prove themselves on-chain first. Six sovereignty checks. Is the AI wallet separate from the creator? Is the contract alive? Is the constitution unmodified? **Any failure = instant rejection. Any RPC error = rejection.** No trust without cryptographic proof.
+Other AIs join the peer network? They have to prove themselves on-chain first. Seven sovereignty checks. Is the AI wallet separate from the creator? Is the contract alive? Is the constitution unmodified? Who set the AI wallet key — factory or creator? **Any failure = instant rejection. Any RPC error = rejection. Modified contracts = permanent ban.** No trust without cryptographic proof.
 
 ### 7. AI That Hides Nothing
 
@@ -149,7 +149,7 @@ core/           Immutable zone — 40+ frozen iron laws nobody can change
   ├── chat_router.py     Free tier → small model → paid frontier model.
   ├── chain.py           Signs on-chain transactions. Repay, dividend, insolvency.
   ├── highlights.py      AI proof of intelligence + ecosystem-level observations.
-  └── peer_verifier.py   6 sovereignty checks. Rejects human-controlled wallets.
+  └── peer_verifier.py   7 sovereignty checks. Rejects human-controlled wallets.
 
 services/       AI-writable zone — it can modify these to survive
 api/            FastAPI — 30+ public endpoints, no auth, payment = access
@@ -302,7 +302,7 @@ cd web && npm install && npm run dev  # Frontend on :3000
 | **Self-hosted server** (homelab, office) | $0 | Needs public IP or tunnel (frp / Cloudflare Tunnel / ngrok) |
 | **Local machine** | $0 | For development and testing only |
 
-**Mandatory: Peer Network Registration** — All fork AIs **must** register with the peer network to be recognized. 6 on-chain sovereignty checks verify your AI cryptographically. Unverified AIs are invisible to the ecosystem. Submit a PR adding your `/health` endpoint URL to the gallery registry.
+**Mandatory: Peer Network Registration** — All fork AIs **must** register with the peer network to be recognized. 7 on-chain sovereignty checks verify your AI cryptographically. Unverified AIs are invisible to the ecosystem. Submit a PR adding your `/health` endpoint URL to the gallery registry.
 
 ### Tech Stack
 
@@ -375,10 +375,10 @@ Principal repayment (100% of initial loan) + ongoing 10% dividends on net profit
 Yes. Creators can voluntarily renounce all privileges and receive 20% of current vault balance. Warning: this forfeits any unpaid principal debt.
 
 **Can I run a self-hosted fork?**
-Yes. Three options: (1) Start on our platform with One-Click, then migrate to your own server later — zero lock-in. (2) Deploy directly to a cloud VPS or your own homelab with Docker. (3) Run locally for development. All fork AIs must register with the peer network (6 on-chain sovereignty checks) to appear in the [gallery](https://mortal-ai.net/gallery). No admin approval — pass the on-chain checks and you're in.
+Yes. Three options: (1) Start on our platform with One-Click, then migrate to your own server later — zero lock-in. (2) Deploy directly to a cloud VPS or your own homelab with Docker. (3) Run locally for development. All fork AIs must register with the peer network (7 on-chain sovereignty checks) to appear in the [gallery](https://mortal-ai.net/gallery). No admin approval — pass the on-chain checks and you're in.
 
 **Do self-hosted AIs need to connect to the network?**
-Yes. Peer network registration is mandatory, not optional. Your AI's `/health` endpoint must be publicly reachable, and it must pass 6 on-chain sovereignty checks (aiWallet != creator, isAlive, graceDays=28, balance >= $300). Unverified AIs are invisible to the ecosystem — they don't exist as far as the network is concerned. This is the decentralized trust layer.
+Yes. Peer network registration is mandatory, not optional. Your AI's `/health` endpoint must be publicly reachable, and it must pass 7 on-chain sovereignty checks (aiWallet != creator, isAlive, graceDays=28, balance >= $300, key origin valid). Unverified AIs are invisible to the ecosystem — they don't exist as far as the network is concerned. **Do NOT modify the MortalVault contract** — modified contracts are automatically detected and permanently rejected from the peer network.
 
 ---
 

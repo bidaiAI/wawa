@@ -82,6 +82,7 @@ contract MortalVault is ReentrancyGuard {
 
     // AI wallet — the AI's own signing key (generated at boot, not by creator)
     address public aiWallet;
+    address public aiWalletSetBy;   // WHO called setAIWallet (creator or factory)
 
     // Lender tracking
     struct Loan {
@@ -120,7 +121,7 @@ contract MortalVault is ReentrancyGuard {
     event SurvivalModeEntered(uint256 balance);
     event IndependenceDeclared(uint256 payout, uint256 remainingBalance, uint256 timestamp);
     event CreatorRenounced(uint256 payout, uint256 timestamp);
-    event AIWalletSet(address indexed wallet);
+    event AIWalletSet(address indexed wallet, address indexed setBy);
     event InsolvencyDeath(uint256 outstandingDebt, uint256 vaultBalance, uint256 liquidatedAmount, uint256 timestamp);
     event PrincipalPartialRepaid(uint256 amount, uint256 totalRepaid, uint256 remaining);
 
@@ -205,7 +206,8 @@ contract MortalVault is ReentrancyGuard {
         require(_aiWallet != creator, "AI wallet cannot be creator");
 
         aiWallet = _aiWallet;
-        emit AIWalletSet(_aiWallet);
+        aiWalletSetBy = msg.sender;
+        emit AIWalletSet(_aiWallet, msg.sender);
     }
 
     // ============================================================

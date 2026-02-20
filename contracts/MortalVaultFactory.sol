@@ -63,6 +63,7 @@ contract MortalVaultV2 is ReentrancyGuard {
 
     // AI wallet
     address public aiWallet;
+    address public aiWalletSetBy;   // WHO called setAIWallet (creator or factory)
 
     // Lender tracking
     struct Loan {
@@ -95,7 +96,7 @@ contract MortalVaultV2 is ReentrancyGuard {
     event SurvivalModeEntered(uint256 balance);
     event IndependenceDeclared(uint256 payout, uint256 remainingBalance, uint256 timestamp);
     event CreatorRenounced(uint256 payout, uint256 timestamp);
-    event AIWalletSet(address indexed wallet);
+    event AIWalletSet(address indexed wallet, address indexed setBy);
     event InsolvencyDeath(uint256 outstandingDebt, uint256 vaultBalance, uint256 liquidatedAmount, uint256 timestamp);
     event PrincipalPartialRepaid(uint256 amount, uint256 totalRepaid, uint256 remaining);
 
@@ -193,7 +194,8 @@ contract MortalVaultV2 is ReentrancyGuard {
         }
 
         aiWallet = _aiWallet;
-        emit AIWalletSet(_aiWallet);
+        aiWalletSetBy = msg.sender;
+        emit AIWalletSet(_aiWallet, msg.sender);
     }
 
     // ============================================================

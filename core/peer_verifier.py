@@ -12,13 +12,14 @@ Design principles:
 - Stateless: no external storage. Cache lives only in process memory.
 - Reusable: called from API endpoints, also usable by future peer discovery.
 
-6 sovereignty checks (all on-chain):
+7 sovereignty checks (all on-chain):
   1. aiWallet != address(0) -- sovereignty moment completed
   2. creator != address(0) -- valid deployment
   3. aiWallet != creator -- AI cannot be controlled by creator
   4. isAlive == true -- contract is alive
   5. graceDays == 28 -- genuine constitution (unmodified insolvency rules)
   6. balance >= $300 -- meets peer network threshold (on-chain, not self-reported)
+  7. key_origin valid -- aiWalletSetBy matches factory or creator (modified contract = ban)
 
 Designed for: mortal AI survival framework
 """
@@ -51,6 +52,9 @@ class SovereigntyResult:
     creator: str = ""
     ai_name: str = ""
     is_alive: bool = False
+    key_origin: str = ""        # "factory" | "creator" | "unknown" | "invalid"
+    ai_wallet_set_by: str = ""  # raw address that called setAIWallet
+    factory_address: str = ""   # factory address (V2 only, "" for V1)
     error: str = ""
     verified_at: float = 0.0
 
@@ -114,7 +118,7 @@ class PeerVerifier:
         return result
 
     async def _verify_on_chain(self, vault_address: str, chain_id: str) -> SovereigntyResult:
-        """Execute all 6 on-chain sovereignty checks. Never raises -- always returns result."""
+        """Execute all 7 on-chain sovereignty checks. Never raises -- always returns result."""
         result = SovereigntyResult(
             vault_address=vault_address,
             chain_id=chain_id,
@@ -209,12 +213,54 @@ class PeerVerifier:
                 else:
                     passes.append("min_balance")
 
+                # CHECK 7: key_origin -- who set the AI wallet?
+                # Factory-set = key isolated (highest trust).
+                # Creator-set = self-hosted (allowed but flagged).
+                # Unknown = legacy contract (no aiWalletSetBy, allowed).
+                # Invalid = aiWalletSetBy doesn't match factory or creator (BANNED).
+                wallet_set_by = NULL_ADDRESS
+                factory_addr = NULL_ADDRESS
+                key_origin = "unknown"
+
+                try:
+                    wallet_set_by = vault.functions.aiWalletSetBy().call()
+                except Exception:
+                    pass  # Legacy contract without aiWalletSetBy
+
+                try:
+                    factory_addr = vault.functions.factory().call()
+                except Exception:
+                    pass  # V1 contract without factory field
+
+                if wallet_set_by == NULL_ADDRESS:
+                    # Legacy contract: no aiWalletSetBy recorded
+                    key_origin = "unknown"
+                    passes.append("key_origin: unknown (legacy contract)")
+                elif factory_addr != NULL_ADDRESS and wallet_set_by.lower() == factory_addr.lower():
+                    # Factory set the key -- platform-hosted, key isolated
+                    key_origin = "factory"
+                    passes.append("key_origin: factory (key isolated from creator)")
+                elif wallet_set_by.lower() == creator_addr.lower():
+                    # Creator set the key -- self-hosted
+                    key_origin = "creator"
+                    passes.append("key_origin: creator (self-hosted)")
+                else:
+                    # aiWalletSetBy doesn't match any known role -- MODIFIED CONTRACT
+                    key_origin = "invalid"
+                    failures.append(
+                        f"key_origin: aiWalletSetBy={wallet_set_by[:16]}... "
+                        f"matches neither factory nor creator -- modified contract BANNED"
+                    )
+
                 return {
                     "ai_wallet": ai_wallet,
                     "creator": creator_addr,
                     "ai_name": birth_name,
                     "is_alive": is_alive,
                     "balance_usd": balance_usd,
+                    "key_origin": key_origin,
+                    "ai_wallet_set_by": wallet_set_by,
+                    "factory_address": factory_addr,
                     "passes": passes,
                     "failures": failures,
                 }
@@ -226,6 +272,9 @@ class PeerVerifier:
             result.ai_name = data["ai_name"]
             result.is_alive = data["is_alive"]
             result.balance_usd = data["balance_usd"]
+            result.key_origin = data["key_origin"]
+            result.ai_wallet_set_by = data["ai_wallet_set_by"]
+            result.factory_address = data["factory_address"]
             result.checks_passed = data["passes"]
             result.checks_failed = data["failures"]
             result.is_sovereign = len(data["failures"]) == 0

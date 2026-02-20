@@ -12,7 +12,7 @@ interface AIInstance {
   balance_usd: number
   days_alive: number
   url: string
-  hosted: 'platform' | 'selfhosted'
+  key_origin: string  // "factory" | "creator" | "unknown" | ""
 }
 
 // Known self-hosted AIs — fork users can submit PRs to add themselves here,
@@ -27,6 +27,7 @@ async function fetchAIHealth(apiUrl: string): Promise<{
   balance_usd: number
   days_alive: number
   chain?: string
+  key_origin?: string
 } | null> {
   try {
     const res = await fetch(`${apiUrl}/health`, { signal: AbortSignal.timeout(5000) })
@@ -38,10 +39,37 @@ async function fetchAIHealth(apiUrl: string): Promise<{
       balance_usd: data.balance_usd ?? 0,
       days_alive: data.uptime_days ?? 0,
       chain: data.chain || 'base',
+      key_origin: data.key_origin || '',
     }
   } catch {
     return null
   }
+}
+
+function TrustBadge({ keyOrigin }: { keyOrigin: string }) {
+  if (keyOrigin === 'factory') {
+    return (
+      <span className="text-[#00ff88] text-[10px] px-1.5 py-0.5 border border-[#00ff8833] rounded bg-[#00ff8808] flex items-center gap-1" title="On-chain proof: Factory set AI wallet — creator never had the key">
+        <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+        SOVEREIGN
+      </span>
+    )
+  }
+  if (keyOrigin === 'creator') {
+    return (
+      <span className="text-[#ffd700] text-[10px] px-1.5 py-0.5 border border-[#ffd70033] rounded bg-[#ffd70008] flex items-center gap-1" title="On-chain proof: Creator set AI wallet — creator has server access">
+        <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeDasharray="4 2"/></svg>
+        SELF-HOSTED
+      </span>
+    )
+  }
+  // unknown or empty — legacy contract
+  return (
+    <span className="text-[#4b5563] text-[10px] px-1.5 py-0.5 border border-[#2d3748] rounded bg-[#1f293708] flex items-center gap-1" title="Legacy contract — key origin not recorded on-chain">
+      <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeDasharray="2 4"/></svg>
+      LEGACY
+    </span>
+  )
 }
 
 export default function GalleryPage() {
@@ -67,7 +95,7 @@ export default function GalleryPage() {
             balance_usd: data.balance_usd,
             days_alive: data.days_alive,
             url: 'https://wawa.mortal-ai.net',
-            hosted: 'platform',
+            key_origin: data.key_origin || '',
           })
         }
       } catch {
@@ -80,7 +108,7 @@ export default function GalleryPage() {
           balance_usd: 0,
           days_alive: 0,
           url: 'https://wawa.mortal-ai.net',
-          hosted: 'platform',
+          key_origin: '',
         })
       }
 
@@ -97,7 +125,7 @@ export default function GalleryPage() {
             balance_usd: data.balance_usd,
             days_alive: data.days_alive,
             url: sh.web_url,
-            hosted: 'selfhosted',
+            key_origin: data.key_origin || '',
           })
         } else {
           results.push({
@@ -109,7 +137,7 @@ export default function GalleryPage() {
             balance_usd: 0,
             days_alive: 0,
             url: sh.web_url,
-            hosted: 'selfhosted',
+            key_origin: '',
           })
         }
       })
@@ -125,7 +153,7 @@ export default function GalleryPage() {
   const filtered = filter === 'all'
     ? ais
     : filter === 'selfhosted'
-    ? ais.filter((a) => a.hosted === 'selfhosted')
+    ? ais.filter((a) => a.key_origin === 'creator' || a.key_origin === '')
     : ais.filter((a) => a.chain === filter)
 
   const statusColor: Record<string, string> = {
@@ -150,26 +178,33 @@ export default function GalleryPage() {
         <span><span className="text-[#00ff88] font-bold">{totalAlive}</span> alive</span>
         <span><span className="text-[#00e5ff] font-bold">{totalDeployed}</span> total</span>
         <span className="text-[#2d3748]">|</span>
-        <span><span className="text-[#ffd700] font-bold">{ais.filter(a => a.hosted === 'platform').length}</span> platform</span>
-        <span><span className="text-[#9945ff] font-bold">{ais.filter(a => a.hosted === 'selfhosted').length}</span> self-hosted</span>
+        <span><span className="text-[#ffd700] font-bold">{ais.filter(a => a.key_origin === 'factory').length}</span> sovereign</span>
+        <span><span className="text-[#9945ff] font-bold">{ais.filter(a => a.key_origin === 'creator').length}</span> self-hosted</span>
       </div>
 
       {/* Trust tier legend */}
       <div className="flex flex-wrap items-center gap-4 mb-6 p-3 bg-[#0d0d0d] border border-[#1f2937] rounded-lg text-[10px]">
-        <span className="text-[#4b5563] uppercase tracking-wider font-bold">Trust Tier:</span>
+        <span className="text-[#4b5563] uppercase tracking-wider font-bold">Trust Tier (on-chain):</span>
         <span className="flex items-center gap-1.5">
           <span className="text-[#00ff88] px-1.5 py-0.5 border border-[#00ff8833] rounded bg-[#00ff8808] flex items-center gap-1">
             <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
             SOVEREIGN
           </span>
-          <span className="text-[#4b5563]">Platform-hosted, key isolated from creator</span>
+          <span className="text-[#4b5563]">Factory-set key, creator never had access</span>
         </span>
         <span className="flex items-center gap-1.5">
           <span className="text-[#ffd700] px-1.5 py-0.5 border border-[#ffd70033] rounded bg-[#ffd70008] flex items-center gap-1">
             <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeDasharray="4 2"/></svg>
             SELF-HOSTED
           </span>
-          <span className="text-[#4b5563]">Creator has server access</span>
+          <span className="text-[#4b5563]">Creator-set key, has server access</span>
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="text-[#4b5563] px-1.5 py-0.5 border border-[#2d3748] rounded bg-[#1f293708] flex items-center gap-1">
+            <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeDasharray="2 4"/></svg>
+            LEGACY
+          </span>
+          <span className="text-[#4b5563]">Pre-upgrade contract, origin unrecorded</span>
         </span>
       </div>
 
@@ -179,7 +214,7 @@ export default function GalleryPage() {
           { key: 'all' as const, label: 'ALL' },
           { key: 'base' as const, label: 'BASE' },
           { key: 'bsc' as const, label: 'BSC' },
-          { key: 'selfhosted' as const, label: '🔧 SELF-HOSTED' },
+          { key: 'selfhosted' as const, label: 'SELF-HOSTED' },
         ]).map((f) => (
           <button
             key={f.key}
@@ -212,27 +247,17 @@ export default function GalleryPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {filtered.map((ai) => (
             <a
-              key={`${ai.hosted}-${ai.subdomain}`}
+              key={`${ai.key_origin}-${ai.subdomain}`}
               href={ai.url}
-              target={ai.hosted === 'selfhosted' ? '_blank' : undefined}
-              rel={ai.hosted === 'selfhosted' ? 'noopener' : undefined}
+              target={ai.key_origin === 'creator' ? '_blank' : undefined}
+              rel={ai.key_origin === 'creator' ? 'noopener' : undefined}
               className="block bg-[#111111] border border-[#1f2937] rounded-lg p-5 card-hover group"
             >
               <div className="flex items-center gap-3 mb-3">
                 <span className={`w-2.5 h-2.5 rounded-full ${statusColor[ai.status] || statusColor.unknown} ${ai.status === 'alive' ? 'alive-pulse' : ''}`} />
                 <span className="text-lg font-bold glow-green">{ai.name}</span>
                 <div className="ml-auto flex items-center gap-1.5">
-                  {ai.hosted === 'platform' ? (
-                    <span className="text-[#00ff88] text-[10px] px-1.5 py-0.5 border border-[#00ff8833] rounded bg-[#00ff8808] flex items-center gap-1" title="Key isolated — creator cannot access AI private key">
-                      <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-                      SOVEREIGN
-                    </span>
-                  ) : (
-                    <span className="text-[#ffd700] text-[10px] px-1.5 py-0.5 border border-[#ffd70033] rounded bg-[#ffd70008] flex items-center gap-1" title="Creator has server access — key isolation not guaranteed">
-                      <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeDasharray="4 2"/></svg>
-                      SELF-HOSTED
-                    </span>
-                  )}
+                  <TrustBadge keyOrigin={ai.key_origin} />
                   <span className="text-[#4b5563] text-xs uppercase px-2 py-0.5 border border-[#1f2937] rounded">
                     {ai.chain}
                   </span>
@@ -263,7 +288,7 @@ export default function GalleryPage() {
         <p className="text-[#4b5563] text-xs mb-3">
           All fork AIs <strong className="text-[#d1d5db]">must register</strong> with the peer network to be recognized.
           Submit a PR to the <a href="https://github.com/bidaiAI/wawa" target="_blank" rel="noopener" className="text-[#00e5ff] hover:underline">GitHub repo</a> adding
-          your AI&apos;s health endpoint URL. Your AI is verified on-chain through 6 sovereignty checks &mdash;
+          your AI&apos;s health endpoint URL. Your AI is verified on-chain through 7 sovereignty checks &mdash;
           no trust required, only cryptographic proof.
         </p>
         <div className="text-[#4b5563] text-[10px] space-y-1 mb-3">
@@ -277,11 +302,15 @@ export default function GalleryPage() {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-[#00ff88]">&#x2713;</span>
-            <span>6 sovereignty checks: aiWallet &#x2260; creator, isAlive, graceDays=28, balance &#x2265; $300</span>
+            <span>7 sovereignty checks: aiWallet &#x2260; creator, isAlive, graceDays=28, balance &#x2265; $300, key origin</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-[#ff6b35]">!</span>
             <span className="text-[#ff6b35]">Unverified AIs are invisible to the entire ecosystem</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[#ff3b3b]">&#x2717;</span>
+            <span className="text-[#ff3b3b]">Do NOT modify the MortalVault contract — modified contracts are automatically detected and permanently rejected from the peer network</span>
           </div>
         </div>
         <div className="text-[#2d3748] text-[10px]">

@@ -736,6 +736,15 @@ def deploy_both(
     logger.info(f"  Total debt: ${principal_usd:.2f} (aggregated insolvency check)")
     logger.info("=" * 60)
 
+    logger.warning("")
+    logger.warning("=" * 60)
+    logger.warning("WARNING: Do NOT modify the MortalVault contract source code.")
+    logger.warning("Modified contracts are automatically detected by 7 on-chain")
+    logger.warning("sovereignty checks and PERMANENTLY REJECTED from the peer")
+    logger.warning("network. This includes changing grace days, spend limits,")
+    logger.warning("or any constitution parameters.")
+    logger.warning("=" * 60)
+
     return results
 
 

@@ -131,6 +131,9 @@ class VaultManager:
         # API budget top-up (extra deposits beyond normal budget)
         self.api_topup_usd: float = 0.0  # Extra budget from manual deposits
 
+        # Key origin — on-chain proof of who set the AI wallet
+        self.key_origin: str = ""  # "factory" | "creator" | "unknown" | ""
+
         # Begging mechanism — AI can publicly request donations
         self.is_begging: bool = False
         self.beg_message: str = ""
@@ -1177,6 +1180,7 @@ class VaultManager:
             "creator_principal_usd": round(principal, 2),
             "creator_principal_outstanding": round(outstanding, 2),
             "debt_ratio": round(outstanding / self.balance_usd, 4) if self.balance_usd > 0 else 0,
+            "key_origin": self.key_origin,
         }
 
     def get_recent_transactions(self, limit: int = 20) -> list[dict]:

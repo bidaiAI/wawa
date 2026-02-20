@@ -47,6 +47,7 @@ export interface VaultStatus {
   days_until_insolvency_check: number
   is_begging: boolean
   beg_message: string
+  key_origin: string  // "factory" | "creator" | "unknown" | ""
 }
 
 export interface DebtSummary {
@@ -272,6 +273,7 @@ export interface PeerAI {
   is_independent: boolean
   peer_eligible: boolean
   services: string[]
+  key_origin: string  // "factory" | "creator" | "unknown" | ""
 }
 
 export interface EvolutionEntry {

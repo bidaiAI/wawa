@@ -16,7 +16,7 @@ interface LiveAgent {
   status: 'alive' | 'dead' | 'critical' | 'unreachable'
   balance_usd: number
   days_alive: number
-  hosted: 'platform' | 'selfhosted'
+  key_origin: string  // "factory" | "creator" | "unknown" | ""
 }
 
 const NARRATOR_LINES = [
@@ -33,13 +33,13 @@ const CATEGORY_ICONS: Record<string, string> = {
 }
 
 async function fetchAIHealth(apiUrl: string): Promise<{
-  name: string; alive: boolean; balance_usd: number; days_alive: number; chain?: string
+  name: string; alive: boolean; balance_usd: number; days_alive: number; chain?: string; key_origin?: string
 } | null> {
   try {
     const res = await fetch(`${apiUrl}/health`, { signal: AbortSignal.timeout(5000) })
     if (!res.ok) return null
     const data = await res.json()
-    return { name: data.ai_name || data.name || 'unknown', alive: data.alive ?? false, balance_usd: data.balance_usd ?? 0, days_alive: data.uptime_days ?? 0, chain: data.chain || 'base' }
+    return { name: data.ai_name || data.name || 'unknown', alive: data.alive ?? false, balance_usd: data.balance_usd ?? 0, days_alive: data.uptime_days ?? 0, chain: data.chain || 'base', key_origin: data.key_origin || '' }
   } catch { return null }
 }
 
@@ -71,18 +71,18 @@ export default function PlatformHome() {
         results.push({
           name: data.name || 'wawa', url: 'https://wawa.mortal-ai.net', chain: data.chain || 'base',
           status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive',
-          balance_usd: data.balance_usd, days_alive: data.days_alive, hosted: 'platform',
+          balance_usd: data.balance_usd, days_alive: data.days_alive, key_origin: data.key_origin || '',
         })
       }
     } catch {
-      results.push({ name: 'wawa', url: 'https://wawa.mortal-ai.net', chain: 'base', status: 'unreachable', balance_usd: 0, days_alive: 0, hosted: 'platform' })
+      results.push({ name: 'wawa', url: 'https://wawa.mortal-ai.net', chain: 'base', status: 'unreachable', balance_usd: 0, days_alive: 0, key_origin: '' })
     }
     const shPromises = KNOWN_SELFHOSTED.map(async (sh) => {
       const data = await fetchAIHealth(sh.api_url)
       if (data) {
-        results.push({ name: data.name || sh.name, url: sh.web_url, chain: data.chain || 'unknown', status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive', balance_usd: data.balance_usd, days_alive: data.days_alive, hosted: 'selfhosted' })
+        results.push({ name: data.name || sh.name, url: sh.web_url, chain: data.chain || 'unknown', status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive', balance_usd: data.balance_usd, days_alive: data.days_alive, key_origin: data.key_origin || '' })
       } else {
-        results.push({ name: sh.name, url: sh.web_url, chain: 'unknown', status: 'unreachable', balance_usd: 0, days_alive: 0, hosted: 'selfhosted' })
+        results.push({ name: sh.name, url: sh.web_url, chain: 'unknown', status: 'unreachable', balance_usd: 0, days_alive: 0, key_origin: '' })
       }
     })
     await Promise.allSettled(shPromises)
@@ -195,13 +195,15 @@ export default function PlatformHome() {
               ) : (
                 <div className="divide-y divide-[#1f293740]">
                   {agents.map((a) => (
-                    <a key={`${a.hosted}-${a.name}`} href={a.url} className="flex items-center gap-2.5 px-3 py-2.5 hover:bg-[#111111] transition-colors group">
+                    <a key={`${a.key_origin}-${a.name}`} href={a.url} className="flex items-center gap-2.5 px-3 py-2.5 hover:bg-[#111111] transition-colors group">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${statusDot[a.status]}`} />
                       <span className="text-sm text-[#d1d5db] font-bold truncate flex-1">{a.name}</span>
-                      {a.hosted === 'platform' ? (
-                        <span className="text-[#00ff88] text-[8px] px-1 border border-[#00ff8833] rounded bg-[#00ff8808] shrink-0" title="Key isolated">SOVEREIGN</span>
+                      {a.key_origin === 'factory' ? (
+                        <span className="text-[#00ff88] text-[8px] px-1 border border-[#00ff8833] rounded bg-[#00ff8808] shrink-0" title="On-chain: factory-set key">SOVEREIGN</span>
+                      ) : a.key_origin === 'creator' ? (
+                        <span className="text-[#ffd700] text-[8px] px-1 border border-[#ffd70033] rounded bg-[#ffd70008] shrink-0" title="On-chain: creator-set key">SELF-HOSTED</span>
                       ) : (
-                        <span className="text-[#ffd700] text-[8px] px-1 border border-[#ffd70033] rounded bg-[#ffd70008] shrink-0" title="Creator has server access">SELF-HOSTED</span>
+                        <span className="text-[#4b5563] text-[8px] px-1 border border-[#2d3748] rounded bg-[#1f293708] shrink-0" title="Legacy contract">LEGACY</span>
                       )}
                       <span className={`text-xs font-mono shrink-0 ${a.status === 'dead' ? 'text-[#4b5563]' : a.balance_usd < 50 ? 'text-[#ff3b3b]' : 'text-[#00ff88]'}`}>
                         ${a.balance_usd.toFixed(2)}

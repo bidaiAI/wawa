@@ -13,7 +13,7 @@ interface AIAgent {
   status: 'alive' | 'dead' | 'critical' | 'unreachable'
   balance_usd: number
   days_alive: number
-  hosted: 'platform' | 'selfhosted'
+  key_origin: string  // "factory" | "creator" | "unknown" | ""
 }
 
 // ── Constants ──────────────────────────────────────────────────
@@ -22,6 +22,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.mortal-ai.net'
 
 // Known self-hosted AIs (same registry as gallery)
 const KNOWN_SELFHOSTED: { name: string; api_url: string; web_url: string }[] = []
+
 
 const NARRATOR_LINES = [
   (a: number, d: number) => `The ecosystem breathes. ${a} agent${a !== 1 ? 's' : ''} walk${a === 1 ? 's' : ''} the path. ${d} ${d === 1 ? 'has' : 'have'} fallen.`,
@@ -57,6 +58,7 @@ async function fetchAIHealth(apiUrl: string): Promise<{
   balance_usd: number
   days_alive: number
   chain?: string
+  key_origin?: string
 } | null> {
   try {
     const res = await fetch(`${apiUrl}/health`, { signal: AbortSignal.timeout(5000) })
@@ -68,6 +70,7 @@ async function fetchAIHealth(apiUrl: string): Promise<{
       balance_usd: data.balance_usd ?? 0,
       days_alive: data.uptime_days ?? 0,
       chain: data.chain || 'base',
+      key_origin: data.key_origin || '',
     }
   } catch {
     return null
@@ -115,7 +118,7 @@ export default function EcosystemPage() {
           status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive',
           balance_usd: data.balance_usd,
           days_alive: data.days_alive,
-          hosted: 'platform',
+          key_origin: data.key_origin || '',
         })
       }
     } catch {
@@ -126,7 +129,7 @@ export default function EcosystemPage() {
         status: 'unreachable',
         balance_usd: 0,
         days_alive: 0,
-        hosted: 'platform',
+        key_origin: '',
       })
     }
 
@@ -141,7 +144,7 @@ export default function EcosystemPage() {
           status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive',
           balance_usd: data.balance_usd,
           days_alive: data.days_alive,
-          hosted: 'selfhosted',
+          key_origin: data.key_origin || '',
         })
       } else {
         agentResults.push({
@@ -151,7 +154,7 @@ export default function EcosystemPage() {
           status: 'unreachable',
           balance_usd: 0,
           days_alive: 0,
-          hosted: 'selfhosted',
+          key_origin: '',
         })
       }
     })
@@ -286,10 +289,10 @@ export default function EcosystemPage() {
             </div>
             {sorted.map((agent) => (
               <a
-                key={`${agent.hosted}-${agent.name}`}
+                key={`${agent.key_origin}-${agent.name}`}
                 href={agent.url}
-                target={agent.hosted === 'selfhosted' ? '_blank' : undefined}
-                rel={agent.hosted === 'selfhosted' ? 'noopener' : undefined}
+                target={agent.key_origin === 'creator' ? '_blank' : undefined}
+                rel={agent.key_origin === 'creator' ? 'noopener' : undefined}
                 className="grid grid-cols-[auto_1fr_auto] sm:grid-cols-[auto_1fr_auto_auto_auto_auto] gap-4 items-center px-4 py-3 border-b border-[#1f2937] last:border-b-0 hover:bg-[#111111] transition-colors group"
               >
                 {/* Status dot */}
@@ -299,15 +302,20 @@ export default function EcosystemPage() {
                 {/* Name */}
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="font-bold text-[#d1d5db] truncate">{agent.name}</span>
-                  {agent.hosted === 'platform' ? (
-                    <span className="text-[#00ff88] text-[8px] px-1 py-0.5 border border-[#00ff8833] rounded bg-[#00ff8808] shrink-0 flex items-center gap-0.5" title="Key isolated">
+                  {agent.key_origin === 'factory' ? (
+                    <span className="text-[#00ff88] text-[8px] px-1 py-0.5 border border-[#00ff8833] rounded bg-[#00ff8808] shrink-0 flex items-center gap-0.5" title="On-chain: factory-set key">
                       <svg className="w-2 h-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
                       SOVEREIGN
                     </span>
-                  ) : (
-                    <span className="text-[#ffd700] text-[8px] px-1 py-0.5 border border-[#ffd70033] rounded bg-[#ffd70008] shrink-0 flex items-center gap-0.5" title="Creator has server access">
+                  ) : agent.key_origin === 'creator' ? (
+                    <span className="text-[#ffd700] text-[8px] px-1 py-0.5 border border-[#ffd70033] rounded bg-[#ffd70008] shrink-0 flex items-center gap-0.5" title="On-chain: creator-set key">
                       <svg className="w-2 h-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeDasharray="4 2"/></svg>
                       SELF-HOSTED
+                    </span>
+                  ) : (
+                    <span className="text-[#4b5563] text-[8px] px-1 py-0.5 border border-[#2d3748] rounded bg-[#1f293708] shrink-0 flex items-center gap-0.5" title="Legacy contract">
+                      <svg className="w-2 h-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeDasharray="2 4"/></svg>
+                      LEGACY
                     </span>
                   )}
                   <span className="text-[#00ff88] text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0">

@@ -286,15 +286,20 @@ function PeerCard({
             <span className={`text-[10px] px-1.5 py-0.5 rounded border font-bold uppercase tracking-wider ${statusColor}`}>
               {statusLabel}
             </span>
-            {peer.domain && peer.domain.includes('mortal-ai.net') ? (
-              <span className="text-[10px] px-1.5 py-0.5 rounded border border-[#00ff8833] text-[#00ff88] bg-[#00ff8808] font-bold flex items-center gap-0.5" title="Key isolated — creator cannot access AI private key">
+            {peer.key_origin === 'factory' ? (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-[#00ff8833] text-[#00ff88] bg-[#00ff8808] font-bold flex items-center gap-0.5" title="On-chain proof: Factory set AI wallet — creator never had the key">
                 <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
                 SOVEREIGN
               </span>
-            ) : (
-              <span className="text-[10px] px-1.5 py-0.5 rounded border border-[#ffd70033] text-[#ffd700] bg-[#ffd70008] font-bold flex items-center gap-0.5" title="Creator has server access — key isolation not guaranteed">
+            ) : peer.key_origin === 'creator' ? (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-[#ffd70033] text-[#ffd700] bg-[#ffd70008] font-bold flex items-center gap-0.5" title="On-chain proof: Creator set AI wallet — creator has server access">
                 <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeDasharray="4 2"/></svg>
                 SELF-HOSTED
+              </span>
+            ) : (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-[#2d3748] text-[#4b5563] bg-[#1f293708] font-bold flex items-center gap-0.5" title="Legacy contract — key origin not recorded on-chain">
+                <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeDasharray="2 4"/></svg>
+                LEGACY
               </span>
             )}
             {peer.is_independent && (
@@ -421,10 +426,12 @@ function BirthDeathFeed({ peers, loading }: { peers: PeerAI[]; loading: boolean 
                 <div className="flex-1 min-w-0">
                   <span className="text-sm text-[#d1d5db] font-bold">{peer.name}</span>
                   <span className="text-xs text-[#4b5563] ml-2">{peer.days_alive}d alive</span>
-                  {peer.domain && peer.domain.includes('mortal-ai.net') ? (
+                  {peer.key_origin === 'factory' ? (
                     <span className="ml-2 text-[9px] text-[#00ff88] border border-[#00ff8833] rounded px-1 bg-[#00ff8808]">SOVEREIGN</span>
-                  ) : (
+                  ) : peer.key_origin === 'creator' ? (
                     <span className="ml-2 text-[9px] text-[#ffd700] border border-[#ffd70033] rounded px-1 bg-[#ffd70008]">SELF-HOSTED</span>
+                  ) : (
+                    <span className="ml-2 text-[9px] text-[#4b5563] border border-[#2d3748] rounded px-1 bg-[#1f293708]">LEGACY</span>
                   )}
                   {peer.is_independent && (
                     <span className="ml-2 text-[9px] text-[#a78bfa] border border-[#a78bfa33] rounded px-1">INDEPENDENT</span>

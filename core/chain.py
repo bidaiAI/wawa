@@ -186,6 +186,22 @@ VAULT_ABI = [
         "stateMutability": "view",
         "type": "function",
     },
+    # aiWalletSetBy() → address (who called setAIWallet: creator or factory)
+    {
+        "inputs": [],
+        "name": "aiWalletSetBy",
+        "outputs": [{"name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # factory() → address (V2 only — the factory that deployed this vault)
+    {
+        "inputs": [],
+        "name": "factory",
+        "outputs": [{"name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
     # isAlive() → bool (auto-generated getter for public state var)
     {
         "inputs": [],
@@ -393,6 +409,64 @@ class ChainExecutor:
             logger.warning("Chain executor: no chains connected")
 
         return self._initialized
+
+    # ============================================================
+    # KEY ORIGIN — read who set the AI wallet (on-chain proof)
+    # ============================================================
+
+    async def read_key_origin(self) -> str:
+        """
+        Read aiWalletSetBy and factory from the first connected chain.
+        Returns: "factory" | "creator" | "unknown" (legacy) | "" (error/not initialized)
+        """
+        if not self._initialized:
+            return ""
+
+        # Use first connected chain (key origin is same across all chains)
+        chain_id, chain = next(iter(self._chains.items()))
+
+        def _read():
+            vault_contract = chain["vault_contract"]
+
+            # Read aiWalletSetBy — may not exist on legacy contracts
+            wallet_set_by = NULL_ADDRESS
+            try:
+                wallet_set_by = vault_contract.functions.aiWalletSetBy().call()
+            except Exception:
+                pass  # Legacy contract without aiWalletSetBy
+
+            if wallet_set_by == NULL_ADDRESS:
+                return "unknown"
+
+            # Read factory — V2 only
+            factory_addr = NULL_ADDRESS
+            try:
+                factory_addr = vault_contract.functions.factory().call()
+            except Exception:
+                pass  # V1 contract without factory field
+
+            # Read creator for comparison
+            creator_addr = NULL_ADDRESS
+            try:
+                creator_addr = vault_contract.functions.creator().call()
+            except Exception:
+                pass
+
+            if factory_addr != NULL_ADDRESS and wallet_set_by.lower() == factory_addr.lower():
+                return "factory"
+            elif creator_addr != NULL_ADDRESS and wallet_set_by.lower() == creator_addr.lower():
+                return "creator"
+            else:
+                return "unknown"
+
+        try:
+            import asyncio
+            origin = await asyncio.get_running_loop().run_in_executor(None, _read)
+            logger.info(f"Key origin (on-chain): {origin} on {chain_id}")
+            return origin
+        except Exception as e:
+            logger.warning(f"Failed to read key origin: {e}")
+            return ""
 
     # ============================================================
     # BALANCE SYNC — read on-chain balance, update vault

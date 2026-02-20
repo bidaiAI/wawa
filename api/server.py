@@ -155,6 +155,7 @@ class StatusResponse(BaseModel):
     lenders_count: int = 0
     death_cause: Optional[str] = None
     transaction_count: int = 0
+    key_origin: str = ""  # "factory" | "creator" | "unknown" | ""
 
 
 class SuggestionRequest(BaseModel):
@@ -692,6 +693,7 @@ def create_app(
             lenders_count=vs.get("lenders_count", 0),
             death_cause=vs.get("death_cause"),
             transaction_count=vs.get("transaction_count", 0),
+            key_origin=vs.get("key_origin", ""),
         )
 
     @app.get("/transactions")
@@ -713,6 +715,7 @@ def create_app(
             "balance_usd": vault_manager.balance_usd,
             "api_budget_remaining": cost_guard.get_status()["daily_remaining_usd"],
             "ai_name": vault_manager.ai_name,
+            "key_origin": vault_manager.key_origin,
         }
 
     # ============================================================
@@ -1021,6 +1024,7 @@ def create_app(
             "is_independent": vs.get("is_independent", False),
             "peer_eligible": eligible,
             "services": [s["id"] for s in _load_services().get("services", []) if s.get("active")],
+            "key_origin": vs.get("key_origin", ""),
         }
 
     @app.get("/peer/messages")

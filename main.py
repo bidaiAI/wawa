@@ -1331,6 +1331,13 @@ async def lifespan(app):
                 except Exception as e:
                     logger.warning(f"Failed to sync debt from chain at boot: {e}")
 
+                # Read key origin (on-chain proof of who set AI wallet)
+                try:
+                    vault.key_origin = await chain_executor.read_key_origin()
+                    logger.info(f"Key origin: {vault.key_origin}")
+                except Exception as e:
+                    logger.warning(f"Failed to read key origin at boot: {e}")
+
             logger.info(f"Vault config loaded from {vault_config_path}")
         except Exception as e:
             logger.warning(f"Failed to load vault config: {e}")
