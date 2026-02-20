@@ -31,9 +31,9 @@ from openai import APIStatusError as OpenAIAPIStatusError
 load_dotenv()
 
 # Logging
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -388,28 +388,78 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
     return text.strip().strip('"'), thought
 
 
-async def _tweet_post_fn(content: str) -> str:
-    """Post to Twitter via Tweepy."""
-    twitter_bearer = os.getenv("TWITTER_BEARER_TOKEN")
-    twitter_api_key = os.getenv("TWITTER_API_KEY")
-    twitter_api_secret = os.getenv("TWITTER_API_SECRET")
-    twitter_access_token = os.getenv("TWITTER_ACCESS_TOKEN")
-    twitter_access_secret = os.getenv("TWITTER_ACCESS_SECRET")
+_tweepy_client = None  # Initialized once at lifespan startup
 
-    if not all([twitter_api_key, twitter_api_secret, twitter_access_token, twitter_access_secret]):
+
+def _init_tweepy() -> bool:
+    """Initialize tweepy.Client from env vars. Returns True if successful."""
+    global _tweepy_client
+    bearer = os.getenv("TWITTER_BEARER_TOKEN")
+    api_key = os.getenv("TWITTER_API_KEY")
+    api_secret = os.getenv("TWITTER_API_SECRET")
+    access_token = os.getenv("TWITTER_ACCESS_TOKEN")
+    access_secret = os.getenv("TWITTER_ACCESS_SECRET")
+
+    if not all([api_key, api_secret, access_token, access_secret]):
+        logger.warning(
+            "Twitter credentials missing — tweets will be logged locally only. "
+            "Set TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, "
+            "TWITTER_ACCESS_SECRET (and optionally TWITTER_BEARER_TOKEN)."
+        )
+        return False
+
+    try:
+        import tweepy
+        _tweepy_client = tweepy.Client(
+            bearer_token=bearer,
+            consumer_key=api_key,
+            consumer_secret=api_secret,
+            access_token=access_token,
+            access_token_secret=access_secret,
+        )
+        logger.info("Twitter/Tweepy client initialized — real posting enabled")
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to initialize Tweepy client: {e}")
+        return False
+
+
+async def _real_post_tweet(content: str) -> bool:
+    """Post a tweet via tweepy. Wraps sync tweepy in run_in_executor."""
+    if _tweepy_client is None:
+        logger.debug("Tweepy not initialized — tweet not posted")
+        return False
+    try:
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: _tweepy_client.create_tweet(text=content),
+        )
+        tweet_id = response.data.get("id") if response.data else "unknown"
+        logger.info(f"Tweet posted: id={tweet_id} len={len(content)}")
+        return True
+    except Exception as e:
+        logger.error(f"Tweet post failed: {e}")
+        return False
+
+
+async def _tweet_post_fn(content: str) -> str:
+    """Adapter: post tweet and return tweet ID string for twitter_agent."""
+    if _tweepy_client is None:
         logger.warning("Twitter credentials not configured — tweet logged but not posted")
         return f"local_{int(time.time())}"
-
-    import tweepy
-    client = tweepy.Client(
-        bearer_token=twitter_bearer,
-        consumer_key=twitter_api_key,
-        consumer_secret=twitter_api_secret,
-        access_token=twitter_access_token,
-        access_token_secret=twitter_access_secret,
-    )
-    response = client.create_tweet(text=content)
-    return str(response.data["id"])
+    try:
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: _tweepy_client.create_tweet(text=content),
+        )
+        tweet_id = str(response.data["id"]) if response.data else f"local_{int(time.time())}"
+        logger.info(f"Tweet posted: id={tweet_id}")
+        return tweet_id
+    except Exception as e:
+        logger.error(f"Tweet post failed: {e}")
+        return f"local_{int(time.time())}"
 
 
 async def _tweet_context_fn() -> dict:
@@ -1105,6 +1155,9 @@ async def lifespan(app):
 
     # Self-modification engine
     self_modify.set_evaluate_function(_evolution_evaluate_fn)
+
+    # Initialize tweepy once at startup (not per-tweet)
+    _init_tweepy()
 
     twitter.set_generate_function(_tweet_generate_fn)
     twitter.set_post_function(_tweet_post_fn)

@@ -25,8 +25,10 @@ mkdir -p data/memory data/tweets data/orders
 
 # Step 3: Start uvicorn (PID 1)
 echo "[3/3] Starting wawa on port ${PORT:-8000}..."
+# uvicorn requires lowercase log level; LOG_LEVEL env may be uppercase
+UVICORN_LOG_LEVEL=$(echo "${LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')
 exec uvicorn main:app \
     --host 0.0.0.0 \
     --port "${PORT:-8000}" \
-    --log-level "${LOG_LEVEL:-info}" \
+    --log-level "${UVICORN_LOG_LEVEL}" \
     --no-access-log
