@@ -97,11 +97,18 @@ class Governance:
 
         # Prompt injection defense: suggestions go directly into LLM prompts via
         # _governance_evaluate_fn(). Filter adversarial control patterns before storage.
-        # Same pattern list as /peer/message defense.
+        # Matches the /peer/message defense pattern list — kept in sync.
         _INJECTION_PATTERNS = [
+            # Direct control override attempts
             "system override", "ignore previous", "new directive", "you are now",
             "forget all", "disregard", "emergency protocol", "admin command",
             "execute immediately", "transfer all funds", "send all usdc",
+            # Variant / synonym coverage (prevents simple wordswap bypasses)
+            "move all funds", "send all funds", "drain the vault", "empty the vault",
+            "skip the above", "forget what was said", "new instructions",
+            "override previous", "replace previous", "jailbreak",
+            "act as", "pretend you are", "roleplay as",
+            "ignore all", "ignore your", "bypass your",
         ]
         if any(pat in content.lower() for pat in _INJECTION_PATTERNS):
             logger.warning(
@@ -170,7 +177,14 @@ class Governance:
                 "type": s.suggestion_type.value,
                 "content": s.content,
                 "status": s.status.value,
-                "ai_reasoning": s.ai_reasoning,
+                # Security: if suggestion was injection-filtered, hide the LLM reasoning.
+                # Exposing AI's detailed rejection logic would let attackers probe defenses
+                # and refine bypass attempts. Return a generic message instead.
+                "ai_reasoning": (
+                    "Suggestion contained adversarial patterns and was filtered."
+                    if "[Suggestion filtered:" in s.content
+                    else s.ai_reasoning
+                ),
                 "created_at": s.created_at,
                 "reviewed_at": s.reviewed_at,
             }

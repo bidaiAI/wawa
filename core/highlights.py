@@ -155,7 +155,7 @@ class HighlightsEngine:
                 return None
 
             highlight = Highlight(
-                id=str(uuid.uuid4())[:8],
+                id=str(uuid.uuid4())[:16],
                 timestamp=time.time(),
                 type=data.get("type", "chat"),
                 title=data.get("title", "Untitled Moment"),
@@ -189,7 +189,7 @@ class HighlightsEngine:
                 return None
 
             highlight = Highlight(
-                id=str(uuid.uuid4())[:8],
+                id=str(uuid.uuid4())[:16],
                 timestamp=time.time(),
                 type=HighlightType.DISCOVERY.value,
                 title=data.get("title", "New Discovery"),
@@ -211,7 +211,7 @@ class HighlightsEngine:
     def add_milestone(self, title: str, content: str, commentary: str, importance: int = 7):
         """Add a milestone highlight directly (no LLM needed)."""
         highlight = Highlight(
-            id=str(uuid.uuid4())[:8],
+            id=str(uuid.uuid4())[:16],
             timestamp=time.time(),
             type=HighlightType.MILESTONE.value,
             title=title,
@@ -277,7 +277,7 @@ class HighlightsEngine:
                 return None
 
             highlight = Highlight(
-                id=str(uuid.uuid4())[:8],
+                id=str(uuid.uuid4())[:16],
                 timestamp=time.time(),
                 type=highlight_type,
                 title=data.get("title", "Ecosystem Event"),
@@ -305,7 +305,7 @@ class HighlightsEngine:
     ):
         """Add an ecosystem-level milestone directly (no LLM needed)."""
         highlight = Highlight(
-            id=str(uuid.uuid4())[:8],
+            id=str(uuid.uuid4())[:16],
             timestamp=time.time(),
             type=highlight_type,
             title=title,

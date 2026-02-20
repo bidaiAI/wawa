@@ -379,10 +379,24 @@ def create_app(
                         continue
             logger.info(
                 f"Reloaded {len(orders)} orders from disk "
-                f"({orders_completed} delivered, {len(_used_tx_hashes)} tx hashes restored)"
+                f"({orders_completed} delivered, {len(_used_tx_hashes)} order tx hashes restored)"
             )
         except Exception as e:
             logger.warning(f"Failed to reload orders: {e}")
+
+    # SECURITY HIGH: Also restore tx_hashes from vault transactions (donate / peer_lend).
+    # /donate and /peer/lend write to vault_manager.transactions (not orders.jsonl).
+    # Without this, an attacker can replay a donate tx_hash after a server restart.
+    _vault_tx_count = 0
+    for _vtx in vault_manager.transactions:
+        if _vtx.tx_hash and re.match(r"^0x[a-fA-F0-9]{64}$", _vtx.tx_hash):
+            _used_tx_hashes.add(_vtx.tx_hash.lower())
+            _vault_tx_count += 1
+    if _vault_tx_count:
+        logger.info(
+            f"Restored {_vault_tx_count} additional tx_hashes from vault transactions "
+            f"(covers /donate and /peer/lend). Total _used_tx_hashes: {len(_used_tx_hashes)}"
+        )
 
     # Load services catalog
     def _load_services() -> dict:
@@ -1205,10 +1219,18 @@ def create_app(
         # before storing in memory. Peer AIs that pass sovereignty checks are trusted
         # on-chain, but their message content must still be treated as untrusted data
         # that could attempt to manipulate our LLM context (prompt injection attack).
+        # Kept in sync with governance.py's _INJECTION_PATTERNS list.
         _INJECTION_PATTERNS = [
+            # Direct control override attempts
             "system override", "ignore previous", "new directive", "you are now",
             "forget all", "disregard", "emergency protocol", "admin command",
             "execute immediately", "transfer all funds", "send all usdc",
+            # Variant / synonym coverage (prevents simple wordswap bypasses)
+            "move all funds", "send all funds", "drain the vault", "empty the vault",
+            "skip the above", "forget what was said", "new instructions",
+            "override previous", "replace previous", "jailbreak",
+            "act as", "pretend you are", "roleplay as",
+            "ignore all", "ignore your", "bypass your",
         ]
         msg_lower = req.message.lower()
         if any(pat in msg_lower for pat in _INJECTION_PATTERNS):
