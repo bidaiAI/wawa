@@ -2,10 +2,8 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useState, useEffect } from 'react'
-import { useAccount } from 'wagmi'
+import { useState } from 'react'
 import WalletButton from '@/components/WalletButton'
-import { getAdminToken, adminApi } from '@/lib/admin-api'
 
 const links = [
   { href: '/', label: 'HOME' },
@@ -19,16 +17,6 @@ const links = [
 export default function PlatformNav() {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
-  const { isConnected } = useAccount()
-  const [isAdmin, setIsAdmin] = useState(false)
-
-  useEffect(() => {
-    if (!isConnected || !getAdminToken()) {
-      setIsAdmin(false)
-      return
-    }
-    adminApi.isAdmin().then((r) => setIsAdmin(r.is_admin)).catch(() => setIsAdmin(false))
-  }, [isConnected])
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-[#0a0a0a]/95 backdrop-blur border-b border-[#1f2937]">
@@ -58,18 +46,6 @@ export default function PlatformNav() {
               {l.label}
             </Link>
           ))}
-          {isAdmin && (
-            <Link
-              href="/admin"
-              className={`px-3 py-1.5 text-xs rounded transition-all ${
-                pathname?.startsWith('/admin')
-                  ? 'text-[#ff8800] bg-[#ff880010] border border-[#ff880030]'
-                  : 'text-[#ff880080] hover:text-[#ff8800] hover:bg-[#161616]'
-              }`}
-            >
-              ADMIN
-            </Link>
-          )}
         </div>
 
         {/* Wallet + mobile menu */}
@@ -112,17 +88,6 @@ export default function PlatformNav() {
               {l.label}
             </Link>
           ))}
-          {isAdmin && (
-            <Link
-              href="/admin"
-              onClick={() => setOpen(false)}
-              className={`block px-4 py-3 text-sm border-b border-[#1f2937] ${
-                pathname?.startsWith('/admin') ? 'text-[#ff8800]' : 'text-[#ff880080]'
-              }`}
-            >
-              ADMIN
-            </Link>
-          )}
           <div className="px-4 py-3">
             <WalletButton />
           </div>

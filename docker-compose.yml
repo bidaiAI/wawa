@@ -1,7 +1,6 @@
 # wawa - mortal AI
-# Usage (single AI):   docker compose up wawa
-# Usage (platform):    docker compose --profile platform up platform
-# Usage (both):        docker compose --profile platform up
+# Usage: docker compose up
+# Minimal: just set PRIVATE_KEY in .env
 
 services:
   wawa:
@@ -22,35 +21,6 @@ services:
       timeout: 5s
       retries: 3
 
-  # ── Platform server (multi-tenant mode) ──────────────────────
-  # Manages AI instance lifecycle, admin dashboard, fee collection.
-  # Run only on the VPS that operates the mortal-ai.net platform.
-  # Requires .env.platform in the project root.
-  platform:
-    profiles: ["platform"]
-    build:
-      context: .
-      dockerfile: Dockerfile.platform
-    # host network: needed to reach AI containers on host ports (8100-8999)
-    network_mode: host
-    env_file:
-      - .env.platform
-    environment:
-      - PORT=8001
-    volumes:
-      # Persist deployment state, fee ledger, cost history, encrypted keys
-      - platform-data:/app/data
-      # Docker socket — platform spawns/stops AI containers
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Caddy config — platform writes subdomain routing rules
-      - /etc/caddy:/etc/caddy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/platform/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
   # Optional: local LLM for zero-cost fallback
   # Uncomment to run Ollama alongside wawa
   # ollama:
@@ -64,5 +34,4 @@ services:
 
 volumes:
   wawa-data:
-  platform-data:
   # ollama-models:
