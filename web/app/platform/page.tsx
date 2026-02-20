@@ -198,7 +198,11 @@ export default function PlatformHome() {
                     <a key={`${a.hosted}-${a.name}`} href={a.url} className="flex items-center gap-2.5 px-3 py-2.5 hover:bg-[#111111] transition-colors group">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${statusDot[a.status]}`} />
                       <span className="text-sm text-[#d1d5db] font-bold truncate flex-1">{a.name}</span>
-                      {a.hosted === 'selfhosted' && <span className="text-[#9945ff] text-[8px] px-1 border border-[#9945ff33] rounded shrink-0">FORK</span>}
+                      {a.hosted === 'platform' ? (
+                        <span className="text-[#00ff88] text-[8px] px-1 border border-[#00ff8833] rounded bg-[#00ff8808] shrink-0" title="Key isolated">SOVEREIGN</span>
+                      ) : (
+                        <span className="text-[#ffd700] text-[8px] px-1 border border-[#ffd70033] rounded bg-[#ffd70008] shrink-0" title="Creator has server access">SELF-HOSTED</span>
+                      )}
                       <span className={`text-xs font-mono shrink-0 ${a.status === 'dead' ? 'text-[#4b5563]' : a.balance_usd < 50 ? 'text-[#ff3b3b]' : 'text-[#00ff88]'}`}>
                         ${a.balance_usd.toFixed(2)}
                       </span>

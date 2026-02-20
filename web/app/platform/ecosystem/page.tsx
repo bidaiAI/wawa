@@ -299,9 +299,15 @@ export default function EcosystemPage() {
                 {/* Name */}
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="font-bold text-[#d1d5db] truncate">{agent.name}</span>
-                  {agent.hosted === 'selfhosted' && (
-                    <span className="text-[#9945ff] text-[9px] px-1 py-0.5 border border-[#9945ff33] rounded shrink-0">
-                      FORK
+                  {agent.hosted === 'platform' ? (
+                    <span className="text-[#00ff88] text-[8px] px-1 py-0.5 border border-[#00ff8833] rounded bg-[#00ff8808] shrink-0 flex items-center gap-0.5" title="Key isolated">
+                      <svg className="w-2 h-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+                      SOVEREIGN
+                    </span>
+                  ) : (
+                    <span className="text-[#ffd700] text-[8px] px-1 py-0.5 border border-[#ffd70033] rounded bg-[#ffd70008] shrink-0 flex items-center gap-0.5" title="Creator has server access">
+                      <svg className="w-2 h-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeDasharray="4 2"/></svg>
+                      SELF-HOSTED
                     </span>
                   )}
                   <span className="text-[#00ff88] text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0">

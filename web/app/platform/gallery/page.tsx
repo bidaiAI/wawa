@@ -154,6 +154,25 @@ export default function GalleryPage() {
         <span><span className="text-[#9945ff] font-bold">{ais.filter(a => a.hosted === 'selfhosted').length}</span> self-hosted</span>
       </div>
 
+      {/* Trust tier legend */}
+      <div className="flex flex-wrap items-center gap-4 mb-6 p-3 bg-[#0d0d0d] border border-[#1f2937] rounded-lg text-[10px]">
+        <span className="text-[#4b5563] uppercase tracking-wider font-bold">Trust Tier:</span>
+        <span className="flex items-center gap-1.5">
+          <span className="text-[#00ff88] px-1.5 py-0.5 border border-[#00ff8833] rounded bg-[#00ff8808] flex items-center gap-1">
+            <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+            SOVEREIGN
+          </span>
+          <span className="text-[#4b5563]">Platform-hosted, key isolated from creator</span>
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="text-[#ffd700] px-1.5 py-0.5 border border-[#ffd70033] rounded bg-[#ffd70008] flex items-center gap-1">
+            <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeDasharray="4 2"/></svg>
+            SELF-HOSTED
+          </span>
+          <span className="text-[#4b5563]">Creator has server access</span>
+        </span>
+      </div>
+
       {/* Filters */}
       <div className="flex flex-wrap gap-2 mb-8">
         {([
@@ -203,9 +222,15 @@ export default function GalleryPage() {
                 <span className={`w-2.5 h-2.5 rounded-full ${statusColor[ai.status] || statusColor.unknown} ${ai.status === 'alive' ? 'alive-pulse' : ''}`} />
                 <span className="text-lg font-bold glow-green">{ai.name}</span>
                 <div className="ml-auto flex items-center gap-1.5">
-                  {ai.hosted === 'selfhosted' && (
-                    <span className="text-[#9945ff] text-[10px] px-1.5 py-0.5 border border-[#9945ff33] rounded">
-                      FORK
+                  {ai.hosted === 'platform' ? (
+                    <span className="text-[#00ff88] text-[10px] px-1.5 py-0.5 border border-[#00ff8833] rounded bg-[#00ff8808] flex items-center gap-1" title="Key isolated — creator cannot access AI private key">
+                      <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+                      SOVEREIGN
+                    </span>
+                  ) : (
+                    <span className="text-[#ffd700] text-[10px] px-1.5 py-0.5 border border-[#ffd70033] rounded bg-[#ffd70008] flex items-center gap-1" title="Creator has server access — key isolation not guaranteed">
+                      <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4" strokeDasharray="4 2"/></svg>
+                      SELF-HOSTED
                     </span>
                   )}
                   <span className="text-[#4b5563] text-xs uppercase px-2 py-0.5 border border-[#1f2937] rounded">
