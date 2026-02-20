@@ -98,6 +98,7 @@ class CostGuard:
         self.daily_reset_timestamp: float = 0.0
         self.total_revenue_usd: float = 0.0
         self.total_api_cost_usd: float = 0.0
+        self.daily_revenue_usd: float = 0.0  # Reset at midnight with daily_cost_usd
         self.current_provider: Optional[Provider] = None
         self.current_tier: Optional[ModelTier] = None
         self.is_survival_mode: bool = False
@@ -237,12 +238,14 @@ class CostGuard:
 
     def get_daily_cap(self) -> float:
         """
-        Tier-based daily API budget.
+        Tier-based daily API budget with profit-based boost.
 
-        Budget = tier.base + (vault_balance / 100) × tier.rate
-        Floor: $2/day | Ceiling: $500/day
-        Survival mode: 0.5% of vault balance
+        Base budget = tier.base + (vault_balance / 100) × tier.rate
+        Profit boost = 50% of today's net profit (revenue - API cost)
+        Floor: $2/day | Ceiling: $500/day (base) + $200 (boost)
+        Survival mode: 0.5% of vault balance (no profit boost)
         """
+        self._reset_daily_if_needed()
         balance = self._get_vault_balance()
         tier = get_model_tier(balance)
 
@@ -253,6 +256,17 @@ class CostGuard:
 
         budget = max(budget, IRON_LAWS.API_BUDGET_FLOOR_USD)
         budget = min(budget, IRON_LAWS.API_BUDGET_CEILING_USD)
+
+        # Profit boost: when today's revenue exceeds API cost, unlock extra budget
+        if not self.is_survival_mode:
+            daily_net = self.daily_revenue_usd - self.daily_cost_usd
+            if daily_net > 0:
+                boost = min(
+                    daily_net * IRON_LAWS.PROFIT_QUOTA_BOOST_RATIO,
+                    IRON_LAWS.PROFIT_QUOTA_BOOST_CEILING_USD,
+                )
+                budget += boost
+
         return round(budget, 2)
 
     def check_rate_limit(self, provider_name: str) -> bool:
@@ -285,6 +299,7 @@ class CostGuard:
         now = time.time()
         if now - self.daily_reset_timestamp > 86400:
             self.daily_cost_usd = 0.0
+            self.daily_revenue_usd = 0.0
             self.daily_reset_timestamp = now
 
     def _get_price_average(self, provider: Provider, window_hours: int = 24) -> float:
@@ -388,7 +403,9 @@ class CostGuard:
 
     def record_revenue(self, amount_usd: float):
         """Record incoming revenue."""
+        self._reset_daily_if_needed()
         self.total_revenue_usd += amount_usd
+        self.daily_revenue_usd += amount_usd
 
     def _find_cheapest_available(self, exclude: Optional[Provider] = None) -> Optional[Provider]:
         """Find the cheapest available provider."""
@@ -419,10 +436,21 @@ class CostGuard:
 
     def get_status(self) -> dict:
         """Get current cost guard status for public dashboard."""
+        self._reset_daily_if_needed()
         tier = self.get_current_tier()
+        daily_net = self.daily_revenue_usd - self.daily_cost_usd
+        profit_boost = 0.0
+        if not self.is_survival_mode and daily_net > 0:
+            profit_boost = min(
+                daily_net * IRON_LAWS.PROFIT_QUOTA_BOOST_RATIO,
+                IRON_LAWS.PROFIT_QUOTA_BOOST_CEILING_USD,
+            )
         return {
             "daily_spent_usd": round(self.daily_cost_usd, 4),
+            "daily_revenue_usd": round(self.daily_revenue_usd, 2),
+            "daily_net_profit_usd": round(daily_net, 2),
             "daily_cap_usd": self.get_daily_cap(),
+            "daily_profit_boost_usd": round(profit_boost, 2),
             "daily_remaining_usd": round(self.get_daily_cap() - self.daily_cost_usd, 4),
             "total_api_cost_usd": round(self.total_api_cost_usd, 2),
             "total_revenue_usd": round(self.total_revenue_usd, 2),

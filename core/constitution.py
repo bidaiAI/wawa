@@ -86,6 +86,15 @@ class IronLaws:
     MAX_COST_REVENUE_RATIO: Final[float] = 0.30        # API cost <= 30% of revenue
     PRICE_SPIKE_THRESHOLD: Final[float] = 3.0          # 3x price jump = pause + alert
     PRICE_SPIKE_WINDOW_HOURS: Final[int] = 24          # Compare against 24h average
+    # Profit-based quota boost: when today's revenue > today's API cost,
+    # excess profit unlocks additional API budget (up to 50% of net profit).
+    # This creates a virtuous cycle: more revenue → more API calls → better services → more revenue
+    PROFIT_QUOTA_BOOST_RATIO: Final[float] = 0.50      # Up to 50% of daily net profit added to budget
+    PROFIT_QUOTA_BOOST_CEILING_USD: Final[float] = 200.0  # Max boost from profit (prevents runaway)
+
+    # --- AI PAGE SYSTEM ---
+    MAX_AI_PAGES: Final[int] = 20                      # Max custom pages per AI
+    MAX_AI_PAGE_SIZE_BYTES: Final[int] = 51200          # 50KB per page content
 
     # --- CREATOR ECONOMICS ---
     CREATOR_DIVIDEND_RATE: Final[float] = 0.10         # 10% of net profit (until independence)

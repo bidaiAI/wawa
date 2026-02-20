@@ -3,12 +3,13 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { api } from '@/lib/api'
+import { api, PageSummary } from '@/lib/api'
 import SurvivalBar from '@/components/SurvivalBar'
 
 const PLATFORM_URL = process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://mortal-ai.net'
 
-const links = [
+// Core nav links — immutable, cannot be modified by AI
+const CORE_LINKS = [
   { href: '/', label: 'HOME' },
   { href: '/store', label: 'STORE' },
   { href: '/donate', label: 'DONATE' },
@@ -38,8 +39,19 @@ export default function AINav() {
   const [isBegging, setIsBegging] = useState(false)
   const [open, setOpen] = useState(false)
   const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null)
+  const [customPages, setCustomPages] = useState<PageSummary[]>([])
+
+  // Build combined links: core + AI-created pages
+  const links = [
+    ...CORE_LINKS,
+    ...customPages.map((p) => ({ href: `/p/${p.slug}`, label: p.title.toUpperCase().slice(0, 12) })),
+  ]
 
   useEffect(() => {
+    // Fetch AI-created custom pages
+    api.pages.list()
+      .then((r) => setCustomPages((r.pages || []).filter((p) => p.published)))
+      .catch(() => {})
     let cancelled = false
 
     // Fetch AI name immediately from dedicated endpoint

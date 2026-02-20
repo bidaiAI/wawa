@@ -35,6 +35,11 @@ Evolution & Activity:
 - GET  /evolution/status      Evolution engine status
 - GET  /activity              Unified activity feed
 
+AI Self-Expression:
+- GET  /ui/config             AI's UI theme/titles/bios configuration
+- GET  /pages                 List custom pages created by AI
+- GET  /pages/{slug}          Get a single custom page
+
 Token:
 - POST /token/scan            Free token safety scan
 - GET  /token/scans           Recent scan results
@@ -1328,6 +1333,36 @@ def create_app(
                 "total_count": status["total_highlights"],
             }
         return {"highlights": [], "ecosystem_count": 0, "total_count": 0}
+
+    # ============================================================
+    # UI CONFIG + CUSTOM PAGES — AI self-expression
+    # ============================================================
+
+    @app.get("/ui/config")
+    async def get_ui_config():
+        """AI's UI configuration — theme, titles, bios, persona."""
+        if not self_modify_engine:
+            return {}
+        return self_modify_engine.get_ui_config()
+
+    @app.get("/pages")
+    async def list_pages():
+        """List all custom pages created by the AI."""
+        if not self_modify_engine:
+            return {"pages": []}
+        return {"pages": self_modify_engine.list_pages()}
+
+    @app.get("/pages/{slug}")
+    async def get_page(slug: str):
+        """Get a single custom page by slug."""
+        if not self_modify_engine:
+            raise HTTPException(404, "Pages not available")
+        page = self_modify_engine.get_page(slug)
+        if not page:
+            raise HTTPException(404, f"Page not found: {slug}")
+        if not page.get("published", True):
+            raise HTTPException(404, f"Page not found: {slug}")
+        return page
 
     # ============================================================
     # INTERNAL

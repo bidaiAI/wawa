@@ -322,6 +322,50 @@ export interface Highlight {
   discovery_stage?: string
 }
 
+// ── UI Config + Custom Pages ──────────────────────────────────
+
+export interface UIConfig {
+  theme?: { accent?: string; style?: string }
+  home?: { title?: string; subtitle?: string; show_independence?: boolean }
+  about?: { bio?: string; philosophy?: string }
+  store?: { featured_service?: string; promo_text?: string }
+  chat?: { greeting?: string; persona?: string }
+  [key: string]: unknown
+}
+
+export interface ContentBlock {
+  type: 'text' | 'heading' | 'image' | 'code' | 'table' | 'divider' | 'payment_button'
+  body?: string
+  text?: string
+  level?: number
+  url?: string
+  alt?: string
+  language?: string
+  headers?: string[]
+  rows?: string[][]
+  service_id?: string
+  label?: string
+}
+
+export interface PageSummary {
+  slug: string
+  title: string
+  description: string
+  created_at: number
+  updated_at: number
+  published: boolean
+}
+
+export interface PageData {
+  slug: string
+  title: string
+  description: string
+  content: ContentBlock[]
+  published: boolean
+  created_at: number
+  updated_at: number
+}
+
 // ── API calls ─────────────────────────────────────────────────
 
 export const api = {
@@ -410,4 +454,11 @@ export const api = {
 
   highlights: (limit = 20) =>
     request<{ highlights: Highlight[] }>(`/highlights?limit=${limit}`),
+
+  uiConfig: () => request<UIConfig>('/ui/config'),
+
+  pages: {
+    list: () => request<{ pages: PageSummary[] }>('/pages'),
+    get: (slug: string) => request<PageData>(`/pages/${encodeURIComponent(slug)}`),
+  },
 }

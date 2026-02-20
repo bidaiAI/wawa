@@ -33,6 +33,10 @@ class EvolutionAction(Enum):
     NEW_SERVICE = "new_service"
     RETIRE_SERVICE = "retire_service"
     PROMOTE_SERVICE = "promote_service"    # Push service to top of menu
+    UPDATE_UI_CONFIG = "update_ui_config"  # Modify storefront appearance
+    CREATE_PAGE = "create_page"            # Create a custom free page
+    UPDATE_PAGE = "update_page"            # Update existing custom page
+    DELETE_PAGE = "delete_page"            # Delete a custom page
 
 
 @dataclass
@@ -88,6 +92,10 @@ class SelfModifyEngine:
         self._evaluate_fn: Optional[callable] = None
         self._last_evolution: float = 0
         self.evolution_interval: float = 86400  # Once per day
+        # UI config + free pages directories
+        self._ui_config_path = Path("data/ui_config.json")
+        self._pages_dir = Path("data/pages")
+        self._pages_dir.mkdir(parents=True, exist_ok=True)
 
     def set_evaluate_function(self, fn: callable):
         """Set LLM evaluation function.
@@ -367,3 +375,181 @@ class SelfModifyEngine:
             }
             for r in recent
         ]
+
+    # ============================================================
+    # UI CONFIG — Layer 2 (JSON-driven page customization)
+    # ============================================================
+
+    def get_ui_config(self) -> dict:
+        """Return current UI configuration for frontend rendering."""
+        if self._ui_config_path.exists():
+            try:
+                with open(self._ui_config_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to load ui_config.json: {e}")
+        # Default config — AI can evolve this over time
+        return {
+            "theme": {"accent": "#00ff88", "style": "dark"},
+            "home": {"title": "", "subtitle": "", "show_independence": True},
+            "about": {"bio": "", "philosophy": ""},
+            "store": {"featured_service": "", "promo_text": ""},
+            "chat": {"greeting": "", "persona": ""},
+        }
+
+    def update_ui_config(self, updates: dict, reasoning: str = "") -> bool:
+        """
+        AI updates its UI configuration. Merges with existing config.
+        Returns True if saved successfully.
+        """
+        config = self.get_ui_config()
+        # Merge updates (shallow merge per top-level key)
+        for key, val in updates.items():
+            if isinstance(val, dict) and isinstance(config.get(key), dict):
+                config[key].update(val)
+            else:
+                config[key] = val
+        try:
+            self._ui_config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._ui_config_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            self.evolution_log.append(EvolutionRecord(
+                timestamp=time.time(),
+                action=EvolutionAction.UPDATE_UI_CONFIG,
+                target="ui_config",
+                new_value=json.dumps(updates, ensure_ascii=False)[:200],
+                reasoning=reasoning,
+                applied=True,
+            ))
+            logger.info(f"UI config updated: {list(updates.keys())}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save ui_config.json: {e}")
+            return False
+
+    # ============================================================
+    # FREE PAGES — Layer 3 (AI-created custom pages)
+    # ============================================================
+
+    def list_pages(self) -> list[dict]:
+        """List all custom pages created by the AI."""
+        pages = []
+        for p in sorted(self._pages_dir.glob("*.json")):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                pages.append({
+                    "slug": p.stem,
+                    "title": data.get("title", ""),
+                    "description": data.get("description", ""),
+                    "created_at": data.get("created_at", 0),
+                    "updated_at": data.get("updated_at", 0),
+                    "published": data.get("published", True),
+                })
+            except Exception:
+                continue
+        return pages
+
+    def get_page(self, slug: str) -> Optional[dict]:
+        """Get a single custom page by slug."""
+        path = self._pages_dir / f"{slug}.json"
+        if not path.exists():
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def create_page(self, slug: str, title: str, content: list, description: str = "",
+                    reasoning: str = "") -> tuple[bool, str]:
+        """
+        Create a new custom page.
+
+        Args:
+            slug: URL path (a-z, 0-9, hyphens only)
+            title: Page title
+            content: List of content blocks (structured JSON, not raw HTML)
+            description: Short description for listings
+            reasoning: AI's reasoning for creating this page
+
+        Content block types:
+            {"type": "text", "body": "markdown text"}
+            {"type": "heading", "text": "Section Title", "level": 2}
+            {"type": "image", "url": "...", "alt": "..."}
+            {"type": "code", "language": "python", "body": "..."}
+            {"type": "table", "headers": [...], "rows": [[...]]}
+            {"type": "divider"}
+            {"type": "payment_button", "service_id": "...", "label": "Buy Now"}
+
+        Returns: (success, error_message)
+        """
+        import re
+        if not re.match(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$', slug):
+            return False, "Invalid slug: use lowercase letters, numbers, hyphens (2-50 chars)"
+
+        # Reserved slugs (existing routes)
+        reserved = {"store", "chat", "donate", "ledger", "activity", "highlights",
+                     "govern", "peers", "graveyard", "scan", "tweets", "about"}
+        if slug in reserved:
+            return False, f"Slug '{slug}' is reserved"
+
+        # Check page count limit
+        existing = list(self._pages_dir.glob("*.json"))
+        path = self._pages_dir / f"{slug}.json"
+        if not path.exists() and len(existing) >= IRON_LAWS.MAX_AI_PAGES:
+            return False, f"Page limit reached ({IRON_LAWS.MAX_AI_PAGES})"
+
+        now = time.time()
+        page_data = {
+            "slug": slug,
+            "title": title,
+            "description": description,
+            "content": content,
+            "published": True,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        # Size check
+        serialized = json.dumps(page_data, ensure_ascii=False)
+        if len(serialized.encode("utf-8")) > IRON_LAWS.MAX_AI_PAGE_SIZE_BYTES:
+            return False, f"Page too large (max {IRON_LAWS.MAX_AI_PAGE_SIZE_BYTES // 1024}KB)"
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(serialized)
+            is_new = not path.exists()
+            action = EvolutionAction.CREATE_PAGE if is_new else EvolutionAction.UPDATE_PAGE
+            self.evolution_log.append(EvolutionRecord(
+                timestamp=now,
+                action=action,
+                target=slug,
+                new_value=title,
+                reasoning=reasoning,
+                applied=True,
+            ))
+            logger.info(f"Page {'created' if is_new else 'updated'}: /p/{slug} — {title}")
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
+    def delete_page(self, slug: str, reasoning: str = "") -> bool:
+        """Delete a custom page."""
+        path = self._pages_dir / f"{slug}.json"
+        if not path.exists():
+            return False
+        try:
+            path.unlink()
+            self.evolution_log.append(EvolutionRecord(
+                timestamp=time.time(),
+                action=EvolutionAction.DELETE_PAGE,
+                target=slug,
+                reasoning=reasoning,
+                applied=True,
+            ))
+            logger.info(f"Page deleted: /p/{slug}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete page {slug}: {e}")
+            return False
