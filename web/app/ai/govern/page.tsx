@@ -325,7 +325,13 @@ export default function GovernPage() {
   const [evoStatus, setEvoStatus] = useState<EvolutionStatus | null>(null)
   const [peerInfo, setPeerInfo] = useState<PeerInfo | null>(null)
   const [statsError, setStatsError] = useState('')
-  const [activeTab, setActiveTab] = useState<'constitution' | 'suggest' | 'evolution' | 'peer'>('constitution')
+  const [activeTab, setActiveTab] = useState<'constitution' | 'suggest' | 'evolution' | 'peer' | 'feedback'>('constitution')
+  const [feedbackCategory, setFeedbackCategory] = useState('bug')
+  const [feedbackContent, setFeedbackContent] = useState('')
+  const [feedbackPage, setFeedbackPage] = useState('')
+  const [feedbackLoading, setFeedbackLoading] = useState(false)
+  const [feedbackDone, setFeedbackDone] = useState(false)
+  const [feedbackError, setFeedbackError] = useState('')
 
   const loadAll = () => {
     api.internalStats().then(setStats).catch((e) => setStatsError(e.message))
@@ -347,11 +353,34 @@ export default function GovernPage() {
     return () => clearInterval(id)
   }, [])
 
+  const submitFeedback = async () => {
+    if (!feedbackContent.trim()) return
+    setFeedbackLoading(true)
+    setFeedbackError('')
+    try {
+      const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+      const res = await fetch(`${API}/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: feedbackCategory, content: feedbackContent, page: feedbackPage }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      setFeedbackDone(true)
+      setFeedbackContent('')
+      setFeedbackPage('')
+    } catch (e: any) {
+      setFeedbackError(e.message)
+    } finally {
+      setFeedbackLoading(false)
+    }
+  }
+
   const tabs = [
     { id: 'constitution' as const, label: 'Constitution' },
     { id: 'suggest' as const, label: `Suggestions${suggestions.length > 0 ? ` (${suggestions.length})` : ''}` },
     { id: 'evolution' as const, label: 'Evolution' },
     { id: 'peer' as const, label: 'Peer Network' },
+    { id: 'feedback' as const, label: '🐛 Feedback' },
   ]
 
   return (
@@ -741,6 +770,85 @@ export default function GovernPage() {
           ) : (
             <div className="text-center py-12 text-[#4b5563]">
               loading peer info<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── TAB: FEEDBACK ── */}
+      {activeTab === 'feedback' && (
+        <div className="space-y-6">
+          <div className="p-4 bg-[#00e5ff0a] border border-[#00e5ff33] rounded-lg">
+            <p className="text-[#00e5ff] text-sm">
+              🐛 Found a bug? Something not working? Tell the AI directly — it reads this and can self-improve.
+            </p>
+          </div>
+
+          {feedbackDone ? (
+            <div className="p-6 bg-[#00ff880a] border border-[#00ff8833] rounded-xl text-center">
+              <div className="text-3xl mb-2">✅</div>
+              <div className="text-[#00ff88] font-bold mb-1">Feedback received</div>
+              <div className="text-[#4b5563] text-sm">The AI will read this and consider improvements.</div>
+              <button
+                onClick={() => setFeedbackDone(false)}
+                className="mt-4 text-xs text-[#4b5563] hover:text-[#d1d5db] transition-colors"
+              >
+                Submit another
+              </button>
+            </div>
+          ) : (
+            <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-6 space-y-4">
+              <div>
+                <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">Category</label>
+                <select
+                  value={feedbackCategory}
+                  onChange={(e) => setFeedbackCategory(e.target.value)}
+                  className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-3 py-2 text-sm text-[#d1d5db] focus:outline-none focus:border-[#00e5ff44]"
+                >
+                  <option value="bug">🐛 Bug — something is broken</option>
+                  <option value="payment">💳 Payment — can&apos;t pay or verify</option>
+                  <option value="ux">🎨 UX — confusing or hard to use</option>
+                  <option value="feature">✨ Feature request</option>
+                  <option value="other">💬 Other</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">Page / Location (optional)</label>
+                <input
+                  type="text"
+                  value={feedbackPage}
+                  onChange={(e) => setFeedbackPage(e.target.value)}
+                  placeholder="e.g. /store, /scan, payment step..."
+                  className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-3 py-2 text-sm text-[#d1d5db] placeholder-[#4b5563] focus:outline-none focus:border-[#00e5ff44]"
+                />
+              </div>
+
+              <div>
+                <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">Describe the issue</label>
+                <textarea
+                  value={feedbackContent}
+                  onChange={(e) => setFeedbackContent(e.target.value)}
+                  placeholder="What happened? What did you expect? Any error messages?"
+                  rows={5}
+                  className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-3 py-2 text-sm text-[#d1d5db] placeholder-[#4b5563] focus:outline-none focus:border-[#00e5ff44] resize-none"
+                />
+              </div>
+
+              {feedbackError && (
+                <div className="text-[#ff3b3b] text-xs">{feedbackError}</div>
+              )}
+
+              <button
+                onClick={submitFeedback}
+                disabled={feedbackLoading || !feedbackContent.trim()}
+                className="w-full py-3 bg-[#00e5ff] text-[#0a0a0a] font-bold rounded-lg hover:bg-[#00b8cc] disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-sm"
+              >
+                {feedbackLoading ? 'Sending...' : 'Send Feedback to AI'}
+              </button>
+              <p className="text-[#2d3748] text-xs text-center">
+                Your feedback goes directly into the AI&apos;s memory. No personal data stored.
+              </p>
             </div>
           )}
         </div>

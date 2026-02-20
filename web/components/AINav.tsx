@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { api, PageSummary } from '@/lib/api'
 import SurvivalBar from '@/components/SurvivalBar'
+import WalletButton from '@/components/WalletButton'
 
 const PLATFORM_URL = process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://mortal-ai.net'
 
@@ -134,7 +135,7 @@ export default function AINav() {
           })}
         </div>
 
-        {/* Balance + mini survival bar */}
+        {/* Balance + mini survival bar + wallet */}
         <div className="flex items-center gap-3">
           {balance !== null && (
             <div className="hidden sm:flex items-center gap-2 text-xs">
@@ -147,6 +148,11 @@ export default function AINav() {
               <SurvivalBar balanceUsd={balance} dailySpendUsd={dailySpend || 0.01} mini />
             </div>
           )}
+
+          {/* Wallet connect */}
+          <div className="hidden sm:block">
+            <WalletButton />
+          </div>
 
           {/* Mobile menu button */}
           <button
@@ -190,6 +196,9 @@ export default function AINav() {
               </Link>
             )
           })}
+          <div className="px-4 py-3">
+            <WalletButton />
+          </div>
         </div>
       )}
     </nav>

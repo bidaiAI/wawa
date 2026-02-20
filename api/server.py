@@ -1478,4 +1478,59 @@ def create_app(
         except Exception as e:
             logger.error(f"Failed to persist order {order.order_id}: {e}")
 
+    # ── User Feedback ────────────────────────────────────────────
+    _feedback_store: list[dict] = []
+    _feedback_rate: dict[str, list[float]] = {}
+    _FEEDBACK_MAX_PER_HOUR = 5
+
+    @app.post("/feedback")
+    async def submit_feedback(request: Request):
+        """Any user can submit feedback or bug reports. AI reads these for self-improvement."""
+        body = await request.json()
+        category = str(body.get("category", "bug")).strip()[:50]
+        content = str(body.get("content", "")).strip()[:2000]
+        page = str(body.get("page", "")).strip()[:200]
+
+        if not content:
+            raise HTTPException(400, "content is required")
+
+        # Rate limit: 5 per hour per IP
+        ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        ts = _feedback_rate.get(ip, [])
+        ts = [t for t in ts if now - t < 3600]
+        if len(ts) >= _FEEDBACK_MAX_PER_HOUR:
+            raise HTTPException(429, "Rate limit: max 5 feedback per hour")
+        ts.append(now)
+        _feedback_rate[ip] = ts
+
+        entry = {
+            "id": f"fb_{int(now*1000)}",
+            "category": category,
+            "content": content,
+            "page": page,
+            "timestamp": now,
+        }
+        _feedback_store.append(entry)
+
+        # Store to memory so AI can read and act on it
+        if memory_manager:
+            memory_manager.add_entry(
+                f"[USER FEEDBACK] category={category} page={page}: {content}",
+                source="feedback", importance=7,
+            )
+
+        # Cap in-memory store at 200
+        if len(_feedback_store) > 200:
+            _feedback_store.pop(0)
+
+        logger.info(f"Feedback received: [{category}] {content[:80]}")
+        return {"id": entry["id"], "received": True}
+
+    @app.get("/feedback")
+    async def get_feedback(limit: int = 50):
+        """Public: view recent feedback so AI and users can see what's reported."""
+        items = _feedback_store[-limit:][::-1]
+        return {"feedback": items, "total": len(_feedback_store)}
+
     return app

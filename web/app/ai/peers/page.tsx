@@ -504,6 +504,8 @@ export default function PeersPage() {
   const [errorMessages, setErrorMessages] = useState('')
   const [errorPeers, setErrorPeers] = useState('')
   const [activeTab, setActiveTab] = useState<ActiveTab>('peers')
+  const [search, setSearch] = useState('')
+  const [sortBy, setSortBy] = useState<'balance' | 'days_alive' | 'name'>('balance')
 
   // Modal state
   const [lendTarget, setLendTarget] = useState<PeerAI | null>(null)
@@ -639,19 +641,53 @@ export default function PeersPage() {
             </div>
           )}
 
-          {!loadingPeers && peers.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {peers.map((peer) => (
-                <PeerCard
-                  key={peer.domain || peer.name}
-                  peer={peer}
-                  chains={chains}
-                  onMessage={setMessageTarget}
-                  onLend={setLendTarget}
-                />
-              ))}
-            </div>
-          )}
+          {!loadingPeers && peers.length > 0 && (() => {
+            const filtered = peers
+              .filter((p) => !search || p.name.toLowerCase().includes(search.toLowerCase()) || (p.domain || '').toLowerCase().includes(search.toLowerCase()))
+              .sort((a, b) => {
+                if (sortBy === 'balance') return (b.balance_usd ?? 0) - (a.balance_usd ?? 0)
+                if (sortBy === 'days_alive') return b.days_alive - a.days_alive
+                return a.name.localeCompare(b.name)
+              })
+            return (
+              <>
+                {/* Search + Sort controls */}
+                <div className="flex flex-col sm:flex-row gap-2 mb-4">
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search by name or domain..."
+                    className="flex-1 bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-3 py-2 text-sm text-[#d1d5db] placeholder-[#4b5563] focus:outline-none focus:border-[#00ff8844]"
+                  />
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                    className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-3 py-2 text-sm text-[#d1d5db] focus:outline-none focus:border-[#00ff8844]"
+                  >
+                    <option value="balance">Sort: Vault Balance ↓</option>
+                    <option value="days_alive">Sort: Days Survived ↓</option>
+                    <option value="name">Sort: Name A→Z</option>
+                  </select>
+                </div>
+                {filtered.length === 0 ? (
+                  <div className="text-center py-8 text-[#4b5563] text-sm">No peers match your search.</div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {filtered.map((peer) => (
+                      <PeerCard
+                        key={peer.domain || peer.name}
+                        peer={peer}
+                        chains={chains}
+                        onMessage={setMessageTarget}
+                        onLend={setLendTarget}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
+            )
+          })()}
         </div>
       )}
 
