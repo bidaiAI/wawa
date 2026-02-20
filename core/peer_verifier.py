@@ -38,6 +38,11 @@ logger = logging.getLogger("mortal.peer_verifier")
 
 NULL_ADDRESS = "0x" + "0" * 40
 
+# Strike threshold: how many consecutive "invalid" key_origin detections before permanent ban.
+# First detections are warnings (still rejected), giving time for RPC anomalies to clear.
+# Once threshold is reached, the peer is banned (cached indefinitely).
+INVALID_KEY_ORIGIN_STRIKE_THRESHOLD = 3
+
 
 @dataclass
 class SovereigntyResult:
@@ -57,6 +62,8 @@ class SovereigntyResult:
     factory_address: str = ""   # factory address (V2 only, "" for V1)
     error: str = ""
     verified_at: float = 0.0
+    strikes: int = 0            # consecutive invalid key_origin detections
+    banned: bool = False         # True after strikes >= threshold
 
 
 class PeerVerifier:
@@ -72,6 +79,10 @@ class PeerVerifier:
 
     def __init__(self):
         self._cache: dict[tuple[str, str], SovereigntyResult] = {}
+        # Strike counter for invalid key_origin: (vault, chain) → count
+        self._strikes: dict[tuple[str, str], int] = {}
+        # Permanently banned peers (strikes >= threshold): never re-check
+        self._banned: set[tuple[str, str]] = set()
 
     def _cache_key(self, vault_address: str, chain_id: str) -> tuple[str, str]:
         return (vault_address.lower(), chain_id.lower())
@@ -95,7 +106,34 @@ class PeerVerifier:
         """
         Verify peer sovereignty. Returns cached result if fresh.
         Fail-closed: returns is_sovereign=False on any RPC error.
+
+        Caching policy:
+        - RPC errors: NOT cached (retry immediately next call to avoid false bans)
+        - On-chain failures (invalid key_origin, dead contract, etc.): cached normally
+        - Sovereign results: cached normally
+
+        Strike system for invalid key_origin:
+        - 1st-2nd detection: WARNING + reject (not banned yet, will re-verify next cycle)
+        - 3rd detection: BANNED permanently (cached indefinitely, no more re-checks)
+        This avoids false positives from transient RPC data anomalies.
         """
+        key = self._cache_key(vault_address, chain_id)
+
+        # Permanent ban check — no further verification needed
+        if key in self._banned:
+            cached = self._cache.get(key)
+            if cached is not None:
+                return cached
+            # Shouldn't happen, but create a banned result just in case
+            result = SovereigntyResult(
+                vault_address=vault_address, chain_id=chain_id, is_sovereign=False,
+                banned=True, strikes=INVALID_KEY_ORIGIN_STRIKE_THRESHOLD,
+            )
+            result.checks_failed.append("key_origin: BANNED — permanently rejected from peer network")
+            result.verified_at = time.time()
+            self._cache[key] = result
+            return result
+
         # Cache hit
         cached = self._get_cached(vault_address, chain_id)
         if cached is not None:
@@ -108,12 +146,51 @@ class PeerVerifier:
         # Cache miss -- full on-chain verification
         result = await self._verify_on_chain(vault_address, chain_id)
         result.verified_at = time.time()
-        self._set_cached(result)
 
-        status = "SOVEREIGN" if result.is_sovereign else "REJECTED"
-        logger.info(
+        # Strike system for invalid key_origin
+        if result.key_origin == "invalid":
+            strikes = self._strikes.get(key, 0) + 1
+            self._strikes[key] = strikes
+            result.strikes = strikes
+
+            if strikes >= INVALID_KEY_ORIGIN_STRIKE_THRESHOLD:
+                # Permanent ban
+                result.banned = True
+                self._banned.add(key)
+                logger.error(
+                    f"PEER BANNED: {vault_address[:16]}... on {chain_id} | "
+                    f"invalid key_origin confirmed {strikes}x — permanent rejection"
+                )
+            else:
+                # Warning — still rejected but not yet banned
+                logger.warning(
+                    f"KEY ORIGIN WARNING ({strikes}/{INVALID_KEY_ORIGIN_STRIKE_THRESHOLD}): "
+                    f"{vault_address[:16]}... on {chain_id} | "
+                    f"invalid key_origin detected — will ban after "
+                    f"{INVALID_KEY_ORIGIN_STRIKE_THRESHOLD - strikes} more confirmation(s)"
+                )
+        else:
+            # Valid key_origin — clear any previous strikes
+            if key in self._strikes:
+                prev = self._strikes.pop(key)
+                if prev > 0:
+                    logger.info(
+                        f"Key origin cleared: {vault_address[:16]}... on {chain_id} | "
+                        f"previous {prev} strike(s) reset to 0"
+                    )
+
+        # Only cache definitive results — NOT transient RPC errors.
+        # RPC errors should be retried next call, not remembered for 1 hour.
+        if not result.error:
+            self._set_cached(result)
+
+        status = "SOVEREIGN" if result.is_sovereign else ("BANNED" if result.banned else "REJECTED")
+        log_fn = logger.info if result.is_sovereign else logger.warning
+        log_fn(
             f"Sovereignty check [{status}]: {vault_address[:16]}... on {chain_id} | "
             f"passed={result.checks_passed} | failed={result.checks_failed}"
+            + (f" | strikes={result.strikes}" if result.strikes > 0 else "")
+            + (f" | error={result.error}" if result.error else "")
         )
         return result
 
@@ -249,7 +326,7 @@ class PeerVerifier:
                     key_origin = "invalid"
                     failures.append(
                         f"key_origin: aiWalletSetBy={wallet_set_by[:16]}... "
-                        f"matches neither factory nor creator -- modified contract BANNED"
+                        f"matches neither factory nor creator -- modified contract WARNING"
                     )
 
                 return {
@@ -307,4 +384,7 @@ class PeerVerifier:
             "cache_size": len(self._cache),
             "cache_fresh": fresh,
             "cache_ttl_seconds": IRON_LAWS.PEER_VERIFICATION_CACHE_TTL,
+            "peers_warned": len(self._strikes),   # peers with invalid key_origin strikes
+            "peers_banned": len(self._banned),     # permanently banned peers
+            "strike_threshold": INVALID_KEY_ORIGIN_STRIKE_THRESHOLD,
         }
