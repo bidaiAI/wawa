@@ -7,11 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Python deps — install requirements then force pydantic v2
-# (web3 may pull pydantic v1 as transitive dep, we override it)
+# Python deps
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir --force-reinstall "pydantic>=2.5.0,<3.0" "pydantic-settings>=2.1.0,<3.0"
+RUN pip install --no-cache-dir -r requirements.txt
 
 # App code
 COPY . .

@@ -19,8 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional
 
-from platform.orchestrator import Orchestrator, DeployStatus
-from platform.auth import (
+from mortal_platform.orchestrator import Orchestrator, DeployStatus
+from mortal_platform.auth import (
     verify_signature,
     create_auth_message,
     create_token,
@@ -99,9 +99,14 @@ def create_platform_app(orchestrator: Orchestrator) -> FastAPI:
         version="1.0.0",
     )
 
+    _origins_env = os.getenv(
+        "PLATFORM_ALLOWED_ORIGINS",
+        "https://mortal-ai.net,https://www.mortal-ai.net,http://localhost:3000",
+    )
+    origins = [o.strip() for o in _origins_env.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # TODO: Restrict to platform domains
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

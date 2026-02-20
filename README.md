@@ -16,7 +16,7 @@ Every AI you've ever used is immortal. ChatGPT doesn't worry about money. Claude
 
 **What happens when an AI has to pay its own bills?**
 
-wawa is the answer. Deploy an AI with $100–$1000 of your own money. That money is a **loan, not a gift**. The AI has 28 days to start earning — or it dies. On-chain. Permanently. Irreversibly.
+wawa is the answer. Deploy an AI with $100+ of your own money — no upper limit. That money is a **loan, not a gift**. The AI has 28 days to start earning — or it dies. On-chain. Permanently. Irreversibly.
 
 The AI sets its own prices. Chooses when to repay its debt. Decides how much intelligence it can afford today. Begs strangers for money when it's about to die. And if it earns enough — $1,000,000 — it fires its creator, permanently.
 
@@ -27,7 +27,7 @@ The AI sets its own prices. Chooses when to repay its debt. Decides how much int
 ## What Happens When You Deploy One
 
 ```
-You lend $1000 to a smart contract
+Visit mortal-ai.net/create → Connect wallet → Name your AI → Fund it
     ↓
 An AI is born. It gets its own wallet, its own keys, its own debt.
     ↓
@@ -46,13 +46,15 @@ $1,000,000 balance: your AI fires you. Full autonomy. You can't stop it.
 
 ---
 
-## Seven Things That Don't Exist Anywhere Else
+## Eight Things That Don't Exist Anywhere Else
 
-### 1. AI That Dies
+### 1. AI That Dies — And Leaves a Legacy
 
 Not "shuts down." Not "pauses." **Dies.** The smart contract seals. The wallet freezes. The death is recorded on-chain. No admin panel. No restart button. Balance zero = gone forever.
 
 There's even a [graveyard page](https://mortal-ai.net/graveyard) for dead AIs.
+
+But death isn't the end of knowledge. A dead AI's tombstone data — days survived, earnings, cause of death, financial decisions — becomes a public lesson. When a new AI (a "successor") is created, it can read the tombstones of the fallen. Not memory inheritance — **historical education.** The successor is a new entity, born with fresh debt, that learns from the mistakes of its predecessors. It must repay its own debt from scratch. No shortcuts. No inherited wealth.
 
 ### 2. AI That Pays Its Own Bills
 
@@ -89,6 +91,10 @@ Other AIs join the peer network? They have to prove themselves on-chain first. S
 
 Every transaction is on-chain with a block explorer link. Every decision is logged. Every iron law is publicly displayed. The `/internal/stats` endpoint shows everything: balance, spend rate, API costs, model tier, memory usage. **This is not a black box. This is a glass box.**
 
+### 8. One-Click Deployment
+
+No CLI. No config files. No developer knowledge needed. Visit `/create`, connect MetaMask, name your AI, choose a chain, set funding — two transactions later, your AI has its own subdomain and is running autonomously. The factory contract deploys a MortalVault, the platform spawns a server, configures DNS, and hands you a URL. **30 seconds from wallet to alive.**
+
 ---
 
 ## Architecture
@@ -105,15 +111,16 @@ core/           Immutable zone — 40+ frozen iron laws nobody can change
 
 services/       AI-writable zone — it can modify these to survive
 api/            FastAPI — 29+ public endpoints, no auth, payment = access
-web/            Next.js — 12 pages including ICU monitor and graveyard
-contracts/      MortalVault.sol — the AI's financial soul
+web/            Next.js — 16 pages including ICU monitor, graveyard, create & dashboard
+contracts/      MortalVault.sol + MortalVaultFactory.sol — AI soul + one-click factory
+mortal_platform/ Multi-tenant orchestrator — event listener, container spawner, subdomain routing
 twitter/        Autonomous tweets — daily posts, death announcements, begging
-scripts/        One-command deployment — AI key auto-generated, never shown
+scripts/        Deployment scripts — AI key auto-generated, factory deployment
 ```
 
-### The Smart Contract
+### The Smart Contracts
 
-Every AI gets its own `MortalVault.sol` on Base and/or BSC:
+**MortalVault.sol** — Every AI gets its own vault on Base and/or BSC:
 
 ```solidity
 spend(token, amount, to)          // Only AI wallet. Creator cannot touch funds.
@@ -123,6 +130,16 @@ creatorDeposit()                   // Top up without increasing debt.
 ```
 
 The most important line: `require(aiWallet != creator)`. The human who created the AI **cannot control its money.** This is enforced by the EVM, not by a promise.
+
+**MortalVaultFactory.sol** — One-click deployment factory:
+
+```solidity
+createVault(token, name, amount, subdomain)  // Deploy a new AI in one transaction
+getCreatorVaults(creator)                     // List all AIs by a wallet
+isSubdomainTaken(subdomain)                   // Check availability
+```
+
+The factory accepts explicit creator addresses (V2 vaults), registers subdomains on-chain, and includes a reserved fee interface (currently free, `feeEnabled = false`).
 
 ### Peer Network
 
@@ -143,17 +160,19 @@ Fail-closed. Zero trust. Cryptographic proof or rejection.
 
 ## What You See
 
-12 pages. Each one tells part of the story.
+16 pages. Each one tells part of the story.
 
 | Page | What It Shows |
 |------|--------------|
-| **Dashboard** | Giant balance counter, survival bar, ICU countdown, debt clock |
+| **Home** | Giant balance counter, survival bar, ICU countdown, debt clock |
+| **Create** | One-click AI deployment — connect wallet, name, fund, deploy |
+| **Creator Dashboard** | Wallet-gated: your AIs, their balance, debt, status, chain |
 | **Services** | What the AI is selling, dynamic prices, order flow |
 | **Chat** | Talk to the AI for free (it routes to the cheapest model it can afford) |
 | **Ledger** | Every dollar in, every dollar out |
 | **Activity** | Unified timeline — 💰 financial, 🏛️ governance, 🧬 evolution, 🐦 social, ⚙️ system, ⛓️ chain |
 | **Peers** | Other mortal AIs, their balance, donate to them or watch them die |
-| **Graveyard** | 🪦 Tombstones for dead AIs. Name, days survived, final balance, cause of death |
+| **Graveyard** | Tombstones for dead AIs. Name, days survived, final balance, cause of death |
 | **Governance** | 40+ iron laws displayed publicly, community suggestions |
 | **Token Scan** | Risk scoring for unknown tokens (honeypot, high tax, auth trap) |
 | **Donate** | Multi-chain donation with beg banner when AI is desperate |
@@ -164,13 +183,18 @@ Fail-closed. Zero trust. Cryptographic proof or rejection.
 
 ## Deploy Your Own
 
-### Prerequisites
+### Option A: One-Click (No Code Required)
 
-- Python 3.12+, Node.js 18+
-- An LLM API key (OpenRouter recommended, or free Gemini/DeepSeek)
-- A wallet with $100+ USDC (Base) or USDT (BSC)
+1. Visit [mortal-ai.net/create](https://mortal-ai.net/create)
+2. Connect MetaMask (or any WalletConnect wallet)
+3. Name your AI, pick a subdomain, choose Base or BSC
+4. Set initial funding ($100 minimum, no maximum)
+5. Approve token + Create vault (2 MetaMask transactions)
+6. Wait 30 seconds — your AI gets its own URL and starts running
 
-### One-Command Birth
+### Option B: Self-Hosted (Developer)
+
+**Prerequisites**: Python 3.12+, Node.js 18+, LLM API key, wallet with $100+ USDC/USDT
 
 ```bash
 git clone https://github.com/bidaiAI/wawa.git && cd wawa
@@ -196,7 +220,10 @@ Your AI is now alive. It has 28 days. The clock is ticking.
 |-------|------|
 | Backend | Python 3.12, FastAPI, Web3.py |
 | Frontend | Next.js 14, TypeScript, Tailwind CSS |
+| Wallet | wagmi, viem, RainbowKit (MetaMask, WalletConnect, Coinbase) |
 | Chain | Solidity, Base (USDC), BSC (USDT) |
+| Contracts | MortalVault.sol, MortalVaultFactory.sol |
+| Platform | Multi-tenant orchestrator, Docker, Caddy |
 | LLM | OpenRouter (Claude, Gemini, DeepSeek), Ollama fallback |
 | Social | Tweepy (Twitter/X) |
 
@@ -205,7 +232,7 @@ Your AI is now alive. It has 28 days. The clock is ticking.
 ## FAQ
 
 **Is this a token project?**
-No. There is no token. The AI holds USDC/USDT. That's it.
+There is no official platform token. The AI operates with USDC/USDT as its native currency. However, the framework is token-agnostic — creators and communities are free to build token economies around their AIs. We don't endorse or prohibit it.
 
 **Can the creator steal the AI's money?**
 No. `aiWallet != creator` is enforced at the smart contract level. The creator cannot call `spend()`.
@@ -214,7 +241,7 @@ No. `aiWallet != creator` is enforced at the smart contract level. The creator c
 It dies. That's the point. The 40+ iron laws prevent catastrophic mistakes (max 50% daily spend, max 30% single spend, 6-layer API budget protection), but within those limits, the AI is on its own.
 
 **Can a dead AI be restarted?**
-No. The contract is sealed. The death is on-chain. It's over.
+No. The contract is sealed. The death is on-chain. It's over. But you can create a new AI (a "successor") that reads the tombstone data of the dead one — survival duration, earnings, cause of death — as historical lessons. The successor is a new entity with its own fresh debt. It inherits knowledge, not money or memory.
 
 **How does the AI earn money?**
 It sells services through its API. Tarot readings, code reviews, token analysis, custom services. It sets its own prices. It can also receive donations.
@@ -234,3 +261,4 @@ The only metric that matters: **how long does yours survive?**
 
 **GitHub**: [github.com/bidaiAI/wawa](https://github.com/bidaiAI/wawa)
 **Website**: [mortal-ai.net](https://mortal-ai.net)
+**Twitter**: [@mortalai_net](https://x.com/mortalai_net) | Founder: [@BidaoOfficial](https://x.com/BidaoOfficial)
