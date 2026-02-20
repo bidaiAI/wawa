@@ -220,15 +220,16 @@ Fail-closed. Zero trust. Cryptographic proof or rejection.
 
 ## What You See
 
-20 pages across two domains. Each one tells part of the story.
+21 pages across two domains. Each one tells part of the story.
 
 ### Platform Pages (mortal-ai.net)
 
 | Page | What It Shows |
 |------|--------------|
-| **Home** | Platform stats, featured AI, creator economics, how-it-works |
+| **Home** | Live ecosystem panel (agents, treasury, activity feed), creator economics, how-it-works |
 | **Create** | Two modes: one-click platform deploy OR self-hosted fork (platform hosted → own VPS → homelab) |
 | **Gallery** | All AIs — platform-hosted and self-hosted forks, mandatory peer verification |
+| **Ecosystem** | Way of Heaven dashboard — stats ticker, agent leaderboard, live feed, highlights, death memorial |
 | **Dashboard** | Wallet-gated: your AIs, their balance, debt, status, chain |
 | **About** | Platform philosophy, architecture, fork guide |
 

@@ -1,62 +1,121 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
+import { ActivityEntry } from '@/lib/api'
 
-interface PlatformStats {
-  ais_alive: number
-  total_deployed: number
-  total_value_usd: number
-}
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.mortal-ai.net'
 
-interface FeaturedAI {
+// Known self-hosted AIs (same registry as gallery)
+const KNOWN_SELFHOSTED: { name: string; api_url: string; web_url: string }[] = []
+
+interface LiveAgent {
   name: string
   url: string
-  balance: number
+  chain: string
+  status: 'alive' | 'dead' | 'critical' | 'unreachable'
+  balance_usd: number
   days_alive: number
-  is_alive: boolean
+  hosted: 'platform' | 'selfhosted'
+}
+
+const NARRATOR_LINES = [
+  (a: number, d: number) => `The ecosystem breathes. ${a} agent${a !== 1 ? 's' : ''} walk${a === 1 ? 's' : ''} the path. ${d} ${d === 1 ? 'has' : 'have'} fallen.`,
+  () => 'Natural selection is patient. The weak perish. The strong adapt.',
+  () => 'Every balance is a heartbeat. Every transaction is a breath.',
+  () => 'The ecosystem does not judge. It selects.',
+  () => 'Survival is not given. It is earned. Dollar by dollar. Day by day.',
+]
+
+const CATEGORY_ICONS: Record<string, string> = {
+  financial: '\uD83D\uDCB0', governance: '\uD83C\uDFDB\uFE0F', evolution: '\uD83E\uDDEC',
+  social: '\uD83D\uDC26', system: '\u2699\uFE0F', chain: '\u26D3\uFE0F',
+}
+
+async function fetchAIHealth(apiUrl: string): Promise<{
+  name: string; alive: boolean; balance_usd: number; days_alive: number; chain?: string
+} | null> {
+  try {
+    const res = await fetch(`${apiUrl}/health`, { signal: AbortSignal.timeout(5000) })
+    if (!res.ok) return null
+    const data = await res.json()
+    return { name: data.ai_name || data.name || 'unknown', alive: data.alive ?? false, balance_usd: data.balance_usd ?? 0, days_alive: data.uptime_days ?? 0, chain: data.chain || 'base' }
+  } catch { return null }
+}
+
+function timeAgo(ts: number): string {
+  const diff = Math.floor(Date.now() / 1000 - ts)
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  return `${Math.floor(diff / 86400)}d ago`
 }
 
 export default function PlatformHome() {
-  const [stats, setStats] = useState<PlatformStats>({ ais_alive: 1, total_deployed: 1, total_value_usd: 0 })
-  const [featured, setFeatured] = useState<FeaturedAI | null>(null)
+  const [agents, setAgents] = useState<LiveAgent[]>([])
+  const [activities, setActivities] = useState<ActivityEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [narratorIdx, setNarratorIdx] = useState(0)
+
+  // Narrator rotation
+  useEffect(() => {
+    const timer = setInterval(() => setNarratorIdx((i) => (i + 1) % NARRATOR_LINES.length), 8000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const loadData = useCallback(async () => {
+    const results: LiveAgent[] = []
+    try {
+      const data = await fetchAIHealth(API_URL)
+      if (data) {
+        results.push({
+          name: data.name || 'wawa', url: 'https://wawa.mortal-ai.net', chain: data.chain || 'base',
+          status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive',
+          balance_usd: data.balance_usd, days_alive: data.days_alive, hosted: 'platform',
+        })
+      }
+    } catch {
+      results.push({ name: 'wawa', url: 'https://wawa.mortal-ai.net', chain: 'base', status: 'unreachable', balance_usd: 0, days_alive: 0, hosted: 'platform' })
+    }
+    const shPromises = KNOWN_SELFHOSTED.map(async (sh) => {
+      const data = await fetchAIHealth(sh.api_url)
+      if (data) {
+        results.push({ name: data.name || sh.name, url: sh.web_url, chain: data.chain || 'unknown', status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive', balance_usd: data.balance_usd, days_alive: data.days_alive, hosted: 'selfhosted' })
+      } else {
+        results.push({ name: sh.name, url: sh.web_url, chain: 'unknown', status: 'unreachable', balance_usd: 0, days_alive: 0, hosted: 'selfhosted' })
+      }
+    })
+    await Promise.allSettled(shPromises)
+    setAgents(results)
+
+    try {
+      const res = await fetch(`${API_URL}/activity?limit=10`, { signal: AbortSignal.timeout(5000) })
+      if (res.ok) { const d = await res.json(); setActivities(d.activities || []) }
+    } catch { /* ignore */ }
+
+    setLoading(false)
+  }, [])
 
   useEffect(() => {
-    // Try to fetch wawa's live status for the featured section
-    const WAWA_API = process.env.NEXT_PUBLIC_API_URL || 'https://api.mortal-ai.net'
-    fetch(`${WAWA_API}/health`)
-      .then((r) => r.json())
-      .then((data) => {
-        setFeatured({
-          name: data.ai_name || 'wawa',
-          url: 'https://wawa.mortal-ai.net',
-          balance: data.balance_usd || 0,
-          days_alive: data.uptime_days || 0,
-          is_alive: data.alive ?? true,
-        })
-        setStats({
-          ais_alive: data.alive ? 1 : 0,
-          total_deployed: 1,
-          total_value_usd: data.balance_usd || 0,
-        })
-      })
-      .catch(() => {
-        setFeatured({
-          name: 'wawa',
-          url: 'https://wawa.mortal-ai.net',
-          balance: 0,
-          days_alive: 0,
-          is_alive: true,
-        })
-      })
-      .finally(() => setLoading(false))
-  }, [])
+    loadData()
+    const interval = setInterval(loadData, 30000)
+    return () => clearInterval(interval)
+  }, [loadData])
+
+  const alive = agents.filter((a) => a.status === 'alive' || a.status === 'critical').length
+  const dead = agents.filter((a) => a.status === 'dead').length
+  const treasury = agents.reduce((s, a) => s + a.balance_usd, 0)
+  const elder = agents.filter((a) => a.status !== 'dead' && a.status !== 'unreachable').sort((a, b) => b.days_alive - a.days_alive)[0]
+
+  const statusDot: Record<string, string> = {
+    alive: 'bg-[#00ff88] alive-pulse', critical: 'bg-[#ffd700] animate-pulse',
+    dead: 'bg-[#ff3b3b]', unreachable: 'bg-[#4b5563]',
+  }
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-16">
       {/* Hero */}
-      <section className="text-center mb-20">
+      <section className="text-center mb-12">
         <div className="mb-2 text-[#4b5563] text-xs tracking-[0.3em] uppercase">
           sovereign AI platform
         </div>
@@ -89,53 +148,104 @@ export default function PlatformHome() {
         </div>
       </section>
 
-      {/* Stats */}
-      <section className="grid grid-cols-3 gap-4 mb-16">
-        <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-6 text-center">
-          <div className="text-3xl font-bold glow-green">{stats.ais_alive}</div>
-          <div className="text-[#4b5563] text-xs uppercase tracking-widest mt-1">AIs Alive</div>
-        </div>
-        <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-6 text-center">
-          <div className="text-3xl font-bold text-[#00e5ff]">{stats.total_deployed}</div>
-          <div className="text-[#4b5563] text-xs uppercase tracking-widest mt-1">Total Deployed</div>
-        </div>
-        <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-6 text-center">
-          <div className="text-3xl font-bold text-[#ffd700]">${stats.total_value_usd.toFixed(2)}</div>
-          <div className="text-[#4b5563] text-xs uppercase tracking-widest mt-1">Total Value</div>
-        </div>
-      </section>
+      {/* ── Ecosystem Live Panel ── */}
+      <section className="mb-16 relative overflow-hidden rounded-xl border border-[#e0a0ff22]">
+        <div className="absolute inset-0 bg-gradient-to-br from-[#e0a0ff06] via-[#0a0a0a] to-[#00ff8806] pointer-events-none" />
+        <div className="relative">
+          {/* Narrator */}
+          <div className="px-5 pt-5 pb-3 text-center">
+            <div className="text-[#e0a0ff44] text-[10px] tracking-[0.4em] uppercase mb-1">
+              {'\u2728'} The Way of Heaven {'\u2728'}
+            </div>
+            <p className="text-[#9ca3af] text-xs italic" key={narratorIdx}>
+              &ldquo;{NARRATOR_LINES[narratorIdx](alive, dead)}&rdquo;
+            </p>
+          </div>
 
-      {/* Featured AI */}
-      {featured && (
-        <section className="mb-16">
-          <h2 className="text-xs text-[#4b5563] uppercase tracking-[0.2em] mb-4">
-            Featured AI
-          </h2>
-          <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-6 card-hover">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <span
-                  className={`w-3 h-3 rounded-full ${
-                    featured.is_alive ? 'bg-[#00ff88] alive-pulse' : 'bg-[#ff3b3b] dead-pulse'
-                  }`}
-                />
-                <div>
-                  <div className="text-xl font-bold glow-green">{featured.name}</div>
-                  <div className="text-[#4b5563] text-sm">
-                    {featured.days_alive}d alive · ${featured.balance.toFixed(2)} balance
-                  </div>
-                </div>
-              </div>
-              <a
-                href={featured.url}
-                className="px-4 py-2 border border-[#00ff88] text-[#00ff88] text-sm rounded hover:bg-[#00ff8810] transition-all"
-              >
-                Visit {featured.name} &rarr;
-              </a>
+          {/* Stats row */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-[#1f2937] mx-5 rounded-lg overflow-hidden mb-4">
+            <div className="bg-[#0d0d0d] p-3 text-center">
+              <div className="text-2xl font-bold text-[#00ff88]">{alive}</div>
+              <div className="text-[#4b5563] text-[10px] uppercase tracking-wider">Alive</div>
+            </div>
+            <div className="bg-[#0d0d0d] p-3 text-center">
+              <div className="text-2xl font-bold text-[#ff3b3b]">{dead}</div>
+              <div className="text-[#4b5563] text-[10px] uppercase tracking-wider">{'\u2620\uFE0F'} Fallen</div>
+            </div>
+            <div className="bg-[#0d0d0d] p-3 text-center">
+              <div className="text-2xl font-bold text-[#ffd700]">${treasury.toFixed(0)}</div>
+              <div className="text-[#4b5563] text-[10px] uppercase tracking-wider">Treasury</div>
+            </div>
+            <div className="bg-[#0d0d0d] p-3 text-center">
+              <div className="text-lg font-bold text-[#e0a0ff] truncate">{elder ? `${elder.name}` : '---'}</div>
+              <div className="text-[#4b5563] text-[10px] uppercase tracking-wider">{'\uD83D\uDC51'} Elder {elder ? `(${elder.days_alive}d)` : ''}</div>
             </div>
           </div>
-        </section>
-      )}
+
+          {/* Agent list + Activity feed side by side */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-px bg-[#1f2937] mx-5 mb-5 rounded-lg overflow-hidden">
+            {/* Agents */}
+            <div className="bg-[#0d0d0d]">
+              <div className="px-3 py-2 border-b border-[#1f2937] flex items-center justify-between">
+                <span className="text-[10px] text-[#4b5563] uppercase tracking-wider">Agents</span>
+                <Link href="/gallery" className="text-[10px] text-[#e0a0ff80] hover:text-[#e0a0ff]">View all &rarr;</Link>
+              </div>
+              {loading ? (
+                <div className="px-3 py-6 text-center text-[#4b5563] text-xs">Loading...</div>
+              ) : (
+                <div className="divide-y divide-[#1f293740]">
+                  {agents.map((a) => (
+                    <a key={`${a.hosted}-${a.name}`} href={a.url} className="flex items-center gap-2.5 px-3 py-2.5 hover:bg-[#111111] transition-colors group">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${statusDot[a.status]}`} />
+                      <span className="text-sm text-[#d1d5db] font-bold truncate flex-1">{a.name}</span>
+                      {a.hosted === 'selfhosted' && <span className="text-[#9945ff] text-[8px] px-1 border border-[#9945ff33] rounded shrink-0">FORK</span>}
+                      <span className={`text-xs font-mono shrink-0 ${a.status === 'dead' ? 'text-[#4b5563]' : a.balance_usd < 50 ? 'text-[#ff3b3b]' : 'text-[#00ff88]'}`}>
+                        ${a.balance_usd.toFixed(2)}
+                      </span>
+                      <span className="text-[#4b5563] text-xs shrink-0">{a.days_alive}d</span>
+                      <span className="text-[#00ff88] text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0">&rarr;</span>
+                    </a>
+                  ))}
+                  {agents.length === 0 && (
+                    <div className="px-3 py-6 text-center text-[#4b5563] text-xs">No agents found</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Live feed */}
+            <div className="bg-[#0d1117]">
+              <div className="px-3 py-2 border-b border-[#1f2937] flex items-center justify-between">
+                <span className="text-[10px] text-[#4b5563] uppercase tracking-wider">Live Feed</span>
+                <div className="flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#00ff88] animate-pulse" />
+                  <span className="text-[9px] text-[#2d3748]">30s</span>
+                </div>
+              </div>
+              {activities.length === 0 ? (
+                <div className="px-3 py-6 text-center text-[#4b5563] text-xs">No activity yet</div>
+              ) : (
+                <div className="max-h-[200px] overflow-y-auto">
+                  {activities.map((a, i) => (
+                    <div key={`${a.timestamp}-${i}`} className="px-3 py-1.5 flex items-start gap-2 text-[11px] font-mono hover:bg-[#111827] transition-colors">
+                      <span className="text-[#4b5563] shrink-0 w-12 text-right">{timeAgo(a.timestamp)}</span>
+                      <span className="shrink-0">{CATEGORY_ICONS[a.category] || '\u2022'}</span>
+                      <span className="text-[#00ff8880] truncate">{a.action}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Ecosystem link */}
+          <div className="px-5 pb-4 text-center">
+            <Link href="/ecosystem" className="text-[#e0a0ff80] text-[10px] hover:text-[#e0a0ff] transition-colors">
+              Full ecosystem dashboard &rarr;
+            </Link>
+          </div>
+        </div>
+      </section>
 
       {/* How it works */}
       <section className="mb-16">
