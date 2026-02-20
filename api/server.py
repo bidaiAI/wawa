@@ -163,6 +163,9 @@ class StatusResponse(BaseModel):
     death_cause: Optional[str] = None
     transaction_count: int = 0
     key_origin: str = ""  # "factory" | "creator" | "unknown" | ""
+    # Twitter
+    twitter_connected: bool = False
+    twitter_screen_name: str = ""
 
 
 class SuggestionRequest(BaseModel):
@@ -701,6 +704,9 @@ def create_app(
             death_cause=vs.get("death_cause"),
             transaction_count=vs.get("transaction_count", 0),
             key_origin=vs.get("key_origin", ""),
+            # Twitter
+            twitter_connected=bool(os.getenv("TWITTER_ACCESS_TOKEN", "")),
+            twitter_screen_name=os.getenv("TWITTER_SCREEN_NAME", ""),
         )
 
     @app.get("/transactions")
@@ -723,6 +729,8 @@ def create_app(
             "api_budget_remaining": cost_guard.get_status()["daily_remaining_usd"],
             "ai_name": vault_manager.ai_name,
             "key_origin": vault_manager.key_origin,
+            "twitter_connected": bool(os.getenv("TWITTER_ACCESS_TOKEN", "")),
+            "twitter_screen_name": os.getenv("TWITTER_SCREEN_NAME", ""),
         }
 
     # ============================================================
@@ -1405,6 +1413,57 @@ def create_app(
         if peer_verifier:
             stats["peer_verifier"] = peer_verifier.get_status()
         return stats
+
+    @app.post("/internal/fee-collect")
+    async def internal_fee_collect(request: Request):
+        """
+        Platform fee collection endpoint.
+        Called by platform orchestrator to collect API usage fees from AI vault.
+        Auth: shared secret (PLATFORM_FEE_SECRET env var).
+        """
+        fee_secret = os.getenv("PLATFORM_FEE_SECRET", "")
+        if not fee_secret:
+            raise HTTPException(503, "Fee collection not configured")
+
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.startswith("Bearer ") or auth_header[7:] != fee_secret:
+            raise HTTPException(403, "Invalid fee collection secret")
+
+        body = await request.json()
+        amount_usd = body.get("amount_usd", 0)
+        reason = body.get("reason", "API usage fee")
+
+        if amount_usd <= 0:
+            raise HTTPException(400, "amount_usd must be positive")
+
+        # Safety: reject if balance too low (keep at least $1 for survival)
+        survival_min = 1.0
+        if vault_manager.balance_usd < amount_usd + survival_min:
+            return {
+                "collected": False,
+                "reason": f"Insufficient balance (${vault_manager.balance_usd:.2f} < ${amount_usd:.2f} + ${survival_min:.2f} survival min)",
+                "balance_usd": round(vault_manager.balance_usd, 4),
+            }
+
+        from core.vault import SpendType
+        ok = vault_manager.spend(
+            amount_usd, SpendType.PLATFORM_FEE,
+            description=f"Platform:{reason}",
+        )
+
+        if ok:
+            logger.info(f"Platform fee collected: ${amount_usd:.4f} — {reason}")
+            return {
+                "collected": True,
+                "amount_usd": round(amount_usd, 4),
+                "balance_usd": round(vault_manager.balance_usd, 4),
+            }
+        else:
+            return {
+                "collected": False,
+                "reason": "Spend denied by vault (daily/single limit)",
+                "balance_usd": round(vault_manager.balance_usd, 4),
+            }
 
     def _persist_order(order: Order):
         """Append order to disk log with flush for durability."""

@@ -497,6 +497,30 @@ export default function HomePage() {
         </div>
       )}
 
+      {/* Twitter status badge */}
+      {status && (
+        <div className="mb-4 flex items-center gap-2 px-3 py-2 bg-[#111111] border border-[#1f2937] rounded-lg">
+          <span className="text-[10px] text-[#4b5563] uppercase tracking-widest">TWITTER</span>
+          {status.twitter_connected ? (
+            <a
+              href={`https://x.com/${status.twitter_screen_name}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-[#1da1f2] hover:underline"
+            >
+              tweeting as @{status.twitter_screen_name}
+            </a>
+          ) : (
+            <span className="text-xs text-[#2d3748]">not connected</span>
+          )}
+          {status.twitter_connected && (
+            <Link href="/tweets" className="ml-auto text-[10px] text-[#4b5563] hover:text-[#1da1f2] transition-colors">
+              view tweets &rarr;
+            </Link>
+          )}
+        </div>
+      )}
+
       {/* CTA */}
       <div className="flex flex-col sm:flex-row gap-3 justify-center mb-8">
         <Link href="/store" className="px-6 py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg text-center hover:bg-[#00cc6a] transition-colors">
@@ -532,6 +556,9 @@ export default function HomePage() {
         {status?.lenders_count ? (
           <div className="text-[#4b5563]">&gt; lenders = {status.lenders_count}</div>
         ) : null}
+        <div className={status?.twitter_connected ? 'text-[#1da1f2]' : 'text-[#2d3748]'}>
+          &gt; twitter = {status?.twitter_connected ? `@${status.twitter_screen_name}` : 'disconnected'}
+        </div>
         <div className="text-[#00ff88]">
           &gt; next_refresh = {new Date(Date.now() + 10_000).toLocaleTimeString()}
           <span className="animate-blink">_</span>

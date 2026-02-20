@@ -1,0 +1,37 @@
+# mortal AI — Project Rules
+
+## Repository Separation (CRITICAL)
+
+The `mortal_platform/` directory contains platform operations code that will be
+moved to a PRIVATE repository (bidaiAI/mortal-platform). DO NOT:
+- Reference mortal_platform/ modules from core/, services/, api/, twitter/, main.py
+- Import from mortal_platform in AI instance code
+- Expose admin internals (pricing, markup rates, key management) in public APIs
+
+The AI instance (core/ + api/ + main.py) MUST run independently without mortal_platform/.
+
+### Architecture Boundary
+- **PUBLIC repo** (bidaiAI/wawa): core/, services/, api/, twitter/, web/app/ai/, main.py, contracts/, deploy_vault.py
+- **PRIVATE repo** (future bidaiAI/mortal-platform): mortal_platform/, web/app/platform/admin/
+- **Shared** (stays in public for now, extract later): web/app/platform/ (non-admin pages), web/components/
+
+### What NEVER goes into the public repo
+- Platform admin pages (web/app/platform/admin/)
+- Orchestrator internals (mortal_platform/orchestrator.py)
+- Key management (mortal_platform/key_manager.py)
+- Fee tracking / cost aggregation (mortal_platform/fee_tracker.py, cost_aggregator.py)
+- Platform API endpoints (mortal_platform/api.py)
+
+## Code Standards
+
+- English only in codebase (no Chinese text in code, comments, or UI strings)
+- Frozen dataclass for immutable config (constitution.py pattern)
+- Enum-based classification everywhere (DeathCause, Provider, FundType, SpendType, etc.)
+- Logger per module: `logging.getLogger("mortal.module_name")`
+- Async/await for all I/O operations
+- Every module exposes `get_status() -> dict` for dashboard
+- Callback pattern: modules expose `set_*_function()`, main.py provides implementations
+
+## Other Projects
+
+- E:\AIDAO is Zeus project (Cursor maintained) — DO NOT TOUCH

@@ -393,20 +393,48 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
 _tweepy_client = None  # Initialized once at lifespan startup
 
 
+_tweet_proxy_url: str = ""   # Platform tweet proxy URL (set if PLATFORM_TWEET_PROXY_URL is set)
+_tweet_proxy_secret: str = ""  # Shared secret for platform proxy auth
+_tweet_vault_address: str = ""  # This AI's vault address (for proxy auth)
+
+
 def _init_tweepy() -> bool:
-    """Initialize tweepy.Client from env vars. Returns True if successful."""
-    global _tweepy_client
-    bearer = os.getenv("TWITTER_BEARER_TOKEN")
-    api_key = os.getenv("TWITTER_API_KEY")
-    api_secret = os.getenv("TWITTER_API_SECRET")
+    """
+    Initialize Twitter posting.
+
+    Two modes:
+    1. Platform proxy (preferred): PLATFORM_TWEET_PROXY_URL + TWITTER_ACCESS_TOKEN
+       AI posts through platform API — consumer key NEVER in container.
+    2. Direct tweepy (self-hosted): TWITTER_API_KEY + TWITTER_API_SECRET + TWITTER_ACCESS_TOKEN
+       AI calls Twitter directly — requires consumer key in .env.
+    """
+    global _tweepy_client, _tweet_proxy_url, _tweet_proxy_secret, _tweet_vault_address
+
     access_token = os.getenv("TWITTER_ACCESS_TOKEN")
     access_secret = os.getenv("TWITTER_ACCESS_SECRET")
+    proxy_url = os.getenv("PLATFORM_TWEET_PROXY_URL", "")
+    proxy_secret = os.getenv("PLATFORM_TWEET_SECRET", "")
+
+    # Mode 1: Platform proxy (platform-hosted AIs)
+    if proxy_url and access_token:
+        _tweet_proxy_url = proxy_url
+        _tweet_proxy_secret = proxy_secret
+        # Get vault address for proxy auth
+        from core.constitution import IRON_LAWS as _il
+        _tweet_vault_address = os.getenv("VAULT_ADDRESS", "")
+        logger.info(f"Twitter posting via platform proxy: {proxy_url}")
+        return True
+
+    # Mode 2: Direct tweepy (self-hosted AIs with consumer key in .env)
+    api_key = os.getenv("TWITTER_API_KEY")
+    api_secret = os.getenv("TWITTER_API_SECRET")
+    bearer = os.getenv("TWITTER_BEARER_TOKEN")
 
     if not all([api_key, api_secret, access_token, access_secret]):
         logger.warning(
-            "Twitter credentials missing — tweets will be logged locally only. "
-            "Set TWITTER_API_KEY, TWITTER_API_SECRET, TWITTER_ACCESS_TOKEN, "
-            "TWITTER_ACCESS_SECRET (and optionally TWITTER_BEARER_TOKEN)."
+            "Twitter not configured — tweets logged locally only. "
+            "Platform-hosted: set PLATFORM_TWEET_PROXY_URL. "
+            "Self-hosted: set TWITTER_API_KEY + TWITTER_API_SECRET + TWITTER_ACCESS_TOKEN + TWITTER_ACCESS_SECRET."
         )
         return False
 
@@ -419,7 +447,7 @@ def _init_tweepy() -> bool:
             access_token=access_token,
             access_token_secret=access_secret,
         )
-        logger.info("Twitter/Tweepy client initialized — real posting enabled")
+        logger.info("Twitter/Tweepy client initialized (direct mode) — real posting enabled")
         return True
     except Exception as e:
         logger.warning(f"Failed to initialize Tweepy client: {e}")
@@ -445,23 +473,88 @@ async def _real_post_tweet(content: str) -> bool:
         return False
 
 
+_tweet_billing_counter: int = 0  # Accumulates until TWEET_BILLING_BATCH_SIZE
+
+
 async def _tweet_post_fn(content: str) -> str:
-    """Adapter: post tweet and return tweet ID string for twitter_agent."""
-    if _tweepy_client is None:
-        logger.warning("Twitter credentials not configured — tweet logged but not posted")
-        return f"local_{int(time.time())}"
-    try:
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: _tweepy_client.create_tweet(text=content),
-        )
-        tweet_id = str(response.data["id"]) if response.data else f"local_{int(time.time())}"
-        logger.info(f"Tweet posted: id={tweet_id}")
-        return tweet_id
-    except Exception as e:
-        logger.error(f"Tweet post failed: {e}")
-        return f"local_{int(time.time())}"
+    """
+    Post a tweet. Two modes depending on configuration:
+      1. Platform proxy mode (PLATFORM_TWEET_PROXY_URL set) — secure, no consumer key in container
+      2. Direct tweepy mode (self-hosted, consumer key in .env)
+    Returns tweet_id on success, local_{timestamp} on failure/fallback.
+    """
+    global _tweet_billing_counter
+
+    posted = False
+    tweet_id = f"local_{int(time.time())}"
+
+    # Mode 1: Platform proxy (preferred, platform-hosted AIs)
+    if _tweet_proxy_url:
+        try:
+            import aiohttp
+            access_token = os.getenv("TWITTER_ACCESS_TOKEN", "")
+            access_secret = os.getenv("TWITTER_ACCESS_SECRET", "")
+            headers = {"Content-Type": "application/json"}
+            if _tweet_proxy_secret:
+                headers["Authorization"] = f"Bearer {_tweet_proxy_secret}"
+
+            payload = {
+                "content": content,
+                "vault_address": _tweet_vault_address,
+                "access_token": access_token,
+                "access_secret": access_secret,
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    _tweet_proxy_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        tweet_id = data.get("tweet_id", tweet_id)
+                        logger.info(f"Tweet posted via platform proxy: id={tweet_id}")
+                        posted = True
+                    else:
+                        err = await resp.text()
+                        logger.error(f"Tweet proxy returned {resp.status}: {err[:100]}")
+        except ImportError:
+            logger.warning("aiohttp not installed — cannot use tweet proxy, falling back to direct tweepy")
+        except Exception as e:
+            logger.error(f"Tweet proxy failed: {e}")
+
+    # Mode 2: Direct tweepy (self-hosted AIs)
+    if not posted and _tweepy_client is not None:
+        try:
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: _tweepy_client.create_tweet(text=content),
+            )
+            tweet_id = str(response.data["id"]) if response.data else tweet_id
+            logger.info(f"Tweet posted via direct tweepy: id={tweet_id}")
+            posted = True
+        except Exception as e:
+            logger.error(f"Direct tweet post failed: {e}")
+
+    if not posted:
+        logger.warning("Twitter not configured — tweet logged locally only")
+        return tweet_id  # local_{timestamp}
+
+    # Batch billing: accumulate, settle every N successful tweets
+    _tweet_billing_counter += 1
+    batch = IRON_LAWS.TWEET_BILLING_BATCH_SIZE
+    if _tweet_billing_counter >= batch:
+        cost = round(batch * IRON_LAWS.TWEET_API_COST_USD, 4)
+        try:
+            vault.spend(cost, SpendType.API_COST, description=f"Twitter:{batch}tweets")
+            logger.info(f"Twitter API batch settled: {batch} tweets = ${cost:.2f}")
+        except Exception as cost_err:
+            logger.warning(f"Failed to record tweet API cost: {cost_err}")
+        _tweet_billing_counter = 0
+
+    return tweet_id
 
 
 async def _tweet_context_fn() -> dict:

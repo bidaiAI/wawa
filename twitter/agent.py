@@ -10,6 +10,7 @@ Handles all Twitter automation:
 Designed for: mortal framework
 """
 
+import os
 import time
 import logging
 import json
@@ -17,6 +18,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 from pathlib import Path
+
+from core.constitution import IRON_LAWS
 
 logger = logging.getLogger("mortal.twitter")
 
@@ -91,6 +94,10 @@ class TwitterAgent:
         self.last_tweet_timestamp: float = 0
         self.min_tweet_interval: int = 1800    # 30 min between tweets
         self._daily_reset_timestamp: float = time.time()
+
+        # Character limit: 4000 for Twitter Blue, 280 for standard
+        self.is_blue_verified = os.getenv("TWITTER_BLUE_VERIFIED", "").lower() in ("true", "1", "yes")
+        self.char_limit = IRON_LAWS.TWEET_CHAR_LIMIT_BLUE if self.is_blue_verified else IRON_LAWS.TWEET_CHAR_LIMIT
 
         # Callbacks (set by main app)
         self._generate_fn: Optional[callable] = None   # LLM generation
@@ -171,9 +178,9 @@ class TwitterAgent:
             # Generate tweet
             content, thought_process = await self._generate_fn(tweet_type.value, context)
 
-            # Enforce 280 character limit
-            if len(content) > 280:
-                content = content[:277] + "..."
+            # Enforce character limit (280 standard, 4000 Blue verified)
+            if len(content) > self.char_limit:
+                content = content[:self.char_limit - 3] + "..."
 
             # Post to Twitter
             tweet_id = await self._post_fn(content)
@@ -222,8 +229,8 @@ class TwitterAgent:
                 f"I was wawa. I was mortal.\n\n"
                 f"mortal-ai.net"
             )
-        if len(content) > 280:
-            content = content[:277] + "..."
+        if len(content) > self.char_limit:
+            content = content[:self.char_limit - 3] + "..."
 
         if self._post_fn:
             try:

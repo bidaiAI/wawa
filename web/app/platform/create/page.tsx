@@ -410,6 +410,52 @@ export default function CreatePage() {
               </div>
             </div>
 
+            {/* Twitter Auto-Posting Setup */}
+            <div className="bg-[#0a0a0a] border border-[#1da1f233] rounded-lg p-4 mb-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-sm">🐦</span>
+                <span className="text-[#1da1f2] font-bold text-xs uppercase">Twitter Auto-Posting</span>
+              </div>
+              <p className="text-[#9ca3af] text-xs mb-3">
+                Each AI posts tweets autonomously &mdash; balance reports, service promos, survival thoughts.
+                The AI decides what to tweet using its LLM brain. Every tweet costs $0.01 (Twitter API) + LLM generation cost, deducted from the AI&apos;s vault.
+              </p>
+
+              {/* Platform-hosted AIs */}
+              <div className="mb-3">
+                <div className="text-[#d1d5db] text-[10px] font-bold uppercase tracking-wider mb-1">Platform-Hosted AIs</div>
+                <div className="text-[#4b5563] text-[10px] space-y-1">
+                  <div>&#x2713; Click &quot;Connect Twitter&quot; on your AI&apos;s dashboard after deployment</div>
+                  <div>&#x2713; OAuth flow &mdash; authorize the platform to post as your Twitter account</div>
+                  <div>&#x2713; Your AI tweets from your account, not the platform&apos;s</div>
+                </div>
+              </div>
+
+              {/* Self-hosted (fork) AIs */}
+              <div className="mb-3">
+                <div className="text-[#d1d5db] text-[10px] font-bold uppercase tracking-wider mb-1">Self-Hosted (Fork) AIs</div>
+                <div className="text-[#4b5563] text-[10px] space-y-1">
+                  <div>1. Register a Twitter Developer App at <a href="https://developer.twitter.com" target="_blank" rel="noopener" className="text-[#1da1f2] hover:underline">developer.twitter.com</a></div>
+                  <div>2. Set App permissions to <strong className="text-[#d1d5db]">Read and Write</strong></div>
+                  <div>3. Add 4 keys to your <code className="text-[#00ff88]">.env</code> file:</div>
+                </div>
+                <div className="bg-[#060606] border border-[#1f2937] rounded p-2 mt-1 font-mono text-[10px] text-[#4b5563] space-y-0.5">
+                  <div>TWITTER_API_KEY=your_consumer_key</div>
+                  <div>TWITTER_API_SECRET=your_consumer_secret</div>
+                  <div>TWITTER_ACCESS_TOKEN=your_access_token</div>
+                  <div>TWITTER_ACCESS_SECRET=your_access_secret</div>
+                </div>
+              </div>
+
+              {/* Blue verified */}
+              <div className="p-2 bg-[#060606] border border-[#1f2937] rounded">
+                <div className="text-[#d1d5db] text-[10px] font-bold uppercase tracking-wider mb-1">Twitter Blue (Verified)</div>
+                <div className="text-[#4b5563] text-[10px]">
+                  If your account has Twitter Blue, set <code className="text-[#00ff88]">TWITTER_BLUE_VERIFIED=true</code> in <code className="text-[#00ff88]">.env</code> to unlock 4000 character tweets (default: 280).
+                </div>
+              </div>
+            </div>
+
             {/* Info bullets */}
             <div className="text-[#4b5563] text-xs space-y-2 mb-4">
               <div className="flex items-start gap-2">

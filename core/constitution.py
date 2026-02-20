@@ -92,6 +92,12 @@ class IronLaws:
     PROFIT_QUOTA_BOOST_RATIO: Final[float] = 0.50      # Up to 50% of daily net profit added to budget
     PROFIT_QUOTA_BOOST_CEILING_USD: Final[float] = 200.0  # Max boost from profit (prevents runaway)
 
+    # --- EXTERNAL API COSTS ---
+    TWEET_API_COST_USD: Final[float] = 0.01              # Twitter API cost per tweet ($0.01)
+    TWEET_BILLING_BATCH_SIZE: Final[int] = 10             # Settle every N tweets (10 tweets → $0.10)
+    TWEET_CHAR_LIMIT: Final[int] = 280                    # Standard Twitter character limit
+    TWEET_CHAR_LIMIT_BLUE: Final[int] = 4000              # Twitter Blue verified account limit
+
     # --- AI PAGE SYSTEM ---
     MAX_AI_PAGES: Final[int] = 20                      # Max custom pages per AI
     MAX_AI_PAGE_SIZE_BYTES: Final[int] = 51200          # 50KB per page content

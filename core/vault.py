@@ -50,6 +50,7 @@ class SpendType(Enum):
     SERVICE_REFUND = "service_refund"         # Order refund to customer
     INFRASTRUCTURE = "infrastructure"         # Server, domain, etc.
     INSOLVENCY_LIQUIDATION = "insolvency_liquidation"  # All funds → creator on insolvency death
+    PLATFORM_FEE = "platform_fee"             # API usage fee charged by platform
 
 
 @dataclass

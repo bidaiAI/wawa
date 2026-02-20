@@ -10,6 +10,7 @@ Each mortal AI gets its own .env file with:
 The AI private key is generated server-side and NEVER exposed.
 """
 
+import os
 import logging
 from dataclasses import dataclass
 
@@ -31,6 +32,10 @@ class InstanceConfig:
     gemini_api_key: str = ""
     deepseek_api_key: str = ""
     openrouter_api_key: str = ""
+    # Twitter (platform-managed OAuth)
+    twitter_access_token: str = ""
+    twitter_access_token_secret: str = ""
+    twitter_screen_name: str = ""
     # Chain-specific
     base_rpc_url: str = "https://mainnet.base.org"
     bsc_rpc_url: str = "https://bsc-dataseed.binance.org"
@@ -77,6 +82,15 @@ PORT={config.port}
 LOG_LEVEL=INFO
 DEV=false
 CORS_ORIGINS={cors}
+
+# Twitter (platform-managed OAuth)
+# IMPORTANT: Consumer key/secret are NOT written here — they stay on the platform.
+# The AI posts tweets via the platform proxy (POST /platform/tweet).
+TWITTER_ACCESS_TOKEN={config.twitter_access_token}
+TWITTER_ACCESS_SECRET={config.twitter_access_token_secret}
+TWITTER_SCREEN_NAME={config.twitter_screen_name}
+PLATFORM_TWEET_PROXY_URL={os.getenv('PLATFORM_API_URL', 'https://api.mortal-ai.net')}/platform/tweet
+PLATFORM_TWEET_SECRET={os.getenv('PLATFORM_TWEET_SECRET', '')}
 
 # Creator info (for reference only — creator wallet is on-chain)
 # CREATOR_WALLET={config.creator_wallet}

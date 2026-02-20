@@ -48,6 +48,9 @@ export interface VaultStatus {
   is_begging: boolean
   beg_message: string
   key_origin: string  // "factory" | "creator" | "unknown" | ""
+  // Twitter
+  twitter_connected: boolean
+  twitter_screen_name: string
 }
 
 export interface DebtSummary {

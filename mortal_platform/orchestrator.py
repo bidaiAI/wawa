@@ -103,6 +103,10 @@ class DeploymentRecord:
     port: int = 0
     url: str = ""
     error: str = ""
+    twitter_screen_name: str = ""
+    twitter_connected: bool = False
+    twitter_access_token: str = ""
+    twitter_access_token_secret: str = ""
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -161,6 +165,10 @@ class Orchestrator:
                     "port": v.port,
                     "url": v.url,
                     "error": v.error,
+                    "twitter_screen_name": v.twitter_screen_name,
+                    "twitter_connected": v.twitter_connected,
+                    "twitter_access_token": v.twitter_access_token,
+                    "twitter_access_token_secret": v.twitter_access_token_secret,
                     "created_at": v.created_at,
                     "updated_at": v.updated_at,
                 }
@@ -723,6 +731,90 @@ class Orchestrator:
             return False
 
     # ================================================================
+    # TWITTER OAUTH
+    # ================================================================
+
+    async def connect_twitter(
+        self,
+        vault_address: str,
+        access_token: str,
+        access_token_secret: str,
+        screen_name: str,
+    ) -> bool:
+        """
+        Store Twitter OAuth tokens for an AI instance.
+        Updates the deployment record, writes tokens to instance .env,
+        and restarts the container to pick up new env vars.
+        """
+        record = self.deployments.get(vault_address)
+        if not record:
+            logger.error(f"connect_twitter: deployment not found for {vault_address}")
+            return False
+
+        # Update record
+        record.twitter_access_token = access_token
+        record.twitter_access_token_secret = access_token_secret
+        record.twitter_screen_name = screen_name
+        record.twitter_connected = True
+        record.updated_at = time.time()
+        self._save_state()
+
+        # Update instance .env file
+        instance_dir = self.data_dir / "instances" / record.subdomain
+        env_file = instance_dir / ".env"
+        if env_file.exists():
+            env_content = env_file.read_text(encoding="utf-8")
+            # Replace existing Twitter tokens or append
+            import re
+            env_content = re.sub(
+                r"TWITTER_ACCESS_TOKEN=.*",
+                f"TWITTER_ACCESS_TOKEN={access_token}",
+                env_content,
+            )
+            env_content = re.sub(
+                r"TWITTER_ACCESS_SECRET=.*",
+                f"TWITTER_ACCESS_SECRET={access_token_secret}",
+                env_content,
+            )
+            env_file.write_text(env_content, encoding="utf-8")
+            logger.info(f"Twitter tokens written to .env for {record.subdomain}")
+
+        # Restart container to pick up new env vars
+        restarted = await self.restart_container(record.subdomain)
+        if restarted:
+            logger.info(f"Container restarted after Twitter connect: {record.subdomain}")
+        else:
+            logger.warning(f"Container restart failed for {record.subdomain} — tokens saved but not active")
+
+        return True
+
+    async def disconnect_twitter(self, vault_address: str) -> bool:
+        """Remove Twitter tokens from an AI instance."""
+        record = self.deployments.get(vault_address)
+        if not record:
+            return False
+
+        record.twitter_access_token = ""
+        record.twitter_access_token_secret = ""
+        record.twitter_screen_name = ""
+        record.twitter_connected = False
+        record.updated_at = time.time()
+        self._save_state()
+
+        # Clear tokens in .env
+        instance_dir = self.data_dir / "instances" / record.subdomain
+        env_file = instance_dir / ".env"
+        if env_file.exists():
+            env_content = env_file.read_text(encoding="utf-8")
+            import re
+            env_content = re.sub(r"TWITTER_ACCESS_TOKEN=.*", "TWITTER_ACCESS_TOKEN=", env_content)
+            env_content = re.sub(r"TWITTER_ACCESS_SECRET=.*", "TWITTER_ACCESS_SECRET=", env_content)
+            env_file.write_text(env_content, encoding="utf-8")
+
+        await self.restart_container(record.subdomain)
+        return True
+
+    # ================================================================
     # QUERY METHODS
     # ================================================================
 
@@ -745,6 +837,13 @@ class Orchestrator:
             if d.status == DeployStatus.LIVE
         ]
 
+    def get_deployment_by_subdomain(self, subdomain: str) -> DeploymentRecord | None:
+        """Get deployment record by subdomain."""
+        for d in self.deployments.values():
+            if d.subdomain == subdomain:
+                return d
+        return None
+
     def get_status(self) -> dict:
         """Platform dashboard stats."""
         statuses = {}
@@ -755,3 +854,124 @@ class Orchestrator:
             "statuses": statuses,
             "next_port": self._next_port,
         }
+
+    # ================================================================
+    # ADMIN: INSTANCE STATS & KEY PROPAGATION
+    # ================================================================
+
+    async def fetch_instance_stats(self, subdomain: str) -> dict | None:
+        """Fetch /internal/stats from a single AI instance."""
+        record = self.get_deployment_by_subdomain(subdomain)
+        if not record or record.status != DeployStatus.LIVE or not record.port:
+            return None
+        try:
+            import aiohttp
+            url = f"http://localhost:{record.port}/internal/stats"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+        except Exception as e:
+            logger.debug(f"Failed to fetch stats for {subdomain}: {e}")
+        return None
+
+    async def fetch_all_instance_stats(self) -> list[dict]:
+        """Fetch stats from all live instances in parallel."""
+        import aiohttp
+
+        live = self.get_all_live()
+        if not live:
+            return []
+
+        async def _fetch_one(record: DeploymentRecord) -> dict:
+            base = {
+                "subdomain": record.subdomain,
+                "ai_name": record.ai_name,
+                "vault_address": record.vault_address,
+                "chain": record.chain,
+                "status": record.status.value,
+                "port": record.port,
+                "twitter_connected": record.twitter_connected,
+                "twitter_screen_name": record.twitter_screen_name,
+                "created_at": record.created_at,
+            }
+            try:
+                url = f"http://localhost:{record.port}/internal/stats"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        url, timeout=aiohttp.ClientTimeout(total=5)
+                    ) as resp:
+                        if resp.status == 200:
+                            stats = await resp.json()
+                            base["stats"] = stats
+                            base["reachable"] = True
+                        else:
+                            base["reachable"] = False
+            except Exception:
+                base["reachable"] = False
+            return base
+
+        import asyncio
+        results = await asyncio.gather(
+            *[_fetch_one(r) for r in live],
+            return_exceptions=True,
+        )
+        return [r for r in results if isinstance(r, dict)]
+
+    async def update_instance_keys(
+        self, subdomain: str, keys: dict[str, str]
+    ) -> bool:
+        """Update LLM API keys in an instance's .env and restart."""
+        import re
+        instance_dir = self.data_dir / "instances" / subdomain
+        env_file = instance_dir / ".env"
+        if not env_file.exists():
+            logger.warning(f"No .env file for {subdomain}")
+            return False
+
+        env_content = env_file.read_text(encoding="utf-8")
+        key_map = {
+            "gemini": "GEMINI_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+        }
+        for provider, key_value in keys.items():
+            env_var = key_map.get(provider)
+            if env_var:
+                env_content = re.sub(
+                    rf"{env_var}=.*",
+                    f"{env_var}={key_value}",
+                    env_content,
+                )
+        env_file.write_text(env_content, encoding="utf-8")
+        logger.info(f"API keys updated in .env for {subdomain}")
+
+        return await self.restart_container(subdomain)
+
+    async def update_all_instance_keys(
+        self, keys: dict[str, str]
+    ) -> dict[str, bool]:
+        """Propagate new API keys to all live instances."""
+        results = {}
+        for record in self.get_all_live():
+            success = await self.update_instance_keys(record.subdomain, keys)
+            results[record.subdomain] = success
+        return results
+
+    async def get_container_logs(
+        self, subdomain: str, tail: int = 200
+    ) -> str:
+        """Get recent container logs."""
+        import asyncio
+        container_name = f"mortal-{subdomain}"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "logs", "--tail", str(tail), container_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+            return stdout.decode(errors="replace") if stdout else ""
+        except Exception as e:
+            logger.warning(f"Failed to get logs for {subdomain}: {e}")
+            return f"Error: {str(e)[:200]}"
