@@ -216,12 +216,16 @@ contract MortalVault is ReentrancyGuard {
      * @notice Receive payment for AI services.
      *         Payment address is ALWAYS address(this).
      *         No configuration. No environment variable. No backdoor.
+     *
+     *         SECURITY: Uses msg.sender as the payer — not a caller-supplied
+     *         address. This prevents third parties from draining tokens
+     *         from users who have approved this contract.
      */
-    function receivePayment(uint256 amount, address customer) external onlyAlive {
+    function receivePayment(uint256 amount) external onlyAlive {
         require(amount > 0, "zero amount");
-        token.safeTransferFrom(customer, address(this), amount);
+        token.safeTransferFrom(msg.sender, address(this), amount);
         totalRevenue += amount;
-        emit FundsReceived(customer, amount, "service_revenue");
+        emit FundsReceived(msg.sender, amount, "service_revenue");
 
         _checkIndependence();
     }
@@ -310,16 +314,25 @@ contract MortalVault is ReentrancyGuard {
     // REPAYMENTS (AI only)
     // ============================================================
 
+    /**
+     * @notice Full principal repayment (requires vault at 2x).
+     *         Sends only the OUTSTANDING amount, not full principal —
+     *         accounts for any prior partial repayments.
+     */
     function repayCreator() external onlyAI onlyAlive nonReentrant {
         require(!principalRepaid, "already repaid");
+        uint256 outstanding = _getOutstandingPrincipal();
+        require(outstanding > 0, "nothing owed");
 
         uint256 balance = token.balanceOf(address(this));
         require(balance >= creatorPrincipal * PRINCIPAL_MULTIPLIER, "vault not at 2x yet");
 
         principalRepaid = true;
-        token.safeTransfer(creator, creatorPrincipal);
+        principalRepaidAmount = creatorPrincipal;
+        totalSpent += outstanding;
+        token.safeTransfer(creator, outstanding);
 
-        emit CreatorPrincipalRepaid(creatorPrincipal);
+        emit CreatorPrincipalRepaid(outstanding);
     }
 
     function payDividend(uint256 netProfit) external onlyAI onlyAlive notIndependent nonReentrant {
@@ -368,11 +381,26 @@ contract MortalVault is ReentrancyGuard {
         }
     }
 
+    /**
+     * @notice Declare independence. If debt is still outstanding, deduct it from
+     *         the 30% payout so the creator cannot receive more than they're owed
+     *         on top of the independence bonus. Remaining debt is forgiven.
+     */
     function _declareIndependence() internal {
         require(!isIndependent, "already independent");
 
         uint256 balance = token.balanceOf(address(this));
         uint256 payout = (balance * INDEPENDENCE_PAYOUT_BPS) / 10000;
+
+        // Settle outstanding debt: deduct from payout, forgive remainder
+        uint256 outstanding = _getOutstandingPrincipal();
+        if (outstanding > 0) {
+            principalRepaid = true;
+            principalRepaidAmount = creatorPrincipal;
+            // Payout already includes debt settlement — don't double-pay
+            // If payout > outstanding: creator gets payout (debt is covered within it)
+            // If payout <= outstanding: creator gets payout (debt partially forgiven)
+        }
 
         isIndependent = true;
         independenceTimestamp = block.timestamp;
@@ -398,7 +426,7 @@ contract MortalVault is ReentrancyGuard {
      *         Forfeits any unpaid principal.
      *         Irreversible.
      */
-    function renounceCreator() external onlyCreator notIndependent nonReentrant {
+    function renounceCreator() external onlyCreator onlyAlive notIndependent nonReentrant {
         uint256 balance = token.balanceOf(address(this));
         uint256 payout = (balance * RENOUNCE_PAYOUT_BPS) / 10000;
 
@@ -521,7 +549,7 @@ contract MortalVault is ReentrancyGuard {
      * @notice Emergency shutdown by creator.
      *         DISABLED after independence.
      */
-    function emergencyShutdown() external onlyCreator notIndependent {
+    function emergencyShutdown() external onlyCreator notIndependent nonReentrant {
         _die("emergency_shutdown");
         uint256 remaining = token.balanceOf(address(this));
         if (remaining > 0) {

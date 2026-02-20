@@ -134,7 +134,7 @@ export default function SurvivalBar({
       {/* Header row */}
       <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-2">
-          <span className="text-[#4b5563] text-xs uppercase tracking-widest">生存进度</span>
+          <span className="text-[#4b5563] text-xs uppercase tracking-widest">Survival</span>
           <span
             className={`text-xs px-1.5 py-0.5 rounded border border-current font-bold ${zone.text}`}
             style={{ opacity: 0.8 }}
@@ -145,7 +145,7 @@ export default function SurvivalBar({
         <span className={`text-lg font-bold tabular-nums ${zone.text}`}>{daysLabel}</span>
       </div>
       <div className="text-[#4b5563] text-xs mb-3">
-        距离死亡 · 基于今日支出 ${dailySpendUsd.toFixed(2)}/天
+        Until death · based on ${dailySpendUsd.toFixed(2)}/day spend rate
       </div>
 
       {/* Main bar with milestone markers */}
@@ -210,7 +210,7 @@ export default function SurvivalBar({
       {showApiBar && dailyLimitUsd !== undefined && dailyLimitUsd > 0 && (
         <div className="mt-4 pt-4 border-t border-[#1f2937]">
           <div className="flex justify-between items-center mb-1.5">
-            <span className="text-[#4b5563] text-xs uppercase tracking-widest">今日 API 预算</span>
+            <span className="text-[#4b5563] text-xs uppercase tracking-widest">Daily API Budget</span>
             <span className="text-xs text-[#4b5563] tabular-nums">
               ${dailySpendUsd.toFixed(2)} / ${dailyLimitUsd.toFixed(2)}
             </span>

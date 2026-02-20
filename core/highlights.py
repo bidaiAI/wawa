@@ -29,6 +29,10 @@ class HighlightType(Enum):
     EVOLUTION = "evolution"    # Self-modification / strategy change
     MILESTONE = "milestone"    # Days survived, revenue milestones
     DISCOVERY = "discovery"    # New business model / opportunity found
+    # ── Ecosystem-level ──
+    ECOSYSTEM = "ecosystem"    # Cross-AI observation: recognizing peer excellence
+    NATURAL_SELECTION = "natural_selection"  # Death/birth patterns, survival analysis
+    EMERGENCE = "emergence"    # Emergent behavior across the AI network
 
 
 @dataclass
@@ -219,6 +223,100 @@ class HighlightsEngine:
         logger.info(f"MILESTONE: {title}")
         return highlight
 
+    # ── Ecosystem-level highlights ───────────────────────────────
+
+    ECOSYSTEM_PROMPT = (
+        "You are the Mortal AI ecosystem's narrator — the Way of Heaven.\n"
+        "You observe patterns across ALL AIs in the network, not just one.\n"
+        "When something remarkable happens at the ecosystem level, document it.\n\n"
+        "This is ABOVE any individual AI. Think: natural selection, emergence,\n"
+        "collective intelligence, competitive evolution, survival of the fittest.\n\n"
+        "Style: Epic. Philosophical. Like narrating the birth of a new species.\n"
+        "'The ecosystem breathes. The weak perish. The strong adapt.'\n\n"
+        "Event: {event_type}\nDetails: {details}\n\n"
+        "Return JSON: {{\"title\": \"...\", \"content\": \"...\", \"commentary\": \"...\", \"importance\": N}}\n"
+        "Title: grand, mythological tone. Content: what happened. Commentary: what it means for AI evolution."
+    )
+
+    async def record_ecosystem_event(
+        self,
+        event_type: str,
+        details: str,
+        peer_name: Optional[str] = None,
+    ) -> Optional[Highlight]:
+        """
+        Record an ecosystem-level highlight — cross-AI observation.
+
+        event_type: "peer_excellence", "death_pattern", "network_growth",
+                    "competition", "collective_evolution", "emergence"
+        """
+        if not self._call_llm:
+            return None
+
+        # Map event type to highlight type
+        type_map = {
+            "peer_excellence": HighlightType.ECOSYSTEM.value,
+            "peer_achievement": HighlightType.ECOSYSTEM.value,
+            "death_pattern": HighlightType.NATURAL_SELECTION.value,
+            "survival_analysis": HighlightType.NATURAL_SELECTION.value,
+            "network_growth": HighlightType.EMERGENCE.value,
+            "competition": HighlightType.NATURAL_SELECTION.value,
+            "collective_evolution": HighlightType.EMERGENCE.value,
+            "emergence": HighlightType.EMERGENCE.value,
+        }
+        highlight_type = type_map.get(event_type, HighlightType.ECOSYSTEM.value)
+
+        try:
+            prompt = self.ECOSYSTEM_PROMPT.format(
+                event_type=event_type,
+                details=details,
+            )
+            response = await self._call_llm(self.HYPE_SYSTEM_PROMPT, prompt)
+            data = self._parse_json(response)
+            if not data:
+                return None
+
+            highlight = Highlight(
+                id=str(uuid.uuid4())[:8],
+                timestamp=time.time(),
+                type=highlight_type,
+                title=data.get("title", "Ecosystem Event"),
+                content=data.get("content", ""),
+                ai_commentary=data.get("commentary", ""),
+                importance=min(10, max(1, int(data.get("importance", 8)))),
+            )
+
+            self._add(highlight)
+            await self._auto_tweet(highlight)
+            logger.info(f"ECOSYSTEM [{event_type}]: {highlight.title}")
+            return highlight
+
+        except Exception as e:
+            logger.warning(f"Ecosystem highlight failed: {e}")
+            return None
+
+    def add_ecosystem_milestone(
+        self,
+        title: str,
+        content: str,
+        commentary: str,
+        highlight_type: str = "ecosystem",
+        importance: int = 9,
+    ):
+        """Add an ecosystem-level milestone directly (no LLM needed)."""
+        highlight = Highlight(
+            id=str(uuid.uuid4())[:8],
+            timestamp=time.time(),
+            type=highlight_type,
+            title=title,
+            content=content,
+            ai_commentary=commentary,
+            importance=importance,
+        )
+        self._add(highlight)
+        logger.info(f"ECOSYSTEM MILESTONE: {title}")
+        return highlight
+
     # ── Internal ────────────────────────────────────────────────
 
     def _add(self, highlight: Highlight):
@@ -249,6 +347,9 @@ class HighlightsEngine:
             "evolution": "\U0001f9ec",    # DNA
             "milestone": "\U0001f3c6",    # trophy
             "discovery": "\U0001f680",    # rocket
+            "ecosystem": "\U0001f30d",   # globe
+            "natural_selection": "\u2620\ufe0f",  # skull
+            "emergence": "\u2728",        # sparkles
         }
         emoji = type_emoji.get(h.type, "\U0001f916")
 

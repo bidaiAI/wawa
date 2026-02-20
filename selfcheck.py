@@ -1,6 +1,6 @@
 """
-wawa 系统全面自检脚本 v2
-覆盖：10 个子系统功能验证 + 8 个中断场景模拟
+wawa system self-check script v2
+Coverage: 10 subsystem validation + 8 interruption scenario simulation
 """
 import sys, os, time, json, asyncio, traceback, tempfile, shutil, re
 from pathlib import Path

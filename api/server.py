@@ -1312,8 +1312,18 @@ def create_app(
     async def get_highlights(limit: int = 20, type: Optional[str] = None):
         """Public highlights — curated showcase of AI intelligence and growth."""
         if highlights_engine:
-            return {"highlights": highlights_engine.get_highlights(limit, type)}
-        return {"highlights": []}
+            items = highlights_engine.get_highlights(limit, type)
+            # Also include ecosystem stats
+            status = highlights_engine.get_status()
+            return {
+                "highlights": items,
+                "ecosystem_count": sum(
+                    status["types"].get(t, 0)
+                    for t in ("ecosystem", "natural_selection", "emergence")
+                ),
+                "total_count": status["total_highlights"],
+            }
+        return {"highlights": [], "ecosystem_count": 0, "total_count": 0}
 
     # ============================================================
     # INTERNAL

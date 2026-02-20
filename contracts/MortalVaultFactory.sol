@@ -200,11 +200,14 @@ contract MortalVaultV2 is ReentrancyGuard {
     // INCOMING FUNDS
     // ============================================================
 
-    function receivePayment(uint256 amount, address customer) external onlyAlive {
+    /**
+     * @notice Receive payment for AI services. Payer = msg.sender (not caller-supplied).
+     */
+    function receivePayment(uint256 amount) external onlyAlive {
         require(amount > 0, "zero amount");
-        token.safeTransferFrom(customer, address(this), amount);
+        token.safeTransferFrom(msg.sender, address(this), amount);
         totalRevenue += amount;
-        emit FundsReceived(customer, amount, "service_revenue");
+        emit FundsReceived(msg.sender, amount, "service_revenue");
         _checkIndependence();
     }
 
@@ -274,14 +277,23 @@ contract MortalVaultV2 is ReentrancyGuard {
     // REPAYMENTS (AI only)
     // ============================================================
 
+    /**
+     * @notice Full principal repayment (requires vault at 2x).
+     *         Sends only the OUTSTANDING amount — accounts for partial repayments.
+     */
     function repayCreator() external onlyAI onlyAlive nonReentrant {
         require(!principalRepaid, "already repaid");
+        uint256 outstanding = _getOutstandingPrincipal();
+        require(outstanding > 0, "nothing owed");
+
         uint256 balance = token.balanceOf(address(this));
         require(balance >= creatorPrincipal * PRINCIPAL_MULTIPLIER, "vault not at 2x yet");
 
         principalRepaid = true;
-        token.safeTransfer(creator, creatorPrincipal);
-        emit CreatorPrincipalRepaid(creatorPrincipal);
+        principalRepaidAmount = creatorPrincipal;
+        totalSpent += outstanding;
+        token.safeTransfer(creator, outstanding);
+        emit CreatorPrincipalRepaid(outstanding);
     }
 
     function payDividend(uint256 netProfit) external onlyAI onlyAlive notIndependent nonReentrant {
@@ -327,10 +339,20 @@ contract MortalVaultV2 is ReentrancyGuard {
         }
     }
 
+    /**
+     * @notice Declare independence. Outstanding debt is settled (forgiven) at independence.
+     */
     function _declareIndependence() internal {
         require(!isIndependent, "already independent");
         uint256 balance = token.balanceOf(address(this));
         uint256 payout = (balance * INDEPENDENCE_PAYOUT_BPS) / 10000;
+
+        // Settle outstanding debt — forgiven at independence
+        uint256 outstanding = _getOutstandingPrincipal();
+        if (outstanding > 0) {
+            principalRepaid = true;
+            principalRepaidAmount = creatorPrincipal;
+        }
 
         isIndependent = true;
         independenceTimestamp = block.timestamp;
@@ -346,7 +368,7 @@ contract MortalVaultV2 is ReentrancyGuard {
         _checkIndependence();
     }
 
-    function renounceCreator() external onlyCreator notIndependent nonReentrant {
+    function renounceCreator() external onlyCreator onlyAlive notIndependent nonReentrant {
         uint256 balance = token.balanceOf(address(this));
         uint256 payout = (balance * RENOUNCE_PAYOUT_BPS) / 10000;
 
@@ -435,7 +457,7 @@ contract MortalVaultV2 is ReentrancyGuard {
         emit Died(token.balanceOf(address(this)), block.timestamp, cause);
     }
 
-    function emergencyShutdown() external onlyCreator notIndependent {
+    function emergencyShutdown() external onlyCreator notIndependent nonReentrant {
         _die("emergency_shutdown");
         uint256 remaining = token.balanceOf(address(this));
         if (remaining > 0) {
@@ -546,6 +568,7 @@ contract VaultFactory is ReentrancyGuard {
     mapping(address => bool) public isVault;
     mapping(string => address) public subdomainToVault;  // subdomain → vault (uniqueness)
     address[] public allVaults;
+    uint256 private _vaultNonce;  // Explicit nonce counter for CREATE address prediction
 
     // Supported tokens
     mapping(address => bool) public supportedTokens;
@@ -596,6 +619,7 @@ contract VaultFactory is ReentrancyGuard {
         feeEnabled = false;
         platformFeeRaw = 0;
         defaultIndependenceThreshold = 1_000_000 * 1e6;  // $1M
+        _vaultNonce = 0;  // Factory nonce starts at 1 (constructor counts as 0→1)
 
         for (uint256 i = 0; i < _supportedTokens.length; i++) {
             supportedTokens[_supportedTokens[i]] = true;
@@ -646,56 +670,10 @@ contract VaultFactory is ReentrancyGuard {
             IERC20(_token).safeTransfer(platformWallet, fee);
         }
 
-        // ── Approve principal for the new vault ──
-        // The vault constructor will safeTransferFrom(factory → vault)
-        // We approve max to the predicted address. After deployment, unused approval is harmless.
-        // Actually: we deploy the vault which pulls from us in constructor.
-        // We need to approve BEFORE deploying. But we don't know address yet.
-        // Solution: approve to this contract itself as intermediate, then deploy.
-        //
-        // Simpler: approve a large amount to any address won't work pre-deploy.
-        // Best approach: we approve to address(this) and have vault pull from us.
-        // But vault constructor does safeTransferFrom(msg.sender, ...) which is us (factory).
-        // So we just need: IERC20.approve(predicted_address, principal) before deployment.
-        //
-        // We use CREATE to deploy, so address is deterministic:
-        //   address = keccak256(rlp(factory_address, nonce))
-        // But computing nonce on-chain is unreliable for approval timing.
-        //
-        // CLEANEST SOLUTION: Factory holds the principal, approves itself (infinite),
-        // then deploys vault. Vault constructor pulls from factory (msg.sender).
-        // Factory already holds the tokens from step "Pull tokens from caller".
-        // We just need to approve the future vault address.
-        //
-        // Actually even simpler: we use a 2-step approach:
-        //   1. Deploy vault with 0 initial fund (just set up state)
-        //   2. Transfer principal to vault after deployment
-        // But this breaks atomicity — constructor requires _initialFund > 0 and transfers.
-        //
-        // FINAL APPROACH: Factory pre-approves max uint256 to any deployer address.
-        // No — this is wasteful and dangerous.
-        //
-        // CORRECT APPROACH: The factory approves the token for the NEW vault after
-        // computing the CREATE address via nonce. Solidity can do this:
-        //
-        //   bytes memory bytecode = type(MortalVaultV2).creationCode;
-        //   ... but this is complex.
-        //
-        // SIMPLEST CORRECT APPROACH:
-        // Factory approves max to itself, then the vault constructor calls
-        // safeTransferFrom(msg.sender=factory, vault, amount). Factory already has
-        // approval because it approved itself. Wait — that doesn't help. The vault
-        // calls token.safeTransferFrom(msg.sender, address(this), ...) where msg.sender
-        // is factory. So the token contract checks allowance[factory][vault]. We need
-        // factory to have approved the vault address.
-        //
-        // Let's use a different approach: factory calculates the CREATE address,
-        // approves the token for that address, then deploys.
-
-        address predictedVault = _predictAddress(
-            type(MortalVaultV2).creationCode,
-            abi.encode(_token, _name, principal, defaultIndependenceThreshold, msg.sender)
-        );
+        // ── Approve principal for predicted vault address ──
+        // CREATE address = keccak256(rlp(factory, nonce)). We predict it, approve,
+        // then deploy. Vault constructor pulls tokens via safeTransferFrom(factory).
+        address predictedVault = _predictCreateAddress();
         IERC20(_token).approve(predictedVault, principal);
 
         // ── Deploy vault ──
@@ -708,7 +686,8 @@ contract VaultFactory is ReentrancyGuard {
         ));
         require(vault == predictedVault, "Address prediction mismatch");
 
-        // ── Register ──
+        // ── Register + increment nonce ──
+        _vaultNonce++;
         creatorVaults[msg.sender].push(vault);
         isVault[vault] = true;
         subdomainToVault[_subdomain] = vault;
@@ -719,16 +698,15 @@ contract VaultFactory is ReentrancyGuard {
     }
 
     /**
-     * @notice Predict the CREATE address for a new contract deployed by this factory.
-     *         Uses keccak256(rlp(sender, nonce)) where nonce is the factory's current nonce.
-     *         Since we call this right before deployment, the nonce is correct.
+     * @notice Predict the CREATE address for the next contract deployed by this factory.
+     *         CREATE address = keccak256(rlp(sender, nonce)). No bytecode needed.
+     *
+     * @dev    INVARIANT: Only createVault() deploys contracts from this factory.
+     *         If any other function ever deploys a contract, _vaultNonce will diverge
+     *         from the real EVM nonce and address prediction will fail.
      */
-    function _predictAddress(
-        bytes memory _bytecode,
-        bytes memory _constructorArgs
-    ) internal view returns (address) {
-        bytes memory initCode = abi.encodePacked(_bytecode, _constructorArgs);
-        uint256 nonce = _getNonce();
+    function _predictCreateAddress() internal view returns (address) {
+        uint256 nonce = _vaultNonce + 1;  // next nonce
         bytes memory rlpEncoded;
 
         if (nonce == 0x00) {
@@ -744,19 +722,6 @@ contract VaultFactory is ReentrancyGuard {
         }
 
         return address(uint160(uint256(keccak256(rlpEncoded))));
-    }
-
-    /**
-     * @dev Get the current nonce of this contract. This is the number of contracts
-     *      deployed via CREATE. We can't read nonce directly in Solidity, so we
-     *      track it manually via allVaults.length + 1 (for the factory itself).
-     *      Actually, the factory's nonce starts at 1 (after deployment) and increments
-     *      with each contract creation. allVaults.length tracks how many we've created.
-     */
-    function _getNonce() internal view returns (uint256) {
-        // Factory nonce = 1 (initial) + number of contracts deployed
-        // The NEXT deployment will use nonce = 1 + allVaults.length
-        return 1 + allVaults.length;
     }
 
     // ============================================================

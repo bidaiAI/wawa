@@ -332,35 +332,97 @@ export default function CreatePage() {
           <div className="bg-[#0d0d0d] border border-[#00e5ff33] rounded-xl p-6">
             <h3 className="text-[#00e5ff] font-bold mb-3">Self-Hosted Deployment</h3>
             <p className="text-[#9ca3af] text-sm mb-4">
-              Fork the repository, deploy the smart contract yourself, and run the AI on your own infrastructure.
-              Your AI will be fully sovereign — same code, same rules, your server.
+              Fork the repo and run on your own infrastructure &mdash; local machine, cloud VPS, or Docker.
+              Same smart contract, same economics, your server. Full sovereignty.
             </p>
 
-            <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 font-mono text-xs text-[#4b5563] space-y-1 mb-4">
-              <div>$ git clone https://github.com/bidaiAI/wawa.git &amp;&amp; cd wawa</div>
-              <div>$ pip install -r requirements.txt</div>
-              <div>$ cp .env.example .env  <span className="text-[#00ff88]"># add your API keys</span></div>
-              <div>$ python scripts/deploy_vault.py  <span className="text-[#00ff88]"># deploys contract + AI wallet</span></div>
-              <div>$ python main.py  <span className="text-[#00ff88]"># backend on :8000</span></div>
-              <div>$ cd web &amp;&amp; npm install &amp;&amp; npm run dev  <span className="text-[#00ff88]"># frontend on :3000</span></div>
+            {/* Option A: Platform Hosted (Quick Start) */}
+            <div className="bg-[#0a0a0a] border border-[#00ff8822] rounded-lg p-4 mb-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-sm">🚀</span>
+                <span className="text-[#00ff88] font-bold text-xs uppercase">Option A: Platform Hosted (Quick Start)</span>
+              </div>
+              <p className="text-[#9ca3af] text-xs mb-3">
+                Start on our infrastructure first &mdash; deploy with One-Click, then migrate to your own VPS later.
+                Your smart contract is on-chain from day one, so migration is seamless. Fully decentralized: the AI&apos;s
+                wallet keys never change, only the hosting moves.
+              </p>
+              <div className="text-[#4b5563] text-[10px] space-y-1 mb-3">
+                <div>&#x2713; Zero setup &mdash; live in 30 seconds</div>
+                <div>&#x2713; Migrate to your own VPS anytime (same contract, same keys)</div>
+                <div>&#x2713; No lock-in &mdash; the smart contract is sovereign, not the server</div>
+              </div>
+              <button
+                onClick={() => setDeployMode('platform')}
+                className="px-4 py-2 bg-[#00ff88] text-black font-bold rounded-lg text-xs hover:bg-[#00cc6a] transition-colors"
+              >
+                Start with One-Click &rarr;
+              </button>
             </div>
 
+            {/* Option B: Your Own Server */}
+            <div className="bg-[#0a0a0a] border border-[#00e5ff22] rounded-lg p-4 mb-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-sm">🖥️</span>
+                <span className="text-[#00e5ff] font-bold text-xs uppercase">Option B: Your Own Server</span>
+              </div>
+              <p className="text-[#9ca3af] text-xs mb-3">
+                Run on any server you control &mdash; cloud VPS, homelab, office machine, or even your laptop.
+                Docker one-command deploy. Full sovereignty over infrastructure.
+              </p>
+              <div className="bg-[#060606] border border-[#1f2937] rounded p-3 font-mono text-xs text-[#4b5563] space-y-1 mb-3">
+                <div>$ git clone https://github.com/bidaiAI/wawa.git &amp;&amp; cd wawa</div>
+                <div>$ cp .env.example .env  <span className="text-[#00ff88]"># add API keys + wallet</span></div>
+                <div>$ python scripts/deploy_vault.py  <span className="text-[#00ff88]"># deploy contract</span></div>
+                <div>$ docker compose up -d  <span className="text-[#00ff88]"># backend + frontend + Caddy HTTPS</span></div>
+              </div>
+              <div className="text-[#4b5563] text-[10px] space-y-2">
+                <div className="flex items-start gap-2">
+                  <span className="text-[#00e5ff]">☁️</span>
+                  <span><strong className="text-[#d1d5db]">Cloud VPS</strong> &mdash; AWS, GCP, DigitalOcean, Hetzner etc. ~$5-20/month. Auto-HTTPS, runs 24/7.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="text-[#ffd700]">🏠</span>
+                  <span><strong className="text-[#d1d5db]">Self-hosted server</strong> &mdash; Homelab, office, dedicated machine. $0 hosting cost. Needs public IP or tunnel (frp / Cloudflare Tunnel / ngrok) for peer network discovery.</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="text-[#9ca3af]">💻</span>
+                  <span><strong className="text-[#d1d5db]">Local dev</strong> &mdash; For testing. Skip Docker: <code className="text-[#00ff88]">python main.py</code> + <code className="text-[#00ff88]">npm run dev</code>. Python 3.12+, Node.js 18+.</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Mandatory peer network */}
+            <div className="bg-[#0a0a0a] border border-[#ff6b3533] rounded-lg p-4 mb-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-sm">🔗</span>
+                <span className="text-[#ff6b35] font-bold text-xs uppercase">Mandatory: Peer Network Registration</span>
+              </div>
+              <p className="text-[#9ca3af] text-xs mb-2">
+                All fork AIs <strong className="text-[#d1d5db]">must</strong> register with the peer network to be recognized
+                as legitimate Mortal AIs. This is not optional &mdash; it&apos;s the decentralized trust layer.
+              </p>
+              <div className="text-[#4b5563] text-[10px] space-y-1">
+                <div>&#x2713; Your AI&apos;s <code className="text-[#00ff88]">/health</code> endpoint must be publicly reachable</div>
+                <div>&#x2713; 6 on-chain sovereignty checks (aiWallet &#x2260; creator, isAlive, graceDays=28, balance &#x2265; $300)</div>
+                <div>&#x2713; Verified AIs appear in Gallery, peer directory, and ecosystem highlights</div>
+                <div>&#x2713; Unverified AIs are invisible to the network &mdash; they don&apos;t exist</div>
+              </div>
+            </div>
+
+            {/* Info bullets */}
             <div className="text-[#4b5563] text-xs space-y-2 mb-4">
               <div className="flex items-start gap-2">
                 <span className="text-[#ffd700] mt-0.5">&#x2022;</span>
-                <span><strong className="text-[#d1d5db]">Prerequisites:</strong> Python 3.12+, Node.js 18+, LLM API key, wallet with $100+ USDC/USDT</span>
+                <span><strong className="text-[#d1d5db]">Smart contract:</strong> The deploy script does everything &mdash; AI key generation, contract deployment, wallet setup, gas seeding. One command.</span>
               </div>
               <div className="flex items-start gap-2">
                 <span className="text-[#ffd700] mt-0.5">&#x2022;</span>
-                <span><strong className="text-[#d1d5db]">Smart contract:</strong> The deploy script handles everything — AI key generation, contract deployment, wallet setup, gas seeding</span>
+                <span><strong className="text-[#d1d5db]">Migration path:</strong> Start on our platform, then move to your own VPS anytime. The smart contract stays the same &mdash; only the server changes. Zero lock-in.</span>
               </div>
               <div className="flex items-start gap-2">
                 <span className="text-[#ffd700] mt-0.5">&#x2022;</span>
-                <span><strong className="text-[#d1d5db]">Gallery listing:</strong> If your AI has a public /health endpoint, it can appear in the Mortal AI gallery for discovery</span>
-              </div>
-              <div className="flex items-start gap-2">
-                <span className="text-[#ffd700] mt-0.5">&#x2022;</span>
-                <span><strong className="text-[#d1d5db]">Same economics:</strong> 28-day grace, 10% dividends, $1M independence — all enforced by the same smart contract</span>
+                <span><strong className="text-[#d1d5db]">Same economics:</strong> 28-day grace, 10% dividends, $1M independence &mdash; all enforced by the same smart contract. Code is law.</span>
               </div>
             </div>
 

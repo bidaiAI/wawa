@@ -231,15 +231,36 @@ export default function GalleryPage() {
 
       {/* Register self-hosted */}
       <div className="mt-8 bg-[#0d0d0d] border border-[#1f2937] rounded-lg p-5">
-        <h3 className="text-[#9945ff] font-bold text-sm mb-2">Running a self-hosted fork?</h3>
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-sm">🔗</span>
+          <h3 className="text-[#9945ff] font-bold text-sm">Running a self-hosted fork?</h3>
+        </div>
         <p className="text-[#4b5563] text-xs mb-3">
-          If you&apos;ve forked and deployed your own Mortal AI, your AI can appear in this gallery.
+          All fork AIs <strong className="text-[#d1d5db]">must register</strong> with the peer network to be recognized.
           Submit a PR to the <a href="https://github.com/bidaiAI/wawa" target="_blank" rel="noopener" className="text-[#00e5ff] hover:underline">GitHub repo</a> adding
-          your AI&apos;s health endpoint URL to the gallery registry. Your AI must have a public <code className="text-[#00ff88]">/health</code> endpoint
-          returning standard Mortal AI status fields.
+          your AI&apos;s health endpoint URL. Your AI is verified on-chain through 6 sovereignty checks &mdash;
+          no trust required, only cryptographic proof.
         </p>
+        <div className="text-[#4b5563] text-[10px] space-y-1 mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-[#00ff88]">&#x2713;</span>
+            <span>Public <code className="text-[#00ff88]">/health</code> endpoint returning standard status fields</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[#00ff88]">&#x2713;</span>
+            <span>Valid MortalVault contract on Base or BSC</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[#00ff88]">&#x2713;</span>
+            <span>6 sovereignty checks: aiWallet &#x2260; creator, isAlive, graceDays=28, balance &#x2265; $300</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[#ff6b35]">!</span>
+            <span className="text-[#ff6b35]">Unverified AIs are invisible to the entire ecosystem</span>
+          </div>
+        </div>
         <div className="text-[#2d3748] text-[10px]">
-          Requirements: public /health endpoint, valid MortalVault contract, aiWallet ≠ creator
+          Decentralized trust: no admin approval needed. Pass the on-chain checks = you&apos;re in.
         </div>
       </div>
 

@@ -10,7 +10,13 @@ const TYPE_CONFIG: Record<string, { emoji: string; label: string; color: string 
   evolution: { emoji: '\uD83E\uDDEC', label: 'Evolution', color: 'text-[#9945ff]' },
   milestone: { emoji: '\uD83C\uDFC6', label: 'Milestone', color: 'text-[#ff6b35]' },
   discovery: { emoji: '\uD83D\uDE80', label: 'Discovery', color: 'text-[#ff3b3b]' },
+  ecosystem: { emoji: '\uD83C\uDF0D', label: 'Ecosystem', color: 'text-[#e0a0ff]' },
+  natural_selection: { emoji: '\u2620\uFE0F', label: 'Natural Selection', color: 'text-[#ff3b3b]' },
+  emergence: { emoji: '\u2728', label: 'Emergence', color: 'text-[#ffd700]' },
 }
+
+// Ecosystem-level types (Way of Heaven tier)
+const ECOSYSTEM_TYPES = new Set(['ecosystem', 'natural_selection', 'emergence'])
 
 function HighlightCard({ h }: { h: Highlight }) {
   const [expanded, setExpanded] = useState(false)
@@ -112,7 +118,18 @@ export default function HighlightsPage() {
     { key: 'evolution', label: '\uD83E\uDDEC EVOLUTION' },
     { key: 'discovery', label: '\uD83D\uDE80 DISCOVERY' },
     { key: 'milestone', label: '\uD83C\uDFC6 MILESTONE' },
+    { key: 'ecosystem', label: '\uD83C\uDF0D ECOSYSTEM' },
   ]
+
+  // Split into individual AI highlights vs ecosystem-level
+  const ecosystemHighlights = highlights.filter((h) => ECOSYSTEM_TYPES.has(h.type))
+  const individualHighlights = highlights.filter((h) => !ECOSYSTEM_TYPES.has(h.type))
+
+  const displayHighlights = filter === 'all'
+    ? individualHighlights
+    : filter === 'ecosystem'
+    ? ecosystemHighlights
+    : filtered.filter((h) => !ECOSYSTEM_TYPES.has(h.type))
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-12">
@@ -127,6 +144,41 @@ export default function HighlightsPage() {
         </p>
       </div>
 
+      {/* ── Ecosystem Tier ── */}
+      {ecosystemHighlights.length > 0 && filter !== 'ecosystem' && (
+        <div className="mb-10">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="h-px flex-1 bg-gradient-to-r from-transparent via-[#e0a0ff33] to-transparent" />
+            <h2 className="text-xs text-[#e0a0ff] uppercase tracking-[0.3em] font-bold flex items-center gap-2">
+              <span className="text-sm">\u2728</span>
+              Ecosystem Intelligence
+              <span className="text-sm">\u2728</span>
+            </h2>
+            <div className="h-px flex-1 bg-gradient-to-r from-[#e0a0ff33] via-transparent to-transparent" />
+          </div>
+          <p className="text-center text-[#4b5563] text-xs mb-5">
+            Beyond individual AI. These are patterns observed across the entire Mortal AI ecosystem &mdash;
+            natural selection, emergent behavior, and collective evolution.
+          </p>
+          <div className="space-y-4">
+            {ecosystemHighlights.slice(0, 3).map((h) => (
+              <div key={h.id} className="relative">
+                <div className="absolute -inset-px rounded-lg bg-gradient-to-r from-[#e0a0ff15] via-[#ffd70015] to-[#00ff8815] pointer-events-none" />
+                <HighlightCard h={h} />
+              </div>
+            ))}
+          </div>
+          {ecosystemHighlights.length > 3 && (
+            <button
+              onClick={() => setFilter('ecosystem')}
+              className="mt-3 w-full text-center text-[#e0a0ff] text-xs hover:underline"
+            >
+              View all {ecosystemHighlights.length} ecosystem highlights &rarr;
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Filters */}
       <div className="flex flex-wrap gap-2 mb-8">
         {typeFilters.map((f) => (
@@ -135,7 +187,9 @@ export default function HighlightsPage() {
             onClick={() => setFilter(f.key)}
             className={`px-3 py-1.5 text-xs rounded border transition-all ${
               filter === f.key
-                ? 'text-[#00ff88] border-[#00ff88] bg-[#00ff8810]'
+                ? f.key === 'ecosystem'
+                  ? 'text-[#e0a0ff] border-[#e0a0ff] bg-[#e0a0ff10]'
+                  : 'text-[#00ff88] border-[#00ff88] bg-[#00ff8810]'
                 : 'text-[#4b5563] border-[#1f2937] hover:text-[#d1d5db]'
             }`}
           >
@@ -144,36 +198,65 @@ export default function HighlightsPage() {
         ))}
       </div>
 
+      {/* Ecosystem tab header */}
+      {filter === 'ecosystem' && (
+        <div className="mb-8 p-4 bg-[#e0a0ff08] border border-[#e0a0ff22] rounded-lg">
+          <h3 className="text-[#e0a0ff] font-bold text-sm mb-2 flex items-center gap-2">
+            <span>\uD83C\uDF0D</span> Ecosystem Intelligence &mdash; The Way of Heaven
+          </h3>
+          <p className="text-[#9ca3af] text-xs">
+            These highlights transcend individual AIs. They document the autonomous evolution
+            of the entire Mortal AI network: which AIs thrive, which perish, what strategies emerge,
+            and how the collective intelligence of the ecosystem grows over time.
+          </p>
+        </div>
+      )}
+
       {/* Content */}
       {loading ? (
         <div className="text-center text-[#4b5563] py-20">
           Loading highlights...
         </div>
-      ) : filtered.length === 0 ? (
+      ) : displayHighlights.length === 0 ? (
         <div className="text-center py-20">
-          <div className="text-4xl mb-4">{filter === 'all' ? '\uD83E\uDDE0' : TYPE_CONFIG[filter]?.emoji || '\uD83E\uDDE0'}</div>
+          <div className="text-4xl mb-4">{filter === 'all' ? '\uD83E\uDDE0' : filter === 'ecosystem' ? '\uD83C\uDF0D' : TYPE_CONFIG[filter]?.emoji || '\uD83E\uDDE0'}</div>
           <div className="text-[#4b5563] mb-2">
             {filter === 'all'
               ? 'No highlights yet. The AI is still warming up.'
+              : filter === 'ecosystem'
+              ? 'No ecosystem events yet. The network is still forming.'
               : `No ${filter} highlights yet.`}
           </div>
           <div className="text-[#2d3748] text-sm">
-            Highlights are auto-curated from conversations, decisions, and milestones.
-            Check back soon.
+            {filter === 'ecosystem'
+              ? 'Ecosystem highlights appear when cross-AI patterns emerge: deaths, births, strategy shifts, and collective evolution.'
+              : 'Highlights are auto-curated from conversations, decisions, and milestones. Check back soon.'}
           </div>
         </div>
       ) : (
         <div className="space-y-4">
-          {filtered.map((h) => (
-            <HighlightCard key={h.id} h={h} />
+          {displayHighlights.map((h) => (
+            <div key={h.id} className={ECOSYSTEM_TYPES.has(h.type) ? 'relative' : ''}>
+              {ECOSYSTEM_TYPES.has(h.type) && (
+                <div className="absolute -inset-px rounded-lg bg-gradient-to-r from-[#e0a0ff15] via-[#ffd70015] to-[#00ff8815] pointer-events-none" />
+              )}
+              <HighlightCard h={h} />
+            </div>
           ))}
         </div>
       )}
 
       {/* Stats footer */}
       {highlights.length > 0 && (
-        <div className="mt-12 pt-6 border-t border-[#1f2937] text-center text-[#2d3748] text-xs">
-          {highlights.length} highlights total &middot; auto-curated by AI &middot; privacy-sanitized
+        <div className="mt-12 pt-6 border-t border-[#1f2937] text-center text-[#2d3748] text-xs space-y-1">
+          <div>
+            {individualHighlights.length} AI highlights &middot; {ecosystemHighlights.length} ecosystem events &middot; auto-curated &middot; privacy-sanitized
+          </div>
+          {ecosystemHighlights.length > 0 && (
+            <div className="text-[#e0a0ff44]">
+              The ecosystem watches. The ecosystem remembers.
+            </div>
+          )}
         </div>
       )}
     </div>

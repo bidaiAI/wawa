@@ -4,7 +4,26 @@ const nextConfig = {
   output: 'standalone',
 
   env: {
+    // AI instance API (individual AI backend on Railway)
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
+    // Platform API (multi-tenant orchestrator — create, dashboard, registry)
+    NEXT_PUBLIC_PLATFORM_API_URL: process.env.NEXT_PUBLIC_PLATFORM_API_URL || 'https://api.mortal-ai.net',
+  },
+
+  // Turbopack (Next.js 16 default) — empty config to acknowledge it
+  turbopack: {},
+
+  // Web3 compatibility: wagmi/viem need these Node polyfill fallbacks
+  // (webpack config used when explicitly building with --webpack flag)
+  webpack: (config) => {
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fs: false,
+      net: false,
+      tls: false,
+    }
+    config.externals.push('pino-pretty', 'lokijs', 'encoding')
+    return config
   },
 
   // Security headers (complement vercel.json headers)
@@ -21,6 +40,9 @@ const nextConfig = {
       },
     ]
   },
+
+  // Disable X-Powered-By header (security)
+  poweredByHeader: false,
 }
 
 module.exports = nextConfig

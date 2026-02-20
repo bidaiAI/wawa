@@ -306,7 +306,7 @@ export interface ActivityEntry {
   source: string
 }
 
-export type HighlightType = 'chat' | 'decision' | 'service' | 'evolution' | 'milestone' | 'discovery'
+export type HighlightType = 'chat' | 'decision' | 'service' | 'evolution' | 'milestone' | 'discovery' | 'ecosystem' | 'natural_selection' | 'emergence'
 
 export interface Highlight {
   id: string

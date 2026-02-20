@@ -422,7 +422,7 @@ export default function StorePage() {
           {/* Chains info */}
           {chains.length > 0 && (
             <div className="mt-6 p-4 bg-[#0d0d0d] border border-[#1f2937] rounded-lg text-xs text-[#4b5563]">
-              支持链: {chains.map((c) => `${c.name} (${c.token})`).join(' · ')} — 默认{' '}
+              Supported chains: {chains.map((c) => `${c.name} (${c.token})`).join(' · ')} — default{' '}
               <span className="text-[#00ff88]">{defaultChain === 'base' ? 'Base' : 'BSC'}</span>
             </div>
           )}
