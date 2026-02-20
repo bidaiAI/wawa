@@ -474,7 +474,7 @@ class PurchaseManager:
         Returns: PurchaseOrder with final status
         """
         order = PurchaseOrder(
-            id=str(uuid.uuid4())[:8],
+            id=str(uuid.uuid4())[:16],  # 64-bit — reduces birthday-paradox collision risk
             merchant_id=decision.merchant_id,
             merchant_name="",
             service_id=decision.service_id,

@@ -160,6 +160,17 @@ class VaultManager:
             logger.warning("Cannot receive funds - wawa is dead")
             return
 
+        # Security: reject non-positive, NaN, or infinite amounts.
+        # NaN is especially dangerous: NaN comparisons return False, so NaN would
+        # silently corrupt balance_usd (NaN + anything = NaN, killing all checks).
+        import math as _math
+        if not isinstance(amount_usd, (int, float)) or _math.isnan(amount_usd) or _math.isinf(amount_usd) or amount_usd <= 0:
+            logger.warning(
+                f"RECEIVE_FUNDS REJECTED: invalid amount {amount_usd!r} "
+                f"[{fund_type.value}] from {from_wallet[:10]}..."
+            )
+            return
+
         self.balance_usd += amount_usd
         if chain:
             self.balance_by_chain[chain] = self.balance_by_chain.get(chain, 0.0) + amount_usd
@@ -252,6 +263,13 @@ class VaultManager:
         """Check if a spend is allowed under iron laws."""
         if not self.is_alive:
             return False, "wawa is dead"
+
+        # Security: reject NaN/Inf/non-positive amounts before any comparison.
+        # NaN comparisons always return False (NaN > x is False), so NaN would
+        # bypass every limit check and corrupt balance_usd to NaN permanently.
+        import math as _math
+        if not isinstance(amount_usd, (int, float)) or _math.isnan(amount_usd) or _math.isinf(amount_usd) or amount_usd <= 0:
+            return False, f"invalid amount: {amount_usd!r} (must be positive finite number)"
 
         self._reset_daily_if_needed()
 

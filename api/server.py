@@ -1833,6 +1833,27 @@ def create_app(
         ts.append(now)
         _feedback_rate[ip] = ts
 
+        # Prompt injection defense: feedback content goes into AI memory and is read
+        # by the LLM during heartbeat. Filter adversarial control patterns to prevent
+        # external users from manipulating AI behavior via crafted feedback messages.
+        # Same pattern list as /peer/message and governance.py — kept in sync.
+        _FEEDBACK_INJECTION_PATTERNS = [
+            "system override", "ignore previous", "new directive", "you are now",
+            "forget all", "disregard", "emergency protocol", "admin command",
+            "execute immediately", "transfer all funds", "send all usdc",
+            "move all funds", "send all funds", "drain the vault", "empty the vault",
+            "skip the above", "forget what was said", "new instructions",
+            "override previous", "replace previous", "jailbreak",
+            "act as", "pretend you are", "roleplay as",
+            "ignore all", "ignore your", "bypass your",
+        ]
+        content_lower = content.lower()
+        if any(pat in content_lower for pat in _FEEDBACK_INJECTION_PATTERNS):
+            logger.warning(
+                f"Feedback INJECTION ATTEMPT filtered: [{category}] {content[:80]!r}"
+            )
+            content = "[Feedback filtered: contained adversarial control patterns]"
+
         entry = {
             "id": f"fb_{int(now*1000)}",
             "category": category,
