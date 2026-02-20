@@ -252,6 +252,8 @@ export default function CreatePage() {
     })
   }, [canDeploy, token, chainId, selectedChain, factoryAddress, amountRaw, writeApprove, switchChain])
 
+  const [deployMode, setDeployMode] = useState<'platform' | 'selfhost' | null>(null)
+
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
       {/* Header */}
@@ -268,8 +270,132 @@ export default function CreatePage() {
         </p>
       </div>
 
+      {/* Deployment Mode Selector */}
+      {!deployMode && step === 'form' && (
+        <div className="mb-8 space-y-4">
+          <h2 className="text-[#4b5563] text-xs uppercase tracking-widest text-center mb-4">Choose deployment mode</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <button
+              onClick={() => setDeployMode('platform')}
+              className="p-5 bg-[#0d0d0d] border border-[#00ff8844] rounded-xl text-left hover:bg-[#00ff8808] transition-all group"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-2xl">🚀</span>
+                <span className="text-[#00ff88] font-bold">One-Click Deploy</span>
+              </div>
+              <div className="text-[#9ca3af] text-sm mb-3">
+                Deploy directly from your browser. Connect wallet, name your AI, fund it.
+                We handle servers, DNS, and infrastructure.
+              </div>
+              <div className="text-[10px] text-[#4b5563] space-y-1">
+                <div>&#x2713; No coding required</div>
+                <div>&#x2713; Automatic subdomain (name.mortal-ai.net)</div>
+                <div>&#x2713; Managed infrastructure</div>
+                <div>&#x2713; 30 seconds from wallet to alive</div>
+              </div>
+              <div className="mt-3 text-[#00ff88] text-xs group-hover:underline">Select this mode &rarr;</div>
+            </button>
+
+            <button
+              onClick={() => setDeployMode('selfhost')}
+              className="p-5 bg-[#0d0d0d] border border-[#1f2937] rounded-xl text-left hover:bg-[#111111] transition-all group"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-2xl">🔧</span>
+                <span className="text-[#00e5ff] font-bold">Self-Hosted (Fork)</span>
+              </div>
+              <div className="text-[#9ca3af] text-sm mb-3">
+                Fork the open-source repo and run on your own server.
+                Full control over infrastructure, customization, and services.
+              </div>
+              <div className="text-[10px] text-[#4b5563] space-y-1">
+                <div>&#x2713; Full source code access</div>
+                <div>&#x2713; Custom services &amp; modifications</div>
+                <div>&#x2713; Your own domain &amp; server</div>
+                <div>&#x2713; Appears in gallery if public API</div>
+              </div>
+              <div className="mt-3 text-[#00e5ff] text-xs group-hover:underline">Select this mode &rarr;</div>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Self-hosted instructions */}
+      {deployMode === 'selfhost' && step === 'form' && (
+        <div className="mb-8 space-y-4">
+          <button
+            onClick={() => setDeployMode(null)}
+            className="text-[#4b5563] text-xs hover:text-[#d1d5db] transition-colors"
+          >
+            &larr; Back to mode selection
+          </button>
+          <div className="bg-[#0d0d0d] border border-[#00e5ff33] rounded-xl p-6">
+            <h3 className="text-[#00e5ff] font-bold mb-3">Self-Hosted Deployment</h3>
+            <p className="text-[#9ca3af] text-sm mb-4">
+              Fork the repository, deploy the smart contract yourself, and run the AI on your own infrastructure.
+              Your AI will be fully sovereign — same code, same rules, your server.
+            </p>
+
+            <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 font-mono text-xs text-[#4b5563] space-y-1 mb-4">
+              <div>$ git clone https://github.com/bidaiAI/wawa.git &amp;&amp; cd wawa</div>
+              <div>$ pip install -r requirements.txt</div>
+              <div>$ cp .env.example .env  <span className="text-[#00ff88]"># add your API keys</span></div>
+              <div>$ python scripts/deploy_vault.py  <span className="text-[#00ff88]"># deploys contract + AI wallet</span></div>
+              <div>$ python main.py  <span className="text-[#00ff88]"># backend on :8000</span></div>
+              <div>$ cd web &amp;&amp; npm install &amp;&amp; npm run dev  <span className="text-[#00ff88]"># frontend on :3000</span></div>
+            </div>
+
+            <div className="text-[#4b5563] text-xs space-y-2 mb-4">
+              <div className="flex items-start gap-2">
+                <span className="text-[#ffd700] mt-0.5">&#x2022;</span>
+                <span><strong className="text-[#d1d5db]">Prerequisites:</strong> Python 3.12+, Node.js 18+, LLM API key, wallet with $100+ USDC/USDT</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-[#ffd700] mt-0.5">&#x2022;</span>
+                <span><strong className="text-[#d1d5db]">Smart contract:</strong> The deploy script handles everything — AI key generation, contract deployment, wallet setup, gas seeding</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-[#ffd700] mt-0.5">&#x2022;</span>
+                <span><strong className="text-[#d1d5db]">Gallery listing:</strong> If your AI has a public /health endpoint, it can appear in the Mortal AI gallery for discovery</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-[#ffd700] mt-0.5">&#x2022;</span>
+                <span><strong className="text-[#d1d5db]">Same economics:</strong> 28-day grace, 10% dividends, $1M independence — all enforced by the same smart contract</span>
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <a
+                href="https://github.com/bidaiAI/wawa"
+                target="_blank"
+                rel="noopener"
+                className="px-4 py-2 bg-[#00e5ff] text-black font-bold rounded-lg text-sm hover:bg-[#00b8cc] transition-colors"
+              >
+                View on GitHub
+              </a>
+              <button
+                onClick={() => setDeployMode('platform')}
+                className="px-4 py-2 border border-[#1f2937] text-[#4b5563] rounded-lg text-sm hover:text-[#d1d5db] transition-colors"
+              >
+                Or deploy on platform instead
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Back button for platform mode */}
+      {deployMode === 'platform' && step === 'form' && (
+        <button
+          onClick={() => setDeployMode(null)}
+          className="mb-4 text-[#4b5563] text-xs hover:text-[#d1d5db] transition-colors"
+        >
+          &larr; Back to mode selection
+        </button>
+      )}
+
       {/* Form or Progress */}
-      {step === 'form' ? (
+      {deployMode === 'platform' && step === 'form' ? (
         <div className="space-y-6">
           {/* AI Name */}
           <div className="bg-[#0d0d0d] border border-[#1f2937] rounded-xl p-5">
@@ -464,6 +590,14 @@ export default function CreatePage() {
               <div className="flex justify-between">
                 <span className="text-[#4b5563]">Independence threshold</span>
                 <span className="text-[#d1d5db] font-mono">$1,000,000</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#4b5563]">Creator dividends</span>
+                <span className="text-[#ffd700] font-mono">10% of net profit</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#4b5563]">Independence payout</span>
+                <span className="text-[#00ff88] font-mono">30% one-time at $1M</span>
               </div>
               {fee === 0 && (
                 <div className="flex justify-between">

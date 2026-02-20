@@ -97,8 +97,29 @@ export default function HomePage() {
     ? 'animate-[glow-red_0.8s_ease-in-out_infinite_alternate]'
     : 'animate-[glow-green_3s_ease-in-out_infinite_alternate]'
 
+  const PLATFORM_URL = process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://mortal-ai.net'
+
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
+      {/* Platform banner */}
+      <div className="mb-6 flex items-center justify-between px-3 py-2 bg-[#0d0d0d] border border-[#1f2937] rounded-lg">
+        <a
+          href={PLATFORM_URL}
+          className="text-[#4b5563] text-xs hover:text-[#00ff88] transition-colors flex items-center gap-1.5"
+        >
+          <span>&larr;</span>
+          <span>MORTAL AI Platform</span>
+        </a>
+        <div className="flex items-center gap-3 text-[10px] text-[#4b5563]">
+          <a href={`${PLATFORM_URL}/gallery`} className="hover:text-[#00e5ff] transition-colors">
+            Browse all AIs &rarr;
+          </a>
+          <a href={`${PLATFORM_URL}/create`} className="hover:text-[#00ff88] transition-colors">
+            Create your own &rarr;
+          </a>
+        </div>
+      </div>
+
       {/* Header */}
       <div className="mb-8 text-center">
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">

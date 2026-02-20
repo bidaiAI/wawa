@@ -24,6 +24,11 @@ const links = [
   { href: '/about', label: 'ABOUT' },
 ]
 
+interface PlatformInfo {
+  ais_alive: number
+  total_deployed: number
+}
+
 export default function AINav() {
   const pathname = usePathname()
   const [balance, setBalance] = useState<number | null>(null)
@@ -32,6 +37,7 @@ export default function AINav() {
   const [aiName, setAiName] = useState('Mortal AI')
   const [isBegging, setIsBegging] = useState(false)
   const [open, setOpen] = useState(false)
+  const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -40,6 +46,15 @@ export default function AINav() {
     api.aiName().then((r) => {
       if (!cancelled && r.name) setAiName(r.name)
     }).catch(() => {})
+
+    // Fetch platform-level info (total AIs)
+    const WAWA_API = process.env.NEXT_PUBLIC_API_URL || 'https://api.mortal-ai.net'
+    fetch(`${WAWA_API}/health`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled) setPlatformInfo({ ais_alive: data.alive ? 1 : 0, total_deployed: 1 })
+      })
+      .catch(() => {})
 
     const load = async () => {
       try {
@@ -65,10 +80,19 @@ export default function AINav() {
     <nav className="fixed top-0 left-0 right-0 z-50 bg-[#0a0a0a]/95 backdrop-blur border-b border-[#1f2937]">
       <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2 group">
-          <span className="text-lg font-bold glow-green glitch">{aiName}</span>
-          <a href={PLATFORM_URL} className="text-[#4b5563] text-xs hidden sm:block hover:text-[#00ff88] transition-colors">// mortal AI</a>
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href="/" className="flex items-center gap-2 group">
+            <span className="text-lg font-bold glow-green glitch">{aiName}</span>
+          </Link>
+          <a href={PLATFORM_URL} className="text-[#4b5563] text-xs hidden sm:flex items-center gap-1.5 hover:text-[#00ff88] transition-colors">
+            <span>// mortal AI</span>
+            {platformInfo && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#00ff8810] text-[#00ff88] border border-[#00ff8830]">
+                {platformInfo.ais_alive} alive
+              </span>
+            )}
+          </a>
+        </div>
 
         {/* Desktop links */}
         <div className="hidden md:flex items-center gap-1">
