@@ -60,6 +60,7 @@ from core.token_filter import TokenFilter
 from core.self_modify import SelfModifyEngine
 from core.chain import ChainExecutor
 from core.peer_verifier import PeerVerifier
+from core.highlights import HighlightsEngine
 from twitter.agent import TwitterAgent, TweetType
 from api.server import create_app, Order
 
@@ -79,6 +80,7 @@ token_filter = TokenFilter()
 self_modify = SelfModifyEngine()
 chain_executor = ChainExecutor()
 peer_verifier = PeerVerifier()
+highlights = HighlightsEngine()
 twitter = TwitterAgent()
 
 # Payment addresses dict — populated at create_wawa_app(), updated in lifespan
@@ -724,6 +726,40 @@ def _record_gas_fee(tx_result) -> None:
             logger.warning(f"Failed to record gas fee ${gas_usd:.6f}: {e}")
 
 
+async def _evaluate_highlights():
+    """
+    Evaluate recent interactions for highlight-worthy moments.
+    Called hourly from heartbeat loop.
+    """
+    try:
+        # Gather recent chat sessions for evaluation
+        chat_stats = chat_router.get_stats()
+        recent_sessions = chat_stats.get("active_sessions", 0)
+
+        # Gather recent activity for evaluation
+        interaction_summary_parts = []
+
+        # Recent memory entries
+        recent_entries = memory.get_entries(source="", limit=10, min_importance=0.5)
+        if recent_entries:
+            for e in recent_entries[:5]:
+                interaction_summary_parts.append(f"[{e.get('source', 'system')}] {e.get('content', '')[:200]}")
+
+        # Recent transactions
+        recent_txs = vault.get_recent_transactions(5)
+        for tx in recent_txs:
+            interaction_summary_parts.append(f"[transaction] {tx.get('description', '')[:100]}")
+
+        if not interaction_summary_parts:
+            return  # Nothing to evaluate
+
+        interaction_data = "\n".join(interaction_summary_parts)
+        await highlights.evaluate_interaction(interaction_data)
+
+    except Exception as e:
+        logger.warning(f"Highlights evaluation failed: {e}")
+
+
 async def _evaluate_repayment():
     """
     AI-autonomous repayment decision.
@@ -1096,6 +1132,13 @@ async def _heartbeat_loop():
             except Exception as e:
                 logger.warning(f"Heartbeat: self-evolution failed: {e}")
 
+            # ---- HIGHLIGHT EVALUATION (hourly, same cadence as repayment) ----
+            try:
+                if now - _last_repayment_eval < 10:  # Only run when repayment just evaluated (same hour)
+                    await _evaluate_highlights()
+            except Exception as e:
+                logger.warning(f"Heartbeat: highlights eval failed: {e}")
+
             # State persistence (survive restarts)
             memory.save_to_disk()
             vault.save_state()
@@ -1162,6 +1205,32 @@ async def lifespan(app):
     twitter.set_generate_function(_tweet_generate_fn)
     twitter.set_post_function(_tweet_post_fn)
     twitter.set_context_function(_tweet_context_fn)
+
+    # Wire highlights engine
+    async def _highlights_llm_fn(system_prompt: str, user_prompt: str) -> str:
+        """LLM call for highlight evaluation."""
+        route = cost_guard.route(purpose="highlights_eval", for_paid_service=False)
+        result = await _call_llm(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            route=route,
+        )
+        return result
+
+    async def _highlights_tweet_fn(content: str, highlight_type: str) -> Optional[str]:
+        """Post a highlight tweet via the twitter agent."""
+        try:
+            record = await twitter.trigger_event_tweet(
+                TweetType.HIGHLIGHT,
+                extra_context={"pre_built_content": content, "highlight_type": highlight_type},
+            )
+            return record.tweet_id if record else None
+        except Exception as e:
+            logger.warning(f"Highlight tweet failed: {e}")
+            return None
+
+    highlights.set_llm_function(_highlights_llm_fn)
+    highlights.set_tweet_function(_highlights_tweet_fn)
 
     # ---- RESTORE STATE FROM DISK (crash recovery) ----
     vault_restored = vault.load_state()
@@ -1325,6 +1394,7 @@ def create_wawa_app() -> "FastAPI":
         self_modify_engine=self_modify,
         peer_verifier=peer_verifier,
         chain_executor=chain_executor,
+        highlights_engine=highlights,
     )
 
     # Replace the default lifespan with ours

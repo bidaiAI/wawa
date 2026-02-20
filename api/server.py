@@ -257,6 +257,7 @@ def create_app(
     self_modify_engine=None,
     peer_verifier=None,
     chain_executor=None,
+    highlights_engine=None,
 ) -> FastAPI:
     """
     Create FastAPI app wired to all mortal modules.
@@ -1302,6 +1303,17 @@ def create_app(
         activities = activities[:limit]
 
         return {"activities": activities}
+
+    # ============================================================
+    # HIGHLIGHTS — AI proof of intelligence
+    # ============================================================
+
+    @app.get("/highlights")
+    async def get_highlights(limit: int = 20, type: Optional[str] = None):
+        """Public highlights — curated showcase of AI intelligence and growth."""
+        if highlights_engine:
+            return {"highlights": highlights_engine.get_highlights(limit, type)}
+        return {"highlights": []}
 
     # ============================================================
     # INTERNAL

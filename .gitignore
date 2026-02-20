@@ -28,6 +28,7 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+NUL
 
 # Node (for frontend)
 node_modules/

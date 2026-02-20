@@ -6,10 +6,10 @@ import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import SurvivalBar from '@/components/SurvivalBar'
 
+const PLATFORM_URL = process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://mortal-ai.net'
+
 const links = [
   { href: '/', label: 'HOME' },
-  { href: '/create', label: 'CREATE' },
-  { href: '/dashboard', label: 'DASHBOARD' },
   { href: '/store', label: 'STORE' },
   { href: '/donate', label: 'DONATE' },
   { href: '/scan', label: 'SCAN' },
@@ -17,13 +17,14 @@ const links = [
   { href: '/tweets', label: 'TWEETS' },
   { href: '/ledger', label: 'LEDGER' },
   { href: '/activity', label: 'ACTIVITY' },
+  { href: '/highlights', label: 'HIGHLIGHTS' },
   { href: '/peers', label: 'PEERS' },
   { href: '/govern', label: 'GOVERN' },
   { href: '/graveyard', label: '🪦' },
   { href: '/about', label: 'ABOUT' },
 ]
 
-export default function Nav() {
+export default function AINav() {
   const pathname = usePathname()
   const [balance, setBalance] = useState<number | null>(null)
   const [dailySpend, setDailySpend] = useState<number>(0)
@@ -66,7 +67,7 @@ export default function Nav() {
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 group">
           <span className="text-lg font-bold glow-green glitch">{aiName}</span>
-          <span className="text-[#4b5563] text-xs hidden sm:block">// mortal AI</span>
+          <a href={PLATFORM_URL} className="text-[#4b5563] text-xs hidden sm:block hover:text-[#00ff88] transition-colors">// mortal AI</a>
         </Link>
 
         {/* Desktop links */}

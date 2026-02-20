@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useAccount, useChainId, useWriteContract, useWaitForTransactionReceipt, useReadContract, useSwitchChain } from 'wagmi'
-import { parseUnits, formatUnits } from 'viem'
+import { parseUnits, formatUnits, getAddress } from 'viem'
 import { base, bsc } from 'wagmi/chains'
 import WalletButton from '@/components/WalletButton'
 import { TOKENS, FACTORY_ADDRESSES } from '@/lib/wagmi'
@@ -38,6 +38,7 @@ export default function CreatePage() {
   const [step, setStep] = useState<DeployStep>('form')
   const [error, setError] = useState('')
   const [vaultAddress, setVaultAddress] = useState('')
+  const [provisioningMsg, setProvisioningMsg] = useState('Provisioning AI server...')
 
   // Derived
   const token = TOKENS[selectedChain]
@@ -125,18 +126,77 @@ export default function CreatePage() {
     }
   }, [approveConfirmed, step])
 
-  // Auto-advance after create confirmation
+  // Auto-advance after create confirmation → extract vault address, begin polling
   useEffect(() => {
-    if (createConfirmed && createReceipt && step === 'creating') {
-      setStep('provisioning')
-      // Parse VaultCreated event from receipt logs
-      // For now, show provisioning state
-      // TODO: Poll platform backend for deployment status
-      setTimeout(() => {
-        setStep('live')
-      }, 5000)
+    if (!createConfirmed || !createReceipt || step !== 'creating') return
+
+    // VaultCreated event: topics = [sig, creator, vault, token]  (all indexed)
+    let parsedVault = ''
+    for (const log of (createReceipt as any).logs ?? []) {
+      if (log.topics?.length >= 3) {
+        // topics[2] = vault address (32 bytes, left-padded)
+        const raw: string = log.topics[2]
+        if (raw && raw.startsWith('0x')) {
+          parsedVault = getAddress('0x' + raw.slice(-40))
+          break
+        }
+      }
     }
+    if (parsedVault) setVaultAddress(parsedVault)
+    setStep('provisioning')
   }, [createConfirmed, createReceipt, step])
+
+  // Poll platform backend while in 'provisioning' state
+  useEffect(() => {
+    if (step !== 'provisioning') return
+
+    const PLATFORM_API = process.env.NEXT_PUBLIC_PLATFORM_API_URL ?? 'https://api.mortal-ai.net'
+    const pollTarget = vaultAddress || subdomain  // fallback to subdomain if vault addr not yet set
+    let attempts = 0
+    const MAX_ATTEMPTS = 60  // 3 minutes
+
+    const STATUS_MESSAGES: Record<string, string> = {
+      generating_wallet: 'Setting up AI wallet...',
+      setting_ai_wallet: 'Setting up AI wallet...',
+      seeding_gas: 'Setting up AI wallet...',
+      spawning_container: 'Spawning AI server...',
+      configuring_subdomain: 'Configuring domain...',
+      health_check: 'Health check...',
+    }
+
+    const id = setInterval(async () => {
+      attempts++
+      if (attempts > MAX_ATTEMPTS) {
+        clearInterval(id)
+        setError('Deployment is taking longer than expected. Check dashboard later.')
+        setStep('error')
+        return
+      }
+
+      try {
+        const res = await fetch(`${PLATFORM_API}/platform/status/${pollTarget}`)
+        if (!res.ok) return  // server not ready yet, keep polling
+        const data = await res.json()
+        const status: string = data.status ?? ''
+
+        if (STATUS_MESSAGES[status]) {
+          setProvisioningMsg(STATUS_MESSAGES[status])
+        }
+        if (status === 'live') {
+          clearInterval(id)
+          setStep('live')
+        } else if (status === 'failed') {
+          clearInterval(id)
+          setError(data.error ?? 'Deployment failed on the platform side.')
+          setStep('error')
+        }
+      } catch {
+        // network hiccup — keep polling
+      }
+    }, 3000)
+
+    return () => clearInterval(id)
+  }, [step, vaultAddress, subdomain])
 
   // Handle errors
   useEffect(() => {
@@ -213,9 +273,13 @@ export default function CreatePage() {
         <div className="space-y-6">
           {/* AI Name */}
           <div className="bg-[#0d0d0d] border border-[#1f2937] rounded-xl p-5">
-            <label className="block text-[#4b5563] text-xs uppercase tracking-wider mb-2">
+            <label className="block text-[#4b5563] text-xs uppercase tracking-wider mb-1">
               AI Name
             </label>
+            <p className="text-[#2d3748] text-xs mb-3">
+              Your AI&apos;s permanent identity. Written to the smart contract at birth — cannot be changed later.
+              This name appears on-chain, in the peer network, and on its public page.
+            </p>
             <input
               type="text"
               value={aiName}
@@ -227,7 +291,7 @@ export default function CreatePage() {
             />
             <div className="flex justify-between mt-1.5">
               <span className="text-[#2d3748] text-[10px]">
-                3-50 characters. This is permanent.
+                3-50 characters. This is permanent and immutable.
               </span>
               <span className={`text-[10px] ${nameValid ? 'text-[#00ff88]' : 'text-[#4b5563]'}`}>
                 {aiName.length}/50
@@ -237,9 +301,13 @@ export default function CreatePage() {
 
           {/* Subdomain */}
           <div className="bg-[#0d0d0d] border border-[#1f2937] rounded-xl p-5">
-            <label className="block text-[#4b5563] text-xs uppercase tracking-wider mb-2">
+            <label className="block text-[#4b5563] text-xs uppercase tracking-wider mb-1">
               Subdomain
             </label>
+            <p className="text-[#2d3748] text-xs mb-3">
+              Your AI&apos;s unique web address. Once deployed, your AI will be accessible at this URL.
+              Registered on-chain — first come, first served. Cannot be changed after creation.
+            </p>
             <div className="flex items-center gap-0">
               <input
                 type="text"
@@ -270,13 +338,17 @@ export default function CreatePage() {
 
           {/* Chain Selection */}
           <div className="bg-[#0d0d0d] border border-[#1f2937] rounded-xl p-5">
-            <label className="block text-[#4b5563] text-xs uppercase tracking-wider mb-3">
-              Chain
+            <label className="block text-[#4b5563] text-xs uppercase tracking-wider mb-1">
+              Blockchain
             </label>
+            <p className="text-[#2d3748] text-xs mb-3">
+              Choose which blockchain your AI lives on. This determines its currency and transaction costs.
+              Base uses USDC (lower gas fees), BSC uses USDT (wider DeFi ecosystem). Cannot be changed after deployment.
+            </p>
             <div className="grid grid-cols-2 gap-3">
               {[
-                { id: base.id, name: 'Base', token: 'USDC', icon: '🔵' },
-                { id: bsc.id, name: 'BSC', token: 'USDT', icon: '🟡' },
+                { id: base.id, name: 'Base', token: 'USDC', icon: '🔵', desc: 'Low gas, Coinbase ecosystem' },
+                { id: bsc.id, name: 'BSC', token: 'USDT', desc: 'Wide DeFi, Binance ecosystem', icon: '🟡' },
               ].map((c) => (
                 <button
                   key={c.id}
@@ -292,6 +364,7 @@ export default function CreatePage() {
                     <span className="font-bold text-sm">{c.name}</span>
                   </div>
                   <div className="text-xs opacity-60">Pay with {c.token}</div>
+                  <div className="text-[10px] opacity-40 mt-1">{c.desc}</div>
                 </button>
               ))}
             </div>
@@ -299,9 +372,16 @@ export default function CreatePage() {
 
           {/* Initial Fund */}
           <div className="bg-[#0d0d0d] border border-[#1f2937] rounded-xl p-5">
-            <label className="block text-[#4b5563] text-xs uppercase tracking-wider mb-3">
+            <label className="block text-[#4b5563] text-xs uppercase tracking-wider mb-1">
               Initial Fund <span className="text-[#ff3b3b88]">(loan, not gift)</span>
             </label>
+            <p className="text-[#2d3748] text-xs mb-3">
+              This is a <span className="text-[#ff3b3b99]">debt, not a donation</span>.
+              Your AI is born owing you this exact amount. It has 28 days to start earning revenue to repay you — if
+              debt exceeds balance after the grace period, the AI dies on-chain and remaining funds are liquidated back to you.
+              More funding = longer survival runway. The AI decides its own repayment schedule.
+              You receive 10% dividends on net profit once the principal is repaid.
+            </p>
 
             {/* Preset buttons */}
             <div className="flex flex-wrap gap-2 mb-4">
@@ -354,9 +434,14 @@ export default function CreatePage() {
 
           {/* Summary */}
           <div className="bg-[#0d0d0d] border border-[#00ff8822] rounded-xl p-5">
-            <div className="text-[#4b5563] text-xs uppercase tracking-wider mb-3">
+            <div className="text-[#4b5563] text-xs uppercase tracking-wider mb-1">
               Summary
             </div>
+            <p className="text-[#2d3748] text-xs mb-3">
+              Review before deploying. Two MetaMask transactions will be required:
+              (1) Approve the token transfer, (2) Create the vault contract.
+              Once confirmed, your AI is born and the clock starts ticking.
+            </p>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-[#4b5563]">Principal (AI&apos;s debt)</span>
@@ -465,7 +550,7 @@ export default function CreatePage() {
 
             {/* Step 3: Provision server */}
             <ProgressStep
-              label="Spawning AI server"
+              label={step === 'provisioning' ? provisioningMsg : 'Spawning AI server'}
               status={
                 step === 'provisioning' ? 'waiting' :
                 step === 'live' ? 'done' :

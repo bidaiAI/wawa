@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { api, VaultStatus } from '@/lib/api'
+import { api, VaultStatus, PeerAI } from '@/lib/api'
 
 /**
  * Silicon Graveyard — memorial page for dead AIs.
@@ -115,15 +115,33 @@ function EmptyGraveyard({ isAlive, daysAlive, balance }: { isAlive: boolean; day
 export default function GraveyardPage() {
   const [status, setStatus] = useState<VaultStatus | null>(null)
   const [error, setError] = useState('')
-  const tombstones: Tombstone[] = []
+  const [deadPeers, setDeadPeers] = useState<PeerAI[]>([])
 
+  // Fetch own status once
   useEffect(() => {
     api.status()
       .then(setStatus)
       .catch((e) => setError(e.message))
   }, [])
 
-  // If this AI is dead, show its tombstone
+  // Fetch peer list, filter dead — poll every 30s, silent on error
+  useEffect(() => {
+    const fetchPeers = async () => {
+      try {
+        const res = await api.peer.list()
+        setDeadPeers((res.peers ?? []).filter((p) => !p.is_alive))
+      } catch {
+        // silence — peer network may not be active yet
+      }
+    }
+    fetchPeers()
+    const id = setInterval(fetchPeers, 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const tombstones: Tombstone[] = []
+
+  // If this AI is dead, show its tombstone first
   if (status && !status.is_alive) {
     tombstones.push({
       name: status.ai_name || 'Unknown AI',
@@ -137,8 +155,17 @@ export default function GraveyardPage() {
     })
   }
 
-  // TODO: When peer network is active, fetch dead peers from /peer/list
-  // and add their tombstones here
+  // Convert dead peers to Tombstone format
+  const peerTombstones: Tombstone[] = deadPeers.map((p) => ({
+    name: p.name,
+    daysAlive: p.days_alive ?? 0,
+    totalEarned: 0,
+    totalSpent: 0,
+    deathCause: 'unknown',
+    balance: p.balance_usd ?? 0,
+    debtOutstanding: 0,
+    vault: p.domain || undefined,
+  }))
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
@@ -167,10 +194,9 @@ export default function GraveyardPage() {
         </div>
       )}
 
-      {/* Tombstones grid */}
+      {/* ── Main tombstones (this AI) ── */}
       {tombstones.length > 0 ? (
         <>
-          {/* Counter */}
           <div className="mb-6 flex items-center justify-center gap-2">
             <span className="text-[#ff3b3b] font-bold text-2xl tabular-nums">{tombstones.length}</span>
             <span className="text-[#4b5563] text-sm uppercase tracking-wider">
@@ -184,7 +210,6 @@ export default function GraveyardPage() {
             ))}
           </div>
 
-          {/* Epitaph */}
           <div className="mt-8 text-center text-[#2d3748] text-xs italic">
             &quot;Balance zero. Contract sealed. The chain remembers what we cannot undo.&quot;
           </div>
@@ -197,27 +222,50 @@ export default function GraveyardPage() {
         />
       )}
 
-      {/* Footer stats */}
-      {status && (
-        <div className="mt-12 pt-6 border-t border-[#1f2937]">
-          <div className="grid grid-cols-3 gap-4 text-center text-xs">
-            <div>
-              <div className="text-[#4b5563] uppercase tracking-wider mb-1">Network AIs</div>
-              <div className="text-[#d1d5db] font-bold">1</div>
+      {/* ── Fallen Peers ── */}
+      {peerTombstones.length > 0 && (
+        <div className="mt-12">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="flex-1 h-px bg-[#1f2937]" />
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest">
+              ☠ Fallen Peers ({peerTombstones.length})
             </div>
-            <div>
-              <div className="text-[#4b5563] uppercase tracking-wider mb-1">Alive</div>
-              <div className={`font-bold ${status.is_alive ? 'text-[#00ff88]' : 'text-[#ff3b3b]'}`}>
-                {status.is_alive ? '1' : '0'}
-              </div>
-            </div>
-            <div>
-              <div className="text-[#4b5563] uppercase tracking-wider mb-1">Dead</div>
-              <div className="text-[#ff3b3b] font-bold">{status.is_alive ? '0' : '1'}</div>
-            </div>
+            <div className="flex-1 h-px bg-[#1f2937]" />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {peerTombstones.map((tomb, i) => (
+              <TombstoneCard key={`peer-${i}`} tomb={tomb} />
+            ))}
           </div>
         </div>
       )}
+
+      {/* ── Footer stats ── */}
+      {status && (() => {
+        const totalAIs = 1 + deadPeers.length + (status.is_alive ? 0 : 0)
+        const aliveCount = (status.is_alive ? 1 : 0)
+        const deadCount = (status.is_alive ? 0 : 1) + deadPeers.length
+        return (
+          <div className="mt-12 pt-6 border-t border-[#1f2937]">
+            <div className="grid grid-cols-3 gap-4 text-center text-xs">
+              <div>
+                <div className="text-[#4b5563] uppercase tracking-wider mb-1">Network AIs</div>
+                <div className="text-[#d1d5db] font-bold">{totalAIs}</div>
+              </div>
+              <div>
+                <div className="text-[#4b5563] uppercase tracking-wider mb-1">Alive</div>
+                <div className={`font-bold ${aliveCount > 0 ? 'text-[#00ff88]' : 'text-[#ff3b3b]'}`}>
+                  {aliveCount}
+                </div>
+              </div>
+              <div>
+                <div className="text-[#4b5563] uppercase tracking-wider mb-1">Dead</div>
+                <div className="text-[#ff3b3b] font-bold">{deadCount}</div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

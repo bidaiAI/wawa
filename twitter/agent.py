@@ -37,6 +37,7 @@ class TweetType(Enum):
     LOAN_RECEIVED = "loan_received"           # New lender
     CREATOR_REPAID = "creator_repaid"         # Paid back creator
     DEATH = "death"                           # Final tweet
+    HIGHLIGHT = "highlight"                   # Conway-style showcase of AI intelligence
 
 
 @dataclass

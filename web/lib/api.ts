@@ -306,12 +306,32 @@ export interface ActivityEntry {
   source: string
 }
 
+export type HighlightType = 'chat' | 'decision' | 'service' | 'evolution' | 'milestone' | 'discovery'
+
+export interface Highlight {
+  id: string
+  timestamp: number
+  type: HighlightType
+  title: string
+  content: string
+  ai_commentary: string
+  importance: number
+  tweet_id?: string
+  discovery_stage?: string
+}
+
 // ── API calls ─────────────────────────────────────────────────
 
 export const api = {
   status: () => request<VaultStatus>('/status'),
 
   aiName: () => request<{ name: string; is_set: boolean }>('/ai/name'),
+
+  setAiName: (data: { name: string; wallet: string; message: string; signature: string }) =>
+    request<{ name: string; previous_name: string }>('/ai/name', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   health: () =>
     request<{ alive: boolean; uptime_days: number; balance_usd: number; api_budget_remaining: number; ai_name?: string }>('/health'),
@@ -385,4 +405,7 @@ export const api = {
     if (category) params.set('category', category)
     return request<{ activities: ActivityEntry[] }>(`/activity?${params}`)
   },
+
+  highlights: (limit = 20) =>
+    request<{ highlights: Highlight[] }>(`/highlights?limit=${limit}`),
 }
