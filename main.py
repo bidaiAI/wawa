@@ -230,6 +230,7 @@ async def _call_llm(
 
     if recommended_provider and recommended_provider != use_provider:
         use_provider = recommended_provider
+        use_model = cost_guard._default_model_for_provider(use_provider.value)
 
     # Rate limit check
     if not cost_guard.check_rate_limit(use_provider.value):
