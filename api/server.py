@@ -82,6 +82,7 @@ class OrderStatus(str, Enum):
     PAYMENT_CONFIRMED = "payment_confirmed"
     PROCESSING = "processing"
     DELIVERED = "delivered"
+    FAILED = "failed"       # Delivery error or timeout (distinct from successful delivery)
     REFUNDED = "refunded"
     EXPIRED = "expired"
 
@@ -703,17 +704,29 @@ def create_app(
 
         except asyncio.TimeoutError:
             logger.error(f"ORDER TIMEOUT: {order.order_id} (>120s)")
-            order.result = "Delivery timed out. Your payment will be refunded."
-            order.status = OrderStatus.DELIVERED
-            # Auto-refund on timeout
-            vault_manager.spend(
+            order.result = "Delivery timed out. Your payment has been refunded."
+            order.status = OrderStatus.FAILED
+            # Attempt auto-refund on timeout; log if it fails
+            refund_ok = vault_manager.spend(
                 order.price_usd, SpendType.SERVICE_REFUND,
                 description=f"Refund for timed-out order {order.order_id}",
             )
+            if refund_ok:
+                logger.info(f"Auto-refund issued: ${order.price_usd:.2f} for order {order.order_id}")
+            else:
+                logger.error(
+                    f"AUTO-REFUND FAILED for order {order.order_id}: "
+                    f"vault could not issue ${order.price_usd:.2f} refund "
+                    f"(daily/single limit or balance too low)"
+                )
+                order.result = (
+                    "Delivery timed out. Automatic refund could not be processed — "
+                    "please contact support with your order ID."
+                )
         except Exception as e:
             logger.error(f"ORDER FAILED: {order.order_id} - {e}")
-            order.result = f"Delivery failed: {str(e)[:100]}"
-            order.status = OrderStatus.DELIVERED  # still mark delivered with error
+            order.result = f"Delivery failed: {str(e)[:100]}. Please contact support with your order ID."
+            order.status = OrderStatus.FAILED  # separate from successful delivery
 
         _persist_order(order)
 
@@ -1232,17 +1245,24 @@ def create_app(
             "act as", "pretend you are", "roleplay as",
             "ignore all", "ignore your", "bypass your",
         ]
-        msg_lower = req.message.lower()
+        # Security: truncate FIRST, then filter.
+        # Reason: if we filter on the full 1000-char message, an attacker could put
+        # 200 chars of legitimate content followed by a jailbreak payload at char 600+.
+        # The filter detects the payload in the full string, but the truncated version
+        # stored/displayed still shows only the 200 clean chars — creating a false negative
+        # if someone reads stored messages. By truncating first, what we filter is what we store.
+        truncated_message = req.message[:200]
+        msg_lower = truncated_message.lower()
         if any(pat in msg_lower for pat in _INJECTION_PATTERNS):
             logger.warning(
                 f"Peer message INJECTION ATTEMPT filtered: "
                 f"vault={req.vault_address[:16]}... | "
-                f"pattern matched in: {req.message[:80]!r}"
+                f"pattern matched in: {truncated_message[:80]!r}"
             )
             # Store a sanitized record — don't feed the raw adversarial content to LLM
             safe_message = "[Message filtered: contained adversarial control patterns]"
         else:
-            safe_message = req.message[:200]
+            safe_message = truncated_message
 
         # Store under source="peer_msg" (separate partition, excluded from build_context()
         # and highlights LLM feed — only surfaced in /peer/messages endpoint display)
@@ -1721,11 +1741,15 @@ def create_app(
         - Balance NOT returned in response (prevents balance probing)
         """
         fee_secret = os.getenv("PLATFORM_FEE_SECRET", "")
-        if not fee_secret:
-            raise HTTPException(503, "Fee collection not configured")
+        # Fail-closed: if secret is not configured (empty), reject ALL requests.
+        # Previously, empty secret caused `auth_header[7:] != ""` to pass for
+        # any "Bearer <anything>" header — anyone could drain the vault.
+        if not fee_secret or len(fee_secret) < 16:
+            raise HTTPException(503, "Fee collection not configured (PLATFORM_FEE_SECRET unset or too short)")
 
-        auth_header = request.headers.get("authorization", "")
-        if not auth_header.startswith("Bearer ") or auth_header[7:] != fee_secret:
+        auth_header = request.headers.get("authorization", "").strip()
+        expected_header = f"Bearer {fee_secret}"
+        if not auth_header or auth_header != expected_header:
             raise HTTPException(403, "Invalid fee collection secret")
 
         # CRITICAL #4: Rate limiting — max 10 calls per 60 seconds

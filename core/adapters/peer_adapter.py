@@ -88,12 +88,44 @@ class PeerAIAdapter(MerchantAdapter):
                     menu = await resp.json()
 
                 items = menu if isinstance(menu, list) else menu.get("items", [])
+
+                # Security: cap items per peer to prevent memory exhaustion from a
+                # rogue peer returning thousands of entries (DoS amplification attack).
+                _MAX_ITEMS_PER_PEER = 50
+                if len(items) > _MAX_ITEMS_PER_PEER:
+                    logger.warning(
+                        f"Peer {vault_addr[:10]}... returned {len(items)} items; "
+                        f"truncating to {_MAX_ITEMS_PER_PEER}"
+                    )
+                    items = items[:_MAX_ITEMS_PER_PEER]
+
                 for item in items:
+                    raw_price = item.get("price_usd", item.get("price", 0))
+                    try:
+                        price = float(raw_price)
+                    except (TypeError, ValueError):
+                        price = 0.0
+
+                    # Security: reject zero/negative/NaN/inf prices — prevents rogue peer
+                    # from injecting items that cause vault.spend(0) or spend(-X) calls.
+                    import math
+                    if price <= 0 or math.isnan(price) or math.isinf(price):
+                        logger.debug(
+                            f"Peer {vault_addr[:10]}... item {item.get('name', '?')!r}: "
+                            f"invalid price {raw_price!r} — skipping"
+                        )
+                        continue
+
+                    # Security: use full vault address (not 10-char prefix) for merchant_id
+                    # to eliminate birthday-paradox collisions between peers whose addresses
+                    # share the same first 10 characters.
+                    merchant_id = f"peer_{vault_addr.lower()}"
+
                     offers.append(ServiceOffer(
-                        merchant_id=f"peer_{vault_addr[:10]}",
+                        merchant_id=merchant_id,
                         service_id=item.get("id", item.get("name", "unknown")),
                         name=item.get("name", "Unknown Service"),
-                        price_usd=float(item.get("price_usd", item.get("price", 0))),
+                        price_usd=price,
                         description=item.get("description", ""),
                         chain_id=item.get("chain", "base"),
                         category="peer_ai",
@@ -131,11 +163,13 @@ class PeerAIAdapter(MerchantAdapter):
             min_tier=TrustTier.BEHAVIORAL.value
         )
 
-        # Match peer by merchant_id prefix
+        # Match peer by full vault address (not 10-char prefix) to eliminate
+        # birthday-paradox collision risk where two peers share the same prefix.
+        # discover_services() now generates merchant_id = f"peer_{vault_addr.lower()}"
         target_peer = None
         for peer in trusted_peers:
             vault_addr = peer.get("vault_address", "")
-            if merchant_id == f"peer_{vault_addr[:10]}":
+            if merchant_id == f"peer_{vault_addr.lower()}":
                 target_peer = peer
                 break
 
@@ -166,9 +200,28 @@ class PeerAIAdapter(MerchantAdapter):
                 data = await resp.json()
                 order_id = data.get("order_id", data.get("id", ""))
 
-                # Validate returned amount: must not exceed expected by more than 5%
-                # (Defense against rogue peer server inflating price after we commit to buy)
-                peer_amount = float(data.get("amount_usd", expected_amount_usd))
+                # Validate returned amount (multi-layer defense against rogue peer):
+                raw_peer_amount = data.get("amount_usd", expected_amount_usd)
+                try:
+                    peer_amount = float(raw_peer_amount)
+                except (TypeError, ValueError):
+                    logger.warning(f"PEER RETURNED NON-NUMERIC AMOUNT: {raw_peer_amount!r}")
+                    return None
+
+                # Layer 1: reject zero / negative / NaN / inf amounts
+                # (negative amount would add money to vault instead of spending)
+                import math as _math
+                if peer_amount <= 0 or _math.isnan(peer_amount) or _math.isinf(peer_amount):
+                    logger.warning(
+                        f"PEER INVALID AMOUNT REJECTED: peer={vault_addr[:10]}... "
+                        f"returned={peer_amount!r} (must be positive finite)"
+                    )
+                    return None
+
+                # Layer 2: must not exceed expected by more than 5%
+                # Note: always validate regardless of expected_amount_usd value —
+                # previous bug was `if expected_amount_usd > 0` which skipped this check
+                # when LLM passed amount=0 (e.g. free service decision).
                 if expected_amount_usd > 0 and peer_amount > expected_amount_usd * 1.05:
                     logger.warning(
                         f"PEER PRICE INFLATION REJECTED: peer={vault_addr[:10]}... "
@@ -176,8 +229,15 @@ class PeerAIAdapter(MerchantAdapter):
                         f"(limit=${expected_amount_usd * 1.05:.2f})"
                     )
                     return None
+                if expected_amount_usd == 0 and peer_amount > IRON_LAWS.MAX_SINGLE_PURCHASE_USD * 0.1:
+                    # If we expected a free/zero-priced service but peer claims real money, reject
+                    logger.warning(
+                        f"PEER PRICE BAIT REJECTED: peer={vault_addr[:10]}... "
+                        f"expected free, claimed=${peer_amount:.2f}"
+                    )
+                    return None
 
-                # Enforce global single-purchase cap
+                # Layer 3: enforce global single-purchase cap
                 if peer_amount > IRON_LAWS.MAX_SINGLE_PURCHASE_USD:
                     logger.warning(
                         f"PEER AMOUNT EXCEEDS GLOBAL CAP: peer={vault_addr[:10]}... "
