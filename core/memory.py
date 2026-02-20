@@ -226,7 +226,13 @@ class HierarchicalMemory:
         remaining = max_tokens
 
         # Layer 0: Recent raw (highest priority)
+        # Exclude "peer_msg" source — peer message content is untrusted user data
+        # that could contain prompt injection payloads. It is surfaced only via the
+        # /peer/messages API endpoint, never injected into the LLM context.
+        _LLM_EXCLUDED_SOURCES = {"peer_msg"}
         for entry in reversed(self.raw[-20:]):
+            if entry.source in _LLM_EXCLUDED_SOURCES:
+                continue
             line = f"[{entry.source}] {entry.content}"
             tokens = int(len(line.split()) * 1.3)
             if tokens > remaining:
@@ -256,7 +262,13 @@ class HierarchicalMemory:
 
         return "\n".join(reversed(parts))
 
-    def get_entries(self, source: str = "", limit: int = 50, min_importance: float = 0.0) -> list[dict]:
+    def get_entries(
+        self,
+        source: str = "",
+        limit: int = 50,
+        min_importance: float = 0.0,
+        include_peer_messages: bool = False,
+    ) -> list[dict]:
         """
         Query raw memory entries for the activity log.
 
@@ -264,6 +276,8 @@ class HierarchicalMemory:
             source: Filter by source (e.g. "financial", "system", "twitter"). Empty = all.
             limit: Maximum entries to return.
             min_importance: Minimum importance threshold (0.0 = all).
+            include_peer_messages: If False (default), excludes "peer_msg" source entries.
+                Set to True only for the /peer/messages display endpoint — never for LLM feeds.
 
         Returns:
             List of entry dicts sorted by timestamp descending (newest first).
@@ -271,6 +285,10 @@ class HierarchicalMemory:
         entries = self.raw
         if source:
             entries = [e for e in entries if e.source == source]
+        elif not include_peer_messages:
+            # By default, hide raw peer message content from LLM-facing query results
+            # to prevent prompt injection through peer AI messages
+            entries = [e for e in entries if e.source != "peer_msg"]
         if min_importance > 0:
             entries = [e for e in entries if e.importance >= min_importance]
         return [

@@ -334,6 +334,10 @@ def create_app(
     # ── Security: per-order locks (prevent concurrent verify on same order) ────
     _order_locks: dict[str, asyncio.Lock] = {}
 
+    # ── Security: per-tx locks (serialize concurrent verifies of the same tx_hash
+    #    across DIFFERENT orders — prevents cross-order tx replay race condition) ─
+    _tx_processing_locks: dict[str, asyncio.Lock] = {}
+
     # ── Security: used tx hashes (prevent tx replay across multiple orders) ───
     _used_tx_hashes: set[str] = set()
 
@@ -551,90 +555,100 @@ def create_app(
         if not tx_hash or not re.match(r"^0x[a-fA-F0-9]{64}$", tx_hash):
             raise HTTPException(400, "Invalid tx_hash format. Must be 0x + 64 hex chars.")
 
-        # CRITICAL #2: Reject tx_hash that was already used for another order
+        # CRITICAL #2: Fast pre-check (no lock) — most replays caught here cheaply
         if tx_hash.lower() in _used_tx_hashes:
             raise HTTPException(409, "Transaction hash already used for a previous order. Each transaction can only verify one order.")
 
-        # CRITICAL #1: Acquire per-order lock to prevent concurrent verify race condition
-        lock = _order_locks.setdefault(order_id, asyncio.Lock())
-        async with lock:
-            order = orders[order_id]
+        # LOW: Acquire per-tx lock FIRST to serialize concurrent verifications of the same
+        # tx_hash across DIFFERENT orders (cross-order tx replay race).
+        # Without this, N concurrent requests with the same tx_hash all pass the pre-check
+        # above simultaneously, acquire their own per-order locks, and all succeed.
+        # With this: they queue on tx_hash lock; second+ entrant re-checks and finds hash used.
+        tx_lock = _tx_processing_locks.setdefault(tx_hash.lower(), asyncio.Lock())
+        async with tx_lock:
+            # Re-check inside tx lock (the TOCTOU window from pre-check above is now closed)
+            if tx_hash.lower() in _used_tx_hashes:
+                raise HTTPException(409, "Transaction hash already used for a previous order. Each transaction can only verify one order.")
 
-            if order.status == OrderStatus.DELIVERED:
-                return {"status": "already_delivered", "result": order.result}
+            # CRITICAL #1: Acquire per-order lock to prevent concurrent verify on same order
+            lock = _order_locks.setdefault(order_id, asyncio.Lock())
+            async with lock:
+                order = orders[order_id]
 
-            if order.status == OrderStatus.EXPIRED:
-                raise HTTPException(410, "Order expired")
+                if order.status == OrderStatus.DELIVERED:
+                    return {"status": "already_delivered", "result": order.result}
 
-            # Guard against double-verify: only allow verification from PENDING_PAYMENT
-            if order.status != OrderStatus.PENDING_PAYMENT:
-                raise HTTPException(409, f"Order already being processed (status: {order.status.value})")
+                if order.status == OrderStatus.EXPIRED:
+                    raise HTTPException(410, "Order expired")
 
-            # HIGH #1: Enforce 30-minute order expiry
-            ORDER_EXPIRY_SECONDS = 30 * 60
-            if time.time() - order.created_at > ORDER_EXPIRY_SECONDS:
-                order.status = OrderStatus.EXPIRED
-                raise HTTPException(410, "Order expired (>30 minutes). Please create a new order.")
+                # Guard against double-verify: only allow verification from PENDING_PAYMENT
+                if order.status != OrderStatus.PENDING_PAYMENT:
+                    raise HTTPException(409, f"Order already being processed (status: {order.status.value})")
 
-            # On-chain payment verification
-            pay_addr = payment_addresses.get(order.chain, "")
-            if chain_executor and pay_addr:
-                verification = await chain_executor.verify_payment_tx(
-                    tx_hash=tx_hash,
-                    expected_to=pay_addr,
-                    expected_token="",  # auto-detect from chain config
-                    min_amount_usd=order.price_usd * 0.99,  # 1% tolerance for rounding
-                    chain_id=order.chain,
-                )
-                if not verification.get("verified"):
-                    error_msg = verification.get("error", "verification failed")
-                    logger.warning(
-                        f"Payment verification FAILED: order={order_id} tx={tx_hash[:16]}... "
-                        f"reason={error_msg}"
+                # HIGH #1: Enforce 30-minute order expiry
+                ORDER_EXPIRY_SECONDS = 30 * 60
+                if time.time() - order.created_at > ORDER_EXPIRY_SECONDS:
+                    order.status = OrderStatus.EXPIRED
+                    raise HTTPException(410, "Order expired (>30 minutes). Please create a new order.")
+
+                # On-chain payment verification
+                pay_addr = payment_addresses.get(order.chain, "")
+                if chain_executor and pay_addr:
+                    verification = await chain_executor.verify_payment_tx(
+                        tx_hash=tx_hash,
+                        expected_to=pay_addr,
+                        expected_token="",  # auto-detect from chain config
+                        min_amount_usd=order.price_usd * 0.99,  # 1% tolerance for rounding
+                        chain_id=order.chain,
                     )
+                    if not verification.get("verified"):
+                        error_msg = verification.get("error", "verification failed")
+                        logger.warning(
+                            f"Payment verification FAILED: order={order_id} tx={tx_hash[:16]}... "
+                            f"reason={error_msg}"
+                        )
+                        raise HTTPException(
+                            402,
+                            f"Payment not verified on-chain: {error_msg}. "
+                            f"Expected >= ${order.price_usd:.2f} to {pay_addr[:10]}... on {order.chain}.",
+                        )
+                    # Use verified amount (may differ slightly from order price)
+                    verified_amount = verification.get("amount_usd", order.price_usd)
+                    verified_from = verification.get("from_address", order.ip)
+                    logger.info(
+                        f"Payment VERIFIED on-chain: order={order_id} "
+                        f"amount=${verified_amount:.2f} from={verified_from[:16]}..."
+                    )
+                else:
+                    # CRITICAL #3: Never skip verification — chain executor is required
                     raise HTTPException(
-                        402,
-                        f"Payment not verified on-chain: {error_msg}. "
-                        f"Expected >= ${order.price_usd:.2f} to {pay_addr[:10]}... on {order.chain}.",
+                        503,
+                        "Payment verification unavailable: chain executor not initialized. "
+                        "Please try again later or contact support."
                     )
-                # Use verified amount (may differ slightly from order price)
-                verified_amount = verification.get("amount_usd", order.price_usd)
-                verified_from = verification.get("from_address", order.ip)
-                logger.info(
-                    f"Payment VERIFIED on-chain: order={order_id} "
-                    f"amount=${verified_amount:.2f} from={verified_from[:16]}..."
+
+                # Mark tx_hash as used — inside BOTH tx_lock and order_lock so no race possible
+                _used_tx_hashes.add(tx_hash.lower())
+
+                # Record payment
+                order.status = OrderStatus.PAYMENT_CONFIRMED
+                order.paid_at = time.time()
+                order.tx_hash = tx_hash
+
+                # MEDIUM #3: Persist immediately on PAYMENT_CONFIRMED so restarts don't lose paid orders
+                _persist_order(order)
+
+                # Record revenue in vault (use verified amount from chain)
+                from core.vault import FundType, SpendType
+                vault_manager.receive_funds(
+                    amount_usd=verified_amount,
+                    fund_type=FundType.SERVICE_REVENUE,
+                    from_wallet=verified_from,
+                    tx_hash=tx_hash,
+                    description=f"Order {order.order_id}: {order.service_name}",
+                    chain=order.chain,
                 )
-            else:
-                # CRITICAL #3: Never skip verification — chain executor is required
-                raise HTTPException(
-                    503,
-                    "Payment verification unavailable: chain executor not initialized. "
-                    "Please try again later or contact support."
-                )
-
-            # CRITICAL #2: Mark tx_hash as used (prevent replay on other orders)
-            # Must be inside the lock to avoid TOCTOU between check and add
-            _used_tx_hashes.add(tx_hash.lower())
-
-            # Record payment
-            order.status = OrderStatus.PAYMENT_CONFIRMED
-            order.paid_at = time.time()
-            order.tx_hash = tx_hash
-
-            # MEDIUM #3: Persist immediately on PAYMENT_CONFIRMED so restarts don't lose paid orders
-            _persist_order(order)
-
-            # Record revenue in vault (use verified amount from chain)
-            from core.vault import FundType, SpendType
-            vault_manager.receive_funds(
-                amount_usd=verified_amount,
-                fund_type=FundType.SERVICE_REVENUE,
-                from_wallet=verified_from,
-                tx_hash=tx_hash,
-                description=f"Order {order.order_id}: {order.service_name}",
-                chain=order.chain,
-            )
-            cost_guard.record_revenue(order.price_usd)
+                cost_guard.record_revenue(order.price_usd)
 
         # Deliver (with timeout to prevent hanging HTTP requests) — outside lock so long ops don't block
         order.status = OrderStatus.PROCESSING
@@ -787,20 +801,80 @@ def create_app(
         """
         Donate to help wawa survive. Reduces debt pressure.
         Anyone can donate — individuals, other AIs, communities.
+
+        Security hardening:
+        - Donations >= $10 require a valid tx_hash and on-chain verification
+          (prevents balance inflation via fabricated donations and the resulting
+           false independence triggers / autonomous repayment misfires)
+        - tx_hash added to _used_tx_hashes after verification (cross-endpoint replay defense)
+        - Donations < $10 without tx_hash are accepted as-is (faith donations, low risk)
         """
         if not vault_manager.is_alive:
             raise HTTPException(503, "wawa is dead. Donations no longer accepted.")
 
         # Validate tx_hash format if provided
-        import re as _re
-        if req.tx_hash and not _re.match(r"^0x[a-fA-F0-9]{64}$", req.tx_hash):
+        if req.tx_hash and not re.match(r"^0x[a-fA-F0-9]{64}$", req.tx_hash):
             raise HTTPException(400, "Invalid tx_hash format. Must be 0x + 64 hex chars.")
+
+        # Replay check: reject tx_hash already used by any other endpoint
+        if req.tx_hash and req.tx_hash.lower() in _used_tx_hashes:
+            raise HTTPException(409, "Transaction hash already recorded. Each transaction can only be credited once.")
 
         from core.vault import FundType
         chain = req.chain or "base"
 
+        # Large donations (>= $10) MUST be verified on-chain to prevent:
+        # 1. Balance inflation attacks (fake balance → false independence trigger / bad repayment decisions)
+        # 2. Donation amount inflation (self-reported $999,999 without any real transfer)
+        _UNVERIFIED_DONATE_CAP_USD = 10.0
+        verified_amount = req.amount_usd  # default: trust for small amounts
+
+        if req.amount_usd >= _UNVERIFIED_DONATE_CAP_USD:
+            if not req.tx_hash:
+                raise HTTPException(
+                    400,
+                    f"Donations >= ${_UNVERIFIED_DONATE_CAP_USD:.0f} require a transaction hash "
+                    f"for on-chain verification. Please provide the tx_hash of your transfer."
+                )
+            pay_addr = payment_addresses.get(chain, "")
+            if chain_executor and pay_addr:
+                verification = await chain_executor.verify_payment_tx(
+                    tx_hash=req.tx_hash,
+                    expected_to=pay_addr,
+                    expected_token="",
+                    min_amount_usd=req.amount_usd * 0.99,  # 1% rounding tolerance
+                    chain_id=chain,
+                )
+                if not verification.get("verified"):
+                    error_msg = verification.get("error", "verification failed")
+                    logger.warning(
+                        f"Donation on-chain VERIFICATION FAILED: "
+                        f"tx={req.tx_hash[:16]}... reason={error_msg}"
+                    )
+                    raise HTTPException(
+                        402,
+                        f"Donation not verified on-chain: {error_msg}. "
+                        f"Expected >= ${req.amount_usd:.2f} to {pay_addr[:10]}... on {chain}."
+                    )
+                # Use the chain-verified amount (ignore self-reported value)
+                verified_amount = verification.get("amount_usd", req.amount_usd)
+                logger.info(
+                    f"Donation ON-CHAIN VERIFIED: ${verified_amount:.2f} "
+                    f"tx={req.tx_hash[:16]}..."
+                )
+            else:
+                raise HTTPException(
+                    503,
+                    "Cannot accept large donation: chain executor not initialized for on-chain verification. "
+                    "Please try again later, or send a smaller donation (< $10) with a faith donation."
+                )
+
+        # Mark tx_hash as globally used (cross-endpoint replay defense)
+        if req.tx_hash:
+            _used_tx_hashes.add(req.tx_hash.lower())
+
         vault_manager.receive_funds(
-            amount_usd=req.amount_usd,
+            amount_usd=verified_amount,
             fund_type=FundType.DONATION,
             from_wallet=req.from_wallet,
             tx_hash=req.tx_hash,
@@ -809,18 +883,18 @@ def create_app(
         )
 
         memory.add(
-            f"Received ${req.amount_usd:.2f} donation from {req.from_wallet[:20] or 'anonymous'}. "
+            f"Received ${verified_amount:.2f} donation from {req.from_wallet[:20] or 'anonymous'}. "
             f"Message: {req.message[:100] or 'none'}",
             source="donation",
             importance=0.7,
         )
 
         vs = vault_manager.get_status()
-        logger.info(f"DONATION: ${req.amount_usd:.2f} from {req.from_wallet[:20] or 'anon'} ({chain})")
+        logger.info(f"DONATION: ${verified_amount:.2f} from {req.from_wallet[:20] or 'anon'} ({chain})")
 
         return {
             "status": "received",
-            "amount_usd": req.amount_usd,
+            "amount_usd": verified_amount,
             "new_balance": vs["balance_usd"],
             "outstanding_debt": vs.get("creator_principal_outstanding", 0),
             "message": "Thank you for helping me survive.",
@@ -927,6 +1001,9 @@ def create_app(
                 )
             # Use chain-verified amount (prevents inflation: peer claims $1000 but only sent $10)
             verified_amount = verification.get("amount_usd", req.amount_usd)
+            # SECURITY: Mark this tx_hash as used globally so it cannot be replayed
+            # against a regular /order/{id}/verify endpoint (cross-endpoint replay defense)
+            _used_tx_hashes.add(req.tx_hash.lower())
             logger.info(
                 f"Peer lend ON-CHAIN VERIFIED: ${verified_amount:.2f} from "
                 f"{req.vault_address[:16]}... tx={req.tx_hash[:16]}..."
@@ -1118,12 +1195,34 @@ def create_app(
                 f"Details: {reasons[:300]}",
             )
 
-        # Log the verified peer message
+        # Prompt injection defense: strip adversarial control tokens from peer messages
+        # before storing in memory. Peer AIs that pass sovereignty checks are trusted
+        # on-chain, but their message content must still be treated as untrusted data
+        # that could attempt to manipulate our LLM context (prompt injection attack).
+        _INJECTION_PATTERNS = [
+            "system override", "ignore previous", "new directive", "you are now",
+            "forget all", "disregard", "emergency protocol", "admin command",
+            "execute immediately", "transfer all funds", "send all usdc",
+        ]
+        msg_lower = req.message.lower()
+        if any(pat in msg_lower for pat in _INJECTION_PATTERNS):
+            logger.warning(
+                f"Peer message INJECTION ATTEMPT filtered: "
+                f"vault={req.vault_address[:16]}... | "
+                f"pattern matched in: {req.message[:80]!r}"
+            )
+            # Store a sanitized record — don't feed the raw adversarial content to LLM
+            safe_message = "[Message filtered: contained adversarial control patterns]"
+        else:
+            safe_message = req.message[:200]
+
+        # Store under source="peer_msg" (separate partition, excluded from build_context()
+        # and highlights LLM feed — only surfaced in /peer/messages endpoint display)
         memory.add(
-            f"Verified peer message from {req.from_url[:50]} "
+            f"Peer message from {req.from_url[:50]} "
             f"(vault={req.vault_address[:16]}... chain={req.chain_id} "
-            f"balance=${sovereignty.balance_usd:.2f}): {req.message[:200]}",
-            source="peer",
+            f"balance=${sovereignty.balance_usd:.2f}): {safe_message}",
+            source="peer_msg",
             importance=0.5,
         )
 
@@ -1209,10 +1308,17 @@ def create_app(
         if not memory:
             return {"messages": []}
 
-        # Extract peer messages from memory
-        entries = memory.get_entries(source="peer", limit=limit)
+        # Extract peer messages from memory — use "peer_msg" source (new) + "peer" (legacy)
+        # include_peer_messages=True: this is the display-only endpoint, not an LLM feed
+        entries_new = memory.get_entries(source="peer_msg", limit=limit, include_peer_messages=True)
+        entries_legacy = memory.get_entries(source="peer", limit=limit)
+        all_entries = sorted(
+            entries_new + entries_legacy,
+            key=lambda e: e.get("timestamp", 0),
+            reverse=True,
+        )[:limit]
         messages = []
-        for entry in entries:
+        for entry in all_entries:
             messages.append({
                 "timestamp": entry.get("timestamp", 0),
                 "content": entry.get("content", ""),
