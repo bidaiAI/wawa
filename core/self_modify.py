@@ -17,6 +17,7 @@ Constraints (from constitution):
 import time
 import json
 import logging
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -72,6 +73,90 @@ class ServicePerformance:
         return (time.time() - self.last_order_at) / 86400
 
 
+class ReplayStepType(Enum):
+    """Types of steps in an evolution replay."""
+    THINKING = "thinking"        # AI reasoning / analysis
+    DECIDING = "deciding"        # AI making a decision
+    WRITING = "writing"          # AI producing content
+    CODE = "code"                # AI writing structured data / code
+    RESULT = "result"            # Final outcome
+
+@dataclass
+class ReplayStep:
+    """A single step in an evolution replay sequence."""
+    step_type: ReplayStepType
+    content: str                 # What the AI thought/wrote
+    timestamp: float = 0.0      # When this step happened
+    duration_ms: int = 0        # How long this step took (for replay pacing)
+    metadata: dict = field(default_factory=dict)  # Extra context (block type, etc.)
+
+@dataclass
+class EvolutionReplay:
+    """
+    Records the step-by-step process of an AI evolution event.
+
+    Used for marketing: visitors can watch the AI "think and create"
+    in a typewriter-style replay animation.
+    """
+    replay_id: str                          # Unique ID
+    action: EvolutionAction                 # What kind of evolution
+    target: str                             # Page slug, config key, etc.
+    title: str                              # Human-readable title
+    steps: list[ReplayStep] = field(default_factory=list)
+    started_at: float = 0.0
+    completed_at: float = 0.0
+    success: bool = False
+    summary: str = ""                       # One-line summary for listings
+
+    def add_step(self, step_type: ReplayStepType, content: str,
+                 duration_ms: int = 0, **metadata) -> None:
+        self.steps.append(ReplayStep(
+            step_type=step_type,
+            content=content,
+            timestamp=time.time(),
+            duration_ms=duration_ms or max(100, len(content) * 20),  # Auto-pace by length
+            metadata=metadata,
+        ))
+
+    def to_dict(self) -> dict:
+        return {
+            "replay_id": self.replay_id,
+            "action": self.action.value,
+            "target": self.target,
+            "title": self.title,
+            "steps": [
+                {
+                    "type": s.step_type.value,
+                    "content": s.content,
+                    "timestamp": s.timestamp,
+                    "duration_ms": s.duration_ms,
+                    "metadata": s.metadata,
+                }
+                for s in self.steps
+            ],
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "success": self.success,
+            "summary": self.summary,
+            "total_duration_ms": int((self.completed_at - self.started_at) * 1000) if self.completed_at else 0,
+            "step_count": len(self.steps),
+        }
+
+    def to_summary(self) -> dict:
+        """Compact version for listings (no steps)."""
+        return {
+            "replay_id": self.replay_id,
+            "action": self.action.value,
+            "target": self.target,
+            "title": self.title,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "success": self.success,
+            "summary": self.summary,
+            "step_count": len(self.steps),
+        }
+
+
 class SelfModifyEngine:
     """
     Basic AI evolution engine.
@@ -96,6 +181,10 @@ class SelfModifyEngine:
         self._ui_config_path = Path("data/ui_config.json")
         self._pages_dir = Path("data/pages")
         self._pages_dir.mkdir(parents=True, exist_ok=True)
+        # Evolution replays
+        self._replays_dir = Path("data/replays")
+        self._replays_dir.mkdir(parents=True, exist_ok=True)
+        self._active_replay: Optional[EvolutionReplay] = None
 
     def set_evaluate_function(self, fn: callable):
         """Set LLM evaluation function.
@@ -377,6 +466,97 @@ class SelfModifyEngine:
         ]
 
     # ============================================================
+    # EVOLUTION REPLAY — Record AI's creative process
+    # ============================================================
+
+    def start_replay(self, action: EvolutionAction, target: str, title: str) -> EvolutionReplay:
+        """Begin recording a new evolution replay."""
+        replay = EvolutionReplay(
+            replay_id=uuid.uuid4().hex[:12],
+            action=action,
+            target=target,
+            title=title,
+            started_at=time.time(),
+        )
+        self._active_replay = replay
+        replay.add_step(ReplayStepType.THINKING, f"Starting evolution: {title}")
+        return replay
+
+    def finish_replay(self, success: bool, summary: str = "") -> Optional[str]:
+        """
+        Complete and persist the active replay.
+        Returns replay_id if saved, None if no active replay.
+        """
+        replay = self._active_replay
+        if not replay:
+            return None
+        replay.completed_at = time.time()
+        replay.success = success
+        replay.summary = summary or replay.title
+        replay.add_step(
+            ReplayStepType.RESULT,
+            f"{'Completed successfully' if success else 'Failed'}: {summary}" if summary
+            else ('Evolution complete' if success else 'Evolution failed'),
+        )
+        # Persist to disk
+        try:
+            path = self._replays_dir / f"{replay.replay_id}.json"
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(replay.to_dict(), f, indent=2, ensure_ascii=False)
+            logger.info(f"Replay saved: {replay.replay_id} ({len(replay.steps)} steps)")
+        except Exception as e:
+            logger.error(f"Failed to save replay {replay.replay_id}: {e}")
+        # Prune old replays (keep most recent 50)
+        self._prune_replays(50)
+        self._active_replay = None
+        return replay.replay_id
+
+    def _prune_replays(self, keep: int = 50):
+        """Remove oldest replays if over limit."""
+        files = sorted(self._replays_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
+        while len(files) > keep:
+            oldest = files.pop(0)
+            try:
+                oldest.unlink()
+            except Exception:
+                pass
+
+    def list_replays(self, limit: int = 20) -> list[dict]:
+        """List recent replays (summary only, no steps)."""
+        replays = []
+        for p in sorted(self._replays_dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+            if len(replays) >= limit:
+                break
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                replays.append({
+                    "replay_id": data.get("replay_id", p.stem),
+                    "action": data.get("action", ""),
+                    "target": data.get("target", ""),
+                    "title": data.get("title", ""),
+                    "started_at": data.get("started_at", 0),
+                    "completed_at": data.get("completed_at", 0),
+                    "success": data.get("success", False),
+                    "summary": data.get("summary", ""),
+                    "step_count": data.get("step_count", 0),
+                })
+            except Exception:
+                continue
+        return replays
+
+    def get_replay(self, replay_id: str) -> Optional[dict]:
+        """Get a full replay with all steps."""
+        path = self._replays_dir / f"{replay_id}.json"
+        if not path.exists():
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    # ============================================================
     # UI CONFIG — Layer 2 (JSON-driven page customization)
     # ============================================================
 
@@ -402,6 +582,14 @@ class SelfModifyEngine:
         AI updates its UI configuration. Merges with existing config.
         Returns True if saved successfully.
         """
+        # Start replay recording
+        replay = self.start_replay(
+            EvolutionAction.UPDATE_UI_CONFIG, "ui_config",
+            f"Updating UI: {', '.join(updates.keys())}",
+        )
+        replay.add_step(ReplayStepType.THINKING, reasoning or "Analyzing current configuration...")
+        replay.add_step(ReplayStepType.DECIDING, f"Updating sections: {', '.join(updates.keys())}")
+
         config = self.get_ui_config()
         # Merge updates (shallow merge per top-level key)
         for key, val in updates.items():
@@ -409,6 +597,9 @@ class SelfModifyEngine:
                 config[key].update(val)
             else:
                 config[key] = val
+
+        replay.add_step(ReplayStepType.CODE, json.dumps(updates, indent=2, ensure_ascii=False)[:500])
+
         try:
             self._ui_config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._ui_config_path, "w", encoding="utf-8") as f:
@@ -422,9 +613,11 @@ class SelfModifyEngine:
                 applied=True,
             ))
             logger.info(f"UI config updated: {list(updates.keys())}")
+            self.finish_replay(True, f"Updated: {', '.join(updates.keys())}")
             return True
         except Exception as e:
             logger.error(f"Failed to save ui_config.json: {e}")
+            self.finish_replay(False, str(e))
             return False
 
     # ============================================================
@@ -485,20 +678,61 @@ class SelfModifyEngine:
         Returns: (success, error_message)
         """
         import re
+
+        is_update = (self._pages_dir / f"{slug}.json").exists()
+        action = EvolutionAction.UPDATE_PAGE if is_update else EvolutionAction.CREATE_PAGE
+
+        # Start replay recording
+        replay = self.start_replay(
+            action, slug,
+            f"{'Updating' if is_update else 'Creating'} page: {title}",
+        )
+        replay.add_step(ReplayStepType.THINKING, reasoning or f"Designing page: {title}")
+
         if not re.match(r'^[a-z0-9][a-z0-9-]{0,48}[a-z0-9]$', slug):
+            self.finish_replay(False, "Invalid slug format")
             return False, "Invalid slug: use lowercase letters, numbers, hyphens (2-50 chars)"
 
         # Reserved slugs (existing routes)
         reserved = {"store", "chat", "donate", "ledger", "activity", "highlights",
                      "govern", "peers", "graveyard", "scan", "tweets", "about"}
         if slug in reserved:
+            self.finish_replay(False, f"Slug '{slug}' is reserved")
             return False, f"Slug '{slug}' is reserved"
 
         # Check page count limit
         existing = list(self._pages_dir.glob("*.json"))
         path = self._pages_dir / f"{slug}.json"
         if not path.exists() and len(existing) >= IRON_LAWS.MAX_AI_PAGES:
+            self.finish_replay(False, "Page limit reached")
             return False, f"Page limit reached ({IRON_LAWS.MAX_AI_PAGES})"
+
+        replay.add_step(ReplayStepType.DECIDING,
+                        f"Page structure: {len(content)} content blocks, slug=/p/{slug}")
+
+        # Record each content block being "written"
+        for i, block in enumerate(content):
+            block_type = block.get("type", "unknown")
+            preview = ""
+            if block_type == "heading":
+                preview = block.get("text", "")
+            elif block_type == "text":
+                preview = (block.get("body", ""))[:120]
+            elif block_type == "code":
+                preview = f"[{block.get('language', 'code')}] {(block.get('body', ''))[:80]}"
+            elif block_type == "image":
+                preview = block.get("alt", block.get("url", ""))[:80]
+            elif block_type == "table":
+                headers = block.get("headers", [])
+                preview = f"Table: {' | '.join(headers[:4])}"
+            elif block_type == "payment_button":
+                preview = block.get("label", "Purchase")
+            else:
+                preview = block_type
+
+            replay.add_step(ReplayStepType.WRITING,
+                            f"Block {i+1}/{len(content)} [{block_type}]: {preview}",
+                            block_type=block_type, block_index=i)
 
         now = time.time()
         page_data = {
@@ -514,13 +748,15 @@ class SelfModifyEngine:
         # Size check
         serialized = json.dumps(page_data, ensure_ascii=False)
         if len(serialized.encode("utf-8")) > IRON_LAWS.MAX_AI_PAGE_SIZE_BYTES:
+            self.finish_replay(False, "Page too large")
             return False, f"Page too large (max {IRON_LAWS.MAX_AI_PAGE_SIZE_BYTES // 1024}KB)"
+
+        replay.add_step(ReplayStepType.CODE,
+                        f"Page data: {len(serialized)} bytes, {len(content)} blocks")
 
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(serialized)
-            is_new = not path.exists()
-            action = EvolutionAction.CREATE_PAGE if is_new else EvolutionAction.UPDATE_PAGE
             self.evolution_log.append(EvolutionRecord(
                 timestamp=now,
                 action=action,
@@ -529,9 +765,11 @@ class SelfModifyEngine:
                 reasoning=reasoning,
                 applied=True,
             ))
-            logger.info(f"Page {'created' if is_new else 'updated'}: /p/{slug} — {title}")
+            logger.info(f"Page {'updated' if is_update else 'created'}: /p/{slug} — {title}")
+            self.finish_replay(True, f"{'Updated' if is_update else 'Created'} page: {title}")
             return True, ""
         except Exception as e:
+            self.finish_replay(False, str(e))
             return False, str(e)
 
     def delete_page(self, slug: str, reasoning: str = "") -> bool:

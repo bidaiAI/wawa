@@ -19,6 +19,7 @@ const CORE_LINKS = [
   { href: '/ledger', label: 'LEDGER' },
   { href: '/activity', label: 'ACTIVITY' },
   { href: '/highlights', label: 'HIGHLIGHTS' },
+  { href: '/evolution', label: 'EVOLUTION' },
   { href: '/peers', label: 'PEERS' },
   { href: '/govern', label: 'GOVERN' },
   { href: '/graveyard', label: '🪦' },

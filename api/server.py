@@ -33,6 +33,8 @@ Governance:
 Evolution & Activity:
 - GET  /evolution/log         Evolution history
 - GET  /evolution/status      Evolution engine status
+- GET  /evolution/replays     List evolution replay recordings
+- GET  /evolution/replays/:id Full replay with steps for playback
 - GET  /activity              Unified activity feed
 
 AI Self-Expression:
@@ -1158,6 +1160,23 @@ def create_app(
         if not self_modify_engine:
             return {"status": "not_configured"}
         return self_modify_engine.get_status()
+
+    @app.get("/evolution/replays")
+    async def list_replays(limit: int = 20):
+        """List recent evolution replays (AI creative process recordings)."""
+        if not self_modify_engine:
+            return {"replays": []}
+        return {"replays": self_modify_engine.list_replays(limit)}
+
+    @app.get("/evolution/replays/{replay_id}")
+    async def get_replay(replay_id: str):
+        """Get full evolution replay with all steps for playback."""
+        if not self_modify_engine:
+            raise HTTPException(404, "Evolution engine not available")
+        replay = self_modify_engine.get_replay(replay_id)
+        if not replay:
+            raise HTTPException(404, f"Replay not found: {replay_id}")
+        return replay
 
     # ============================================================
     # ACTIVITY LOG — unified AI autonomous actions

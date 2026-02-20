@@ -366,6 +366,33 @@ export interface PageData {
   updated_at: number
 }
 
+// ── Evolution Replay ──────────────────────────────────────────
+
+export interface ReplayStep {
+  type: 'thinking' | 'deciding' | 'writing' | 'code' | 'result'
+  content: string
+  timestamp: number
+  duration_ms: number
+  metadata: Record<string, unknown>
+}
+
+export interface ReplaySummary {
+  replay_id: string
+  action: string
+  target: string
+  title: string
+  started_at: number
+  completed_at: number
+  success: boolean
+  summary: string
+  step_count: number
+}
+
+export interface ReplayData extends ReplaySummary {
+  steps: ReplayStep[]
+  total_duration_ms: number
+}
+
 // ── API calls ─────────────────────────────────────────────────
 
 export const api = {
@@ -444,6 +471,8 @@ export const api = {
   evolution: {
     log: (limit = 20) => request<{ entries: EvolutionEntry[] }>(`/evolution/log?limit=${limit}`),
     status: () => request<EvolutionStatus>('/evolution/status'),
+    replays: (limit = 20) => request<{ replays: ReplaySummary[] }>(`/evolution/replays?limit=${limit}`),
+    replay: (id: string) => request<ReplayData>(`/evolution/replays/${encodeURIComponent(id)}`),
   },
 
   activity: (limit = 50, category?: ActivityCategory) => {
