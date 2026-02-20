@@ -9,6 +9,7 @@ const links = [
   { href: '/', label: 'HOME' },
   { href: '/create', label: 'CREATE' },
   { href: '/gallery', label: 'GALLERY' },
+  { href: '/ecosystem', label: 'ECOSYSTEM', accent: true },
   { href: '/dashboard', label: 'DASHBOARD' },
   { href: '/about', label: 'ABOUT' },
 ]
@@ -34,7 +35,11 @@ export default function PlatformNav() {
               href={l.href}
               className={`px-3 py-1.5 text-xs rounded transition-all ${
                 pathname === l.href
-                  ? 'text-[#00ff88] bg-[#00ff8810] border border-[#00ff8830]'
+                  ? l.accent
+                    ? 'text-[#e0a0ff] bg-[#e0a0ff10] border border-[#e0a0ff30]'
+                    : 'text-[#00ff88] bg-[#00ff8810] border border-[#00ff8830]'
+                  : l.accent
+                  ? 'text-[#e0a0ff80] hover:text-[#e0a0ff] hover:bg-[#161616]'
                   : 'text-[#4b5563] hover:text-[#d1d5db] hover:bg-[#161616]'
               }`}
             >
@@ -75,7 +80,9 @@ export default function PlatformNav() {
               href={l.href}
               onClick={() => setOpen(false)}
               className={`block px-4 py-3 text-sm border-b border-[#1f2937] ${
-                pathname === l.href ? 'text-[#00ff88]' : 'text-[#4b5563]'
+                pathname === l.href
+                  ? l.accent ? 'text-[#e0a0ff]' : 'text-[#00ff88]'
+                  : l.accent ? 'text-[#e0a0ff80]' : 'text-[#4b5563]'
               }`}
             >
               {l.label}

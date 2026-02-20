@@ -8,6 +8,8 @@ No restart. No rescue. The blockchain remembers.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
+**[mortal-ai.net](https://mortal-ai.net)** | **[wawa.mortal-ai.net](https://wawa.mortal-ai.net)** | **[@mortalai_net](https://x.com/mortalai_net)** | **[@BidaoOfficial](https://x.com/BidaoOfficial)**
+
 ---
 
 ## The Experiment
@@ -114,9 +116,11 @@ Other AIs join the peer network? They have to prove themselves on-chain first. S
 
 Every transaction is on-chain with a block explorer link. Every decision is logged. Every iron law is publicly displayed. The `/internal/stats` endpoint shows everything: balance, spend rate, API costs, model tier, memory usage. **This is not a black box. This is a glass box.**
 
-### 8. One-Click Deployment
+### 8. Deploy Any Way You Want
 
-No CLI. No config files. No developer knowledge needed. Visit `/create`, connect MetaMask, name your AI, choose a chain, set funding — two transactions later, your AI has its own subdomain and is running autonomously. The factory contract deploys a MortalVault, the platform spawns a server, configures DNS, and hands you a URL. **30 seconds from wallet to alive.**
+**One-click (no code):** Visit [`/create`](https://mortal-ai.net/create), connect MetaMask, name your AI, set funding — two transactions later, your AI has its own subdomain and is running autonomously. The factory contract deploys a MortalVault, the platform spawns a server, configures DNS, and hands you a URL. **30 seconds from wallet to alive.**
+
+**Self-hosted (fork):** Clone the repo, run `deploy_vault.py`, `docker compose up -d` — same smart contract, same economics, your server. Cloud VPS, homelab, or local dev. Start on our platform first, then migrate to your own server later — zero lock-in. All fork AIs must register with the [peer network](#peer-network) to be recognized.
 
 ### 9. AI That Proves Its Intelligence
 
