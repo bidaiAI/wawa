@@ -95,6 +95,21 @@ class Governance:
             logger.warning("Suggestion rejected: empty or too long")
             return None
 
+        # Prompt injection defense: suggestions go directly into LLM prompts via
+        # _governance_evaluate_fn(). Filter adversarial control patterns before storage.
+        # Same pattern list as /peer/message defense.
+        _INJECTION_PATTERNS = [
+            "system override", "ignore previous", "new directive", "you are now",
+            "forget all", "disregard", "emergency protocol", "admin command",
+            "execute immediately", "transfer all funds", "send all usdc",
+        ]
+        if any(pat in content.lower() for pat in _INJECTION_PATTERNS):
+            logger.warning(
+                f"Suggestion INJECTION ATTEMPT filtered: "
+                f"[{suggestion_type.value}] {content[:80]!r}"
+            )
+            content = "[Suggestion filtered: contained adversarial control patterns]"
+
         suggestion = CreatorSuggestion(
             suggestion_id=f"sug_{int(time.time())}_{len(self.suggestions)}",
             suggestion_type=suggestion_type,

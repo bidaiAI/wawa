@@ -509,7 +509,13 @@ def create_app(
             raise HTTPException(400, f"No payment address configured for {chain_cfg.display_name}")
 
         ip = request.client.host if request.client else "unknown"
-        order_id = f"ord_{uuid.uuid4().hex[:12]}"
+        # Use full 128-bit UUID hex (32 chars) to eliminate birthday-paradox collision risk.
+        # Previous 12-char truncation (48 bits) had ~1/5.6B per-pair collision probability —
+        # rare but possible at scale, and a collision silently overwrites an existing order.
+        order_id = f"ord_{uuid.uuid4().hex}"
+        # Collision guard (astronomically rare with 128-bit UUID, but fail-safe)
+        while order_id in orders:
+            order_id = f"ord_{uuid.uuid4().hex}"
 
         order = Order(
             order_id=order_id,

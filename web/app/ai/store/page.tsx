@@ -361,11 +361,17 @@ export default function StorePage() {
         }),
       ])
 
-      // Validate payment address matches the vault address from status
-      if (
-        statusData.vault_address &&
-        order.payment_address.toLowerCase() !== statusData.vault_address.toLowerCase()
-      ) {
+      // Validate payment address matches the vault address from status.
+      // Fail-CLOSED: if vault_address is missing/empty, block payment rather than skip check.
+      // (An empty vault_address could indicate a misconfigured server or rogue fork —
+      //  the old `statusData.vault_address && ...` short-circuit silently skipped the check.)
+      if (!statusData.vault_address) {
+        setError(
+          '⚠ Security alert: Cannot verify payment address — vault address unavailable from server. Do NOT send funds. Please reload the page or contact support.'
+        )
+        return
+      }
+      if (order.payment_address.toLowerCase() !== statusData.vault_address.toLowerCase()) {
         setError(
           '⚠ Security alert: Payment address mismatch. The address returned by the server does not match the known vault address. Do NOT send funds. Please reload the page or contact support.'
         )

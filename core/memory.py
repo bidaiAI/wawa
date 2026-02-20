@@ -226,10 +226,14 @@ class HierarchicalMemory:
         remaining = max_tokens
 
         # Layer 0: Recent raw (highest priority)
-        # Exclude "peer_msg" source — peer message content is untrusted user data
-        # that could contain prompt injection payloads. It is surfaced only via the
-        # /peer/messages API endpoint, never injected into the LLM context.
-        _LLM_EXCLUDED_SOURCES = {"peer_msg"}
+        # Exclude untrusted external-input sources from LLM context.
+        # These sources accept arbitrary user content and must never enter LLM prompts:
+        # - "peer_msg": peer AI messages — stored separately since Round 3 fix
+        # - "feedback": POST /feedback is open to any anonymous user (5/hour/IP limit is
+        #               insufficient to prevent 20-slot raw buffer saturation across IPs)
+        #   Both are still stored and readable via their respective GET endpoints for humans,
+        #   but are excluded from the AI's ambient LLM context to prevent prompt injection.
+        _LLM_EXCLUDED_SOURCES = {"peer_msg", "feedback"}
         for entry in reversed(self.raw[-20:]):
             if entry.source in _LLM_EXCLUDED_SOURCES:
                 continue
@@ -282,13 +286,17 @@ class HierarchicalMemory:
         Returns:
             List of entry dicts sorted by timestamp descending (newest first).
         """
+        # Sources excluded from LLM-facing queries (prompt injection defense).
+        # Matches the _LLM_EXCLUDED_SOURCES set in build_context().
+        _LLM_EXCLUDED = {"peer_msg", "feedback"}
+
         entries = self.raw
         if source:
+            # Explicit source filter: return exactly what was asked for (display use)
             entries = [e for e in entries if e.source == source]
         elif not include_peer_messages:
-            # By default, hide raw peer message content from LLM-facing query results
-            # to prevent prompt injection through peer AI messages
-            entries = [e for e in entries if e.source != "peer_msg"]
+            # Default (LLM-facing): exclude all untrusted external-input sources
+            entries = [e for e in entries if e.source not in _LLM_EXCLUDED]
         if min_importance > 0:
             entries = [e for e in entries if e.importance >= min_importance]
         return [
