@@ -738,7 +738,14 @@ def create_app(
 
     @app.get("/order/{order_id}", response_model=OrderStatusResponse)
     async def get_order(order_id: str):
-        """Check order status."""
+        """Check order status.
+
+        Privacy note: 'result' (delivery content) is NOT returned here.
+        Delivery content is returned only in the POST /order/{id}/verify response
+        which the paying customer receives immediately after payment confirmation.
+        This prevents any user who discovers an order_id from reading another
+        customer's paid service output (e.g. tarot reading).
+        """
         if order_id not in orders:
             raise HTTPException(404, "Order not found")
         o = orders[order_id]
@@ -747,7 +754,7 @@ def create_app(
             status=o.status.value,
             service_id=o.service_id,
             price_usd=o.price_usd,
-            result=o.result,
+            result=None,   # Privacy: delivery content not exposed in public status endpoint
             created_at=o.created_at,
             delivered_at=o.delivered_at,
         )
@@ -1281,7 +1288,11 @@ def create_app(
 
         return {
             "status": "received",
-            "our_balance": vault_manager.balance_usd,
+            # Security: exact balance omitted — returning precise balance allows a peer
+            # to probe financial state and time attacks around independence/insolvency
+            # thresholds. Public /status endpoint already exposes balance for transparency;
+            # the peer message response doesn't need to duplicate it in a machine-readable
+            # format that facilitates automated threshold probing.
             "is_independent": vault_manager.is_independent,
         }
 
