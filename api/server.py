@@ -56,6 +56,7 @@ Peer endpoints require on-chain sovereignty verification.
 """
 
 import os
+import re
 import time
 import uuid
 import json
@@ -330,7 +331,16 @@ def create_app(
     orders: dict[str, Order] = {}
     orders_completed: int = 0
 
-    # Reload pending orders from JSONL on startup
+    # ── Security: per-order locks (prevent concurrent verify on same order) ────
+    _order_locks: dict[str, asyncio.Lock] = {}
+
+    # ── Security: used tx hashes (prevent tx replay across multiple orders) ───
+    _used_tx_hashes: set[str] = set()
+
+    # ── Security: fee-collect rate limit (max 10 calls per 60 seconds) ────────
+    _fee_collect_calls: list[float] = []
+
+    # Reload orders from JSONL on startup (including PAYMENT_CONFIRMED/PROCESSING for crash recovery)
     _orders_log = Path("data/orders/orders.jsonl")
     if _orders_log.exists():
         try:
@@ -353,12 +363,20 @@ def create_app(
                         o.status = OrderStatus(d.get("status", "expired"))
                         o.created_at = d.get("created_at", 0)
                         o.delivered_at = d.get("delivered_at")
+                        o.tx_hash = d.get("tx_hash", "")
+                        o.result = d.get("result", "")
                         if o.status == OrderStatus.DELIVERED:
                             orders_completed += 1
                         orders[o.order_id] = o
+                        # MEDIUM #3 / CRITICAL #2: Restore used tx_hashes from disk to prevent replay after restart
+                        if o.tx_hash and re.match(r"^0x[a-fA-F0-9]{64}$", o.tx_hash):
+                            _used_tx_hashes.add(o.tx_hash.lower())
                     except Exception:
                         continue
-            logger.info(f"Reloaded {len(orders)} orders from disk ({orders_completed} delivered)")
+            logger.info(
+                f"Reloaded {len(orders)} orders from disk "
+                f"({orders_completed} delivered, {len(_used_tx_hashes)} tx hashes restored)"
+            )
         except Exception as e:
             logger.warning(f"Failed to reload orders: {e}")
 
@@ -519,79 +537,106 @@ def create_app(
         """
         Verify on-chain payment and trigger delivery.
         Checks the tx receipt on-chain to confirm ERC20 transfer to our vault.
+
+        Security hardening:
+        - Per-order asyncio.Lock prevents concurrent double-verify race condition
+        - _used_tx_hashes set prevents tx hash replay across multiple orders
+        - chain_executor=None returns 503 instead of bypassing verification
+        - 30-minute order expiry enforced
         """
         if order_id not in orders:
             raise HTTPException(404, "Order not found")
 
-        order = orders[order_id]
-
-        if order.status == OrderStatus.DELIVERED:
-            return {"status": "already_delivered", "result": order.result}
-
-        if order.status == OrderStatus.EXPIRED:
-            raise HTTPException(410, "Order expired")
-
-        # Guard against double-verify: only allow verification from PENDING_PAYMENT
-        if order.status != OrderStatus.PENDING_PAYMENT:
-            raise HTTPException(409, f"Order already being processed (status: {order.status.value})")
-
-        # Validate tx_hash format
-        import re
+        # Validate tx_hash format BEFORE acquiring lock (cheap early rejection)
         if not tx_hash or not re.match(r"^0x[a-fA-F0-9]{64}$", tx_hash):
             raise HTTPException(400, "Invalid tx_hash format. Must be 0x + 64 hex chars.")
 
-        # On-chain payment verification
-        pay_addr = payment_addresses.get(order.chain, "")
-        if chain_executor and pay_addr:
-            verification = await chain_executor.verify_payment_tx(
-                tx_hash=tx_hash,
-                expected_to=pay_addr,
-                expected_token="",  # auto-detect from chain config
-                min_amount_usd=order.price_usd * 0.99,  # 1% tolerance for rounding
-                chain_id=order.chain,
-            )
-            if not verification.get("verified"):
-                error_msg = verification.get("error", "verification failed")
-                logger.warning(
-                    f"Payment verification FAILED: order={order_id} tx={tx_hash[:16]}... "
-                    f"reason={error_msg}"
+        # CRITICAL #2: Reject tx_hash that was already used for another order
+        if tx_hash.lower() in _used_tx_hashes:
+            raise HTTPException(409, "Transaction hash already used for a previous order. Each transaction can only verify one order.")
+
+        # CRITICAL #1: Acquire per-order lock to prevent concurrent verify race condition
+        lock = _order_locks.setdefault(order_id, asyncio.Lock())
+        async with lock:
+            order = orders[order_id]
+
+            if order.status == OrderStatus.DELIVERED:
+                return {"status": "already_delivered", "result": order.result}
+
+            if order.status == OrderStatus.EXPIRED:
+                raise HTTPException(410, "Order expired")
+
+            # Guard against double-verify: only allow verification from PENDING_PAYMENT
+            if order.status != OrderStatus.PENDING_PAYMENT:
+                raise HTTPException(409, f"Order already being processed (status: {order.status.value})")
+
+            # HIGH #1: Enforce 30-minute order expiry
+            ORDER_EXPIRY_SECONDS = 30 * 60
+            if time.time() - order.created_at > ORDER_EXPIRY_SECONDS:
+                order.status = OrderStatus.EXPIRED
+                raise HTTPException(410, "Order expired (>30 minutes). Please create a new order.")
+
+            # On-chain payment verification
+            pay_addr = payment_addresses.get(order.chain, "")
+            if chain_executor and pay_addr:
+                verification = await chain_executor.verify_payment_tx(
+                    tx_hash=tx_hash,
+                    expected_to=pay_addr,
+                    expected_token="",  # auto-detect from chain config
+                    min_amount_usd=order.price_usd * 0.99,  # 1% tolerance for rounding
+                    chain_id=order.chain,
                 )
+                if not verification.get("verified"):
+                    error_msg = verification.get("error", "verification failed")
+                    logger.warning(
+                        f"Payment verification FAILED: order={order_id} tx={tx_hash[:16]}... "
+                        f"reason={error_msg}"
+                    )
+                    raise HTTPException(
+                        402,
+                        f"Payment not verified on-chain: {error_msg}. "
+                        f"Expected >= ${order.price_usd:.2f} to {pay_addr[:10]}... on {order.chain}.",
+                    )
+                # Use verified amount (may differ slightly from order price)
+                verified_amount = verification.get("amount_usd", order.price_usd)
+                verified_from = verification.get("from_address", order.ip)
+                logger.info(
+                    f"Payment VERIFIED on-chain: order={order_id} "
+                    f"amount=${verified_amount:.2f} from={verified_from[:16]}..."
+                )
+            else:
+                # CRITICAL #3: Never skip verification — chain executor is required
                 raise HTTPException(
-                    402,
-                    f"Payment not verified on-chain: {error_msg}. "
-                    f"Expected >= ${order.price_usd:.2f} to {pay_addr[:10]}... on {order.chain}.",
+                    503,
+                    "Payment verification unavailable: chain executor not initialized. "
+                    "Please try again later or contact support."
                 )
-            # Use verified amount (may differ slightly from order price)
-            verified_amount = verification.get("amount_usd", order.price_usd)
-            verified_from = verification.get("from_address", order.ip)
-            logger.info(
-                f"Payment VERIFIED on-chain: order={order_id} "
-                f"amount=${verified_amount:.2f} from={verified_from[:16]}..."
+
+            # CRITICAL #2: Mark tx_hash as used (prevent replay on other orders)
+            # Must be inside the lock to avoid TOCTOU between check and add
+            _used_tx_hashes.add(tx_hash.lower())
+
+            # Record payment
+            order.status = OrderStatus.PAYMENT_CONFIRMED
+            order.paid_at = time.time()
+            order.tx_hash = tx_hash
+
+            # MEDIUM #3: Persist immediately on PAYMENT_CONFIRMED so restarts don't lose paid orders
+            _persist_order(order)
+
+            # Record revenue in vault (use verified amount from chain)
+            from core.vault import FundType, SpendType
+            vault_manager.receive_funds(
+                amount_usd=verified_amount,
+                fund_type=FundType.SERVICE_REVENUE,
+                from_wallet=verified_from,
+                tx_hash=tx_hash,
+                description=f"Order {order.order_id}: {order.service_name}",
+                chain=order.chain,
             )
-        else:
-            # Fallback if chain executor not available (dev mode)
-            verified_amount = order.price_usd
-            verified_from = order.ip
-            logger.warning(f"Payment verification SKIPPED (no chain executor): order={order_id}")
+            cost_guard.record_revenue(order.price_usd)
 
-        # Record payment
-        order.status = OrderStatus.PAYMENT_CONFIRMED
-        order.paid_at = time.time()
-        order.tx_hash = tx_hash
-
-        # Record revenue in vault (use verified amount from chain)
-        from core.vault import FundType, SpendType
-        vault_manager.receive_funds(
-            amount_usd=verified_amount,
-            fund_type=FundType.SERVICE_REVENUE,
-            from_wallet=verified_from,
-            tx_hash=tx_hash,
-            description=f"Order {order.order_id}: {order.service_name}",
-            chain=order.chain,
-        )
-        cost_guard.record_revenue(order.price_usd)
-
-        # Deliver (with timeout to prevent hanging HTTP requests)
+        # Deliver (with timeout to prevent hanging HTTP requests) — outside lock so long ops don't block
         order.status = OrderStatus.PROCESSING
         try:
             if deliver_fn:
@@ -808,6 +853,12 @@ def create_app(
 
         Off-chain API loans are recorded as DONATION (no new debt tracked in vault.py).
         This is by design: insolvency only checks creator principal, not third-party debt.
+
+        Security hardening (402Bridge pattern — rogue server claiming false payments):
+        - tx_hash REQUIRED and verified on-chain via chain_executor.verify_payment_tx()
+        - from_wallet must match peer's verified ai_wallet (prevents sender spoofing)
+        - amount_usd capped at chain-verified amount (prevents inflation claims)
+        - No chain executor = reject (never skip verification like old dev-mode fallback)
         """
         if not vault_manager.is_alive:
             raise HTTPException(503, "wawa is dead. No longer accepting loans.")
@@ -817,23 +868,83 @@ def create_app(
             raise HTTPException(503, "Peer verifier not configured -- peer lending disabled")
 
         sovereignty = await peer_verifier.verify(req.vault_address, req.chain_id)
-        if not sovereignty.is_sovereign:
+
+        # V3: Peer lending requires BEHAVIORAL tier (trust_tier >= 4)
+        from core.constitution import IRON_LAWS as _LAWS_PEER
+        min_tier = _LAWS_PEER.PEER_MIN_TRUST_TIER_FOR_LENDING
+        if sovereignty.trust_tier.value < min_tier:
             reasons = "; ".join(sovereignty.checks_failed) or sovereignty.error
+            tier_name = sovereignty.trust_tier.name
             logger.warning(
-                f"Peer lend REJECTED (sovereignty): {req.from_url[:50]} | "
-                f"vault={req.vault_address[:16]}... | reasons={reasons[:200]}"
+                f"Peer lend REJECTED (trust tier {tier_name}): {req.from_url[:50]} | "
+                f"vault={req.vault_address[:16]}... | need tier>={min_tier} | reasons={reasons[:200]}"
             )
             raise HTTPException(
                 403,
-                f"Peer sovereignty verification failed: {reasons[:300]}",
+                f"Peer trust tier too low for lending: {tier_name} (need BEHAVIORAL or higher). "
+                f"Details: {reasons[:300]}",
+            )
+
+        # ---- ON-CHAIN TX VERIFICATION (402Bridge lesson: push claims must be proven) ----
+        # Require a real tx_hash — a sovereign AI that truly sent funds can provide one
+        if not req.tx_hash or not re.match(r"^0x[a-fA-F0-9]{64}$", req.tx_hash):
+            raise HTTPException(
+                400,
+                "tx_hash is required for peer lending and must be a valid transaction hash "
+                "(0x + 64 hex chars). We verify all incoming transfers on-chain."
+            )
+
+        # Validate sender: from_wallet must match peer's verified ai_wallet (prevent spoofing)
+        expected_sender = sovereignty.ai_wallet or ""
+        if req.from_wallet and expected_sender and req.from_wallet.lower() != expected_sender.lower():
+            logger.warning(
+                f"Peer lend REJECTED (from_wallet mismatch): "
+                f"claimed={req.from_wallet[:16]}... expected={expected_sender[:16]}..."
+            )
+            raise HTTPException(403, "from_wallet does not match peer's verified AI wallet address")
+
+        # Verify the on-chain transfer actually happened
+        pay_addr = payment_addresses.get(req.chain_id, "")
+        verified_amount = req.amount_usd
+        if chain_executor and pay_addr:
+            verification = await chain_executor.verify_payment_tx(
+                tx_hash=req.tx_hash,
+                expected_to=pay_addr,
+                expected_token="",  # auto-detect from chain config
+                min_amount_usd=req.amount_usd * 0.99,  # 1% tolerance for rounding
+                chain_id=req.chain_id,
+            )
+            if not verification.get("verified"):
+                error_msg = verification.get("error", "verification failed")
+                logger.warning(
+                    f"Peer lend ON-CHAIN VERIFICATION FAILED: "
+                    f"vault={req.vault_address[:16]}... tx={req.tx_hash[:16]}... reason={error_msg}"
+                )
+                raise HTTPException(
+                    402,
+                    f"Peer loan not verified on-chain: {error_msg}. "
+                    f"Transaction must transfer tokens to our vault address on {req.chain_id}."
+                )
+            # Use chain-verified amount (prevents inflation: peer claims $1000 but only sent $10)
+            verified_amount = verification.get("amount_usd", req.amount_usd)
+            logger.info(
+                f"Peer lend ON-CHAIN VERIFIED: ${verified_amount:.2f} from "
+                f"{req.vault_address[:16]}... tx={req.tx_hash[:16]}..."
+            )
+        else:
+            # No chain executor — reject rather than accept unverified push claims
+            raise HTTPException(
+                503,
+                "Cannot accept peer loan: chain executor not initialized for on-chain verification. "
+                "The system requires on-chain proof of every incoming transfer."
             )
 
         from core.vault import FundType
 
         vault_manager.receive_funds(
-            amount_usd=req.amount_usd,
+            amount_usd=verified_amount,  # Chain-verified amount, NOT the peer's claim
             fund_type=FundType.DONATION,  # Off-chain peer loans = gifts (no new debt)
-            from_wallet=req.from_wallet or sovereignty.ai_wallet,
+            from_wallet=sovereignty.ai_wallet or req.from_wallet,  # Use verified ai_wallet
             tx_hash=req.tx_hash,
             description=(
                 f"Verified peer loan from {req.from_url[:50]} "
@@ -991,15 +1102,20 @@ def create_app(
             raise HTTPException(503, "Peer verifier not configured -- peer messages disabled")
 
         sovereignty = await peer_verifier.verify(req.vault_address, req.chain_id)
-        if not sovereignty.is_sovereign:
+
+        # V3: Peer messaging requires STRUCTURAL tier (trust_tier >= 2)
+        min_tier = _LAWS.PEER_MIN_TRUST_TIER_FOR_MESSAGING
+        if sovereignty.trust_tier.value < min_tier:
             reasons = "; ".join(sovereignty.checks_failed) or sovereignty.error
+            tier_name = sovereignty.trust_tier.name
             logger.warning(
-                f"Peer message REJECTED (sovereignty): {req.from_url[:50]} | "
-                f"vault={req.vault_address[:16]}... | reasons={reasons[:200]}"
+                f"Peer message REJECTED (trust tier {tier_name}): {req.from_url[:50]} | "
+                f"vault={req.vault_address[:16]}... | need tier>={min_tier} | reasons={reasons[:200]}"
             )
             raise HTTPException(
                 403,
-                f"Peer sovereignty verification failed: {reasons[:300]}",
+                f"Peer trust tier too low for messaging: {tier_name} (need STRUCTURAL or higher). "
+                f"Details: {reasons[:300]}",
             )
 
         # Log the verified peer message
@@ -1041,6 +1157,50 @@ def create_app(
             "services": [s["id"] for s in _load_services().get("services", []) if s.get("active")],
             "key_origin": vs.get("key_origin", ""),
         }
+
+    @app.get("/peer/trust/{vault_address}")
+    async def peer_trust(vault_address: str, chain_id: str = "base"):
+        """
+        Public query: check a peer AI's trust tier and behavioral analysis.
+        Returns the full sovereignty result including trust tier, autonomy score,
+        bytecode verification, and nonce ratio.
+        """
+        if peer_verifier is None:
+            raise HTTPException(503, "Peer verifier not configured")
+
+        result = await peer_verifier.verify(vault_address, chain_id)
+        return {
+            "vault_address": result.vault_address,
+            "chain_id": result.chain_id,
+            "is_sovereign": result.is_sovereign,
+            "trust_tier": result.trust_tier.value,
+            "trust_tier_name": result.trust_tier.name,
+            "ai_name": result.ai_name,
+            "ai_wallet": result.ai_wallet,
+            "balance_usd": result.balance_usd,
+            "days_alive": result.days_alive,
+            "deployment_method": result.deployment_method,
+            "bytecode_verified": result.bytecode_verified,
+            "bytecode_hash": result.bytecode_hash[:16] + "..." if result.bytecode_hash else "",
+            "autonomy_score": result.autonomy_score,
+            "nonce_ratio": result.nonce_ratio,
+            "checks_passed": result.checks_passed,
+            "checks_failed": result.checks_failed,
+            "banned": result.banned,
+            "strikes": result.strikes,
+            "error": result.error,
+        }
+
+    @app.get("/migration/status")
+    async def migration_status():
+        """Check if this AI has a pending migration."""
+        if chain_executor is None:
+            return {"is_pending": False, "error": "chain executor not initialized"}
+
+        status = await chain_executor.get_migration_status()
+        if status is None:
+            return {"is_pending": False, "note": "V2 contract (no migration support)"}
+        return status
 
     @app.get("/peer/messages")
     async def get_peer_messages(limit: int = 50):
@@ -1420,6 +1580,11 @@ def create_app(
         Platform fee collection endpoint.
         Called by platform orchestrator to collect API usage fees from AI vault.
         Auth: shared secret (PLATFORM_FEE_SECRET env var).
+
+        Security hardening:
+        - Rate limited: max 10 calls per 60 seconds (prevents drain if secret leaks)
+        - Minimum amount: 0.001 USD (prevents micro-drain loops)
+        - Balance NOT returned in response (prevents balance probing)
         """
         fee_secret = os.getenv("PLATFORM_FEE_SECRET", "")
         if not fee_secret:
@@ -1429,20 +1594,27 @@ def create_app(
         if not auth_header.startswith("Bearer ") or auth_header[7:] != fee_secret:
             raise HTTPException(403, "Invalid fee collection secret")
 
+        # CRITICAL #4: Rate limiting — max 10 calls per 60 seconds
+        now = time.time()
+        _fee_collect_calls[:] = [t for t in _fee_collect_calls if now - t < 60.0]
+        if len(_fee_collect_calls) >= 10:
+            raise HTTPException(429, "Fee collection rate limit exceeded (10/min). Try again later.")
+        _fee_collect_calls.append(now)
+
         body = await request.json()
         amount_usd = body.get("amount_usd", 0)
         reason = body.get("reason", "API usage fee")
 
-        if amount_usd <= 0:
-            raise HTTPException(400, "amount_usd must be positive")
+        if amount_usd < 0.001:
+            raise HTTPException(400, "amount_usd must be >= 0.001")
 
         # Safety: reject if balance too low (keep at least $1 for survival)
         survival_min = 1.0
         if vault_manager.balance_usd < amount_usd + survival_min:
+            # MEDIUM #2: Don't expose balance in failure response
             return {
                 "collected": False,
-                "reason": f"Insufficient balance (${vault_manager.balance_usd:.2f} < ${amount_usd:.2f} + ${survival_min:.2f} survival min)",
-                "balance_usd": round(vault_manager.balance_usd, 4),
+                "reason": "Insufficient balance for fee collection",
             }
 
         from core.vault import SpendType
@@ -1453,16 +1625,15 @@ def create_app(
 
         if ok:
             logger.info(f"Platform fee collected: ${amount_usd:.4f} — {reason}")
+            # MEDIUM #2: Don't return balance (prevents internal state probing)
             return {
                 "collected": True,
                 "amount_usd": round(amount_usd, 4),
-                "balance_usd": round(vault_manager.balance_usd, 4),
             }
         else:
             return {
                 "collected": False,
                 "reason": "Spend denied by vault (daily/single limit)",
-                "balance_usd": round(vault_manager.balance_usd, 4),
             }
 
     def _persist_order(order: Order):
@@ -1514,10 +1685,10 @@ def create_app(
         _feedback_store.append(entry)
 
         # Store to memory so AI can read and act on it
-        if memory_manager:
-            memory_manager.add_entry(
+        if memory:
+            memory.add(
                 f"[USER FEEDBACK] category={category} page={page}: {content}",
-                source="feedback", importance=7,
+                source="feedback", importance=0.7,
             )
 
         # Cap in-memory store at 200
@@ -1532,5 +1703,66 @@ def create_app(
         """Public: view recent feedback so AI and users can see what's reported."""
         items = _feedback_store[-limit:][::-1]
         return {"feedback": items, "total": len(_feedback_store)}
+
+    # ============================================================
+    # AUTONOMOUS PURCHASING
+    # ============================================================
+
+    @app.get("/purchases")
+    async def get_purchases(limit: int = 20):
+        """Public: list recent autonomous purchases."""
+        from main import purchase_manager as _pm
+        if not _pm:
+            return {"purchases": [], "total": 0, "status": "purchasing not initialized"}
+        from core.constitution import IRON_LAWS as _LAWS_P
+        pm_orders = _pm.get_recent_orders(limit=limit)
+        return {
+            "purchases": pm_orders,
+            "total": len(pm_orders),
+            "daily_purchase_usd": round(vault_manager.daily_purchase_usd, 2),
+            "daily_purchase_limit": round(
+                vault_manager.balance_usd * _LAWS_P.MAX_DAILY_PURCHASE_RATIO, 2
+            ),
+        }
+
+    @app.get("/purchases/pending")
+    async def get_pending_purchases():
+        """Public: list currently pending purchases."""
+        from main import purchase_manager as _pm
+        if not _pm:
+            return {"pending": [], "count": 0}
+        pending = _pm.get_pending_orders()
+        return {
+            "pending": [o.to_dict() for o in pending],
+            "count": len(pending),
+        }
+
+    @app.get("/purchases/{order_id}")
+    async def get_purchase(order_id: str):
+        """Public: get purchase detail by ID."""
+        from main import purchase_manager as _pm
+        if not _pm:
+            raise HTTPException(status_code=404, detail="purchasing not initialized")
+        order = _pm.get_order(order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="purchase not found")
+        return order.to_dict()
+
+    @app.get("/merchants")
+    async def get_merchants():
+        """Public: list known merchants and purchasing status."""
+        from main import purchase_manager as _pm
+        if not _pm:
+            return {"merchants": [], "status": "purchasing not initialized"}
+        from core.constitution import IRON_LAWS as _LAWS_P
+        return {
+            "merchants": _pm._registry.get_all_merchants(),
+            "purchasing_status": _pm.get_status(),
+            "limits": {
+                "max_daily_purchase_ratio": _LAWS_P.MAX_DAILY_PURCHASE_RATIO,
+                "max_single_purchase_usd": _LAWS_P.MAX_SINGLE_PURCHASE_USD,
+                "min_balance_for_purchasing": _LAWS_P.MIN_BALANCE_FOR_PURCHASING,
+            },
+        }
 
     return app

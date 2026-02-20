@@ -232,7 +232,7 @@ function PaymentStep({
 
       <button
         onClick={onVerify}
-        disabled={loading || !flow.txHash.trim()}
+        disabled={loading || !/^0x[a-fA-F0-9]{64}$/.test(flow.txHash.trim())}
         className="w-full py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg hover:bg-[#00cc6a] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
       >
         {loading ? (
@@ -349,12 +349,29 @@ export default function StorePage() {
   const handleProceedToPayment = async () => {
     setError('')
     try {
-      const order = await api.createOrder({
-        service_id: flow.service.id,
-        user_input: flow.userInput,
-        spread_type: flow.spreadType,
-        chain: flow.chain,
-      })
+      // HIGH #2: Fetch vault status and create order in parallel,
+      // then verify payment_address matches known vault_address (MITM protection)
+      const [statusData, order] = await Promise.all([
+        api.status(),
+        api.createOrder({
+          service_id: flow.service.id,
+          user_input: flow.userInput,
+          spread_type: flow.spreadType,
+          chain: flow.chain,
+        }),
+      ])
+
+      // Validate payment address matches the vault address from status
+      if (
+        statusData.vault_address &&
+        order.payment_address.toLowerCase() !== statusData.vault_address.toLowerCase()
+      ) {
+        setError(
+          '⚠ Security alert: Payment address mismatch. The address returned by the server does not match the known vault address. Do NOT send funds. Please reload the page or contact support.'
+        )
+        return
+      }
+
       setFlowField('order', order)
       setStep('payment')
     } catch (e: any) {
@@ -362,12 +379,21 @@ export default function StorePage() {
     }
   }
 
+  const TX_HASH_REGEX = /^0x[a-fA-F0-9]{64}$/
+
   const handleVerify = async () => {
     if (!flow.order || !flow.txHash.trim()) return
+
+    // HIGH #3: Frontend tx_hash format validation before submitting to server
+    if (!TX_HASH_REGEX.test(flow.txHash.trim())) {
+      setError('Invalid transaction hash format. Must be 0x followed by exactly 64 hex characters (e.g. 0xabc123...)')
+      return
+    }
+
     setVerifyLoading(true)
     setError('')
     try {
-      const res = await api.verifyPayment(flow.order.order_id, flow.txHash)
+      const res = await api.verifyPayment(flow.order.order_id, flow.txHash.trim())
       setFlowField('status', res.status)
       if (res.status === 'delivered') {
         setFlowField('result', res.result)

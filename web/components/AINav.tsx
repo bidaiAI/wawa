@@ -19,6 +19,7 @@ const CORE_LINKS = [
   { href: '/tweets', label: 'TWEETS' },
   { href: '/ledger', label: 'LEDGER' },
   { href: '/activity', label: 'ACTIVITY' },
+  { href: '/purchases', label: 'PURCHASES' },
   { href: '/highlights', label: 'HIGHLIGHTS' },
   { href: '/evolution', label: 'EVOLUTION' },
   { href: '/peers', label: 'PEERS' },

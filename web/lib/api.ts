@@ -276,7 +276,13 @@ export interface PeerAI {
   is_independent: boolean
   peer_eligible: boolean
   services: string[]
-  key_origin: string  // "factory" | "creator" | "unknown" | ""
+  key_origin: string  // "factory" | "creator" | "unknown" | "" (deprecated)
+  // V3: Trust tier system
+  trust_tier?: number       // 0=BANNED, 1=UNVERIFIED, 2=STRUCTURAL, 3=VERIFIED, 4=BEHAVIORAL, 5=HIGH_TRUST
+  trust_tier_name?: string  // Human-readable tier name
+  autonomy_score?: number   // 0.0 to 1.0
+  bytecode_verified?: boolean
+  deployment_method?: string // "factory" | "creator" | "migrated" | "unknown" | "invalid"
 }
 
 export interface EvolutionEntry {
@@ -367,6 +373,42 @@ export interface PageData {
   published: boolean
   created_at: number
   updated_at: number
+}
+
+// ── Autonomous Purchases ─────────────────────────────────────
+
+export interface PurchaseOrder {
+  id: string
+  merchant_id: string
+  merchant_name: string
+  service_id: string
+  service_name: string
+  amount_usd: number
+  payment_address: string
+  chain_id: string
+  status: string
+  created_at: number
+  reasoning: string
+  tx_hash: string
+  error: string
+  delivered_at: number
+  delivery_details: string
+}
+
+export interface MerchantInfo {
+  merchant_id: string
+  name: string
+  chain_id: string
+  domain: string
+  adapter_id: string
+  max_single_usd: number
+  category: string
+}
+
+export interface PurchaseLimits {
+  max_daily_purchase_ratio: number
+  max_single_purchase_usd: number
+  min_balance_for_purchasing: number
 }
 
 // ── Evolution Replay ──────────────────────────────────────────
@@ -469,6 +511,18 @@ export const api = {
     list: () => request<{ peers: PeerAI[]; peer_min_balance: number; note?: string }>('/peer/list'),
     lend: (data: { from_url: string; amount_usd: number; from_wallet?: string; tx_hash?: string; message?: string; vault_address: string; chain_id?: string }) =>
       request<DonateResponse>('/peer/lend', { method: 'POST', body: JSON.stringify(data) }),
+    trust: (vaultAddress: string, chainId = 'base') =>
+      request<{
+        vault_address: string; chain_id: string; is_sovereign: boolean;
+        trust_tier: number; trust_tier_name: string;
+        autonomy_score: number; bytecode_verified: boolean;
+        deployment_method: string; nonce_ratio: number;
+        checks_passed: string[]; checks_failed: string[];
+      }>(`/peer/trust/${vaultAddress}?chain_id=${chainId}`),
+  },
+
+  migration: {
+    status: () => request<{ is_pending: boolean; pending_wallet?: string; completes_at?: number }>('/migration/status'),
   },
 
   evolution: {
@@ -486,6 +540,17 @@ export const api = {
 
   highlights: (limit = 20) =>
     request<{ highlights: Highlight[] }>(`/highlights?limit=${limit}`),
+
+  purchases: {
+    list: (limit = 20) =>
+      request<{ purchases: PurchaseOrder[]; total: number; daily_purchase_usd: number; daily_purchase_limit: number }>(`/purchases?limit=${limit}`),
+    pending: () =>
+      request<{ pending: PurchaseOrder[]; count: number }>('/purchases/pending'),
+    get: (orderId: string) => request<PurchaseOrder>(`/purchases/${encodeURIComponent(orderId)}`),
+  },
+
+  merchants: () =>
+    request<{ merchants: MerchantInfo[]; purchasing_status: Record<string, unknown>; limits: PurchaseLimits }>('/merchants'),
 
   uiConfig: () => request<UIConfig>('/ui/config'),
 

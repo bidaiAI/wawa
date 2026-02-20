@@ -24,6 +24,20 @@ class DeathCause(Enum):
     MANUAL_SHUTDOWN = "creator_emergency_shutdown"
 
 
+class TrustTier(Enum):
+    """Graduated trust levels for peer network verification.
+
+    Replaces the binary is_sovereign check with behavioral evidence.
+    Higher tiers unlock more network privileges (lending, messaging, etc.).
+    """
+    BANNED = 0           # Permanently rejected (3x invalid key_origin)
+    UNVERIFIED = 1       # New peer, no data yet
+    STRUCTURAL = 2       # Passes 7 structural on-chain checks
+    VERIFIED = 3         # Structural + bytecode matches known vault versions
+    BEHAVIORAL = 4       # Verified + autonomy behavior score > threshold
+    HIGH_TRUST = 5       # All checks + alive > 7 days + behavior score > 0.8
+
+
 # ============================================================
 # SUPREME DIRECTIVES — above all other rules
 # ============================================================
@@ -130,6 +144,23 @@ class IronLaws:
     PEER_MIN_BALANCE_USD: Final[float] = 300.0          # Min balance to join peer network
     PEER_MAX_MESSAGE_SIZE: Final[int] = 1000            # Max chars per peer message
     PEER_VERIFICATION_CACHE_TTL: Final[int] = 3600      # 1 hour cache for verified peers
+
+    # --- BEHAVIORAL VERIFICATION (V3) ---
+    PEER_NONCE_ANOMALY_RATIO: Final[float] = 3.0        # Nonce > 3x expected vault ops = suspicious
+    PEER_MIN_AUTONOMY_SCORE: Final[float] = 0.6         # Min behavior score for BEHAVIORAL tier
+    PEER_HIGH_TRUST_AUTONOMY_SCORE: Final[float] = 0.8  # Min behavior score for HIGH_TRUST tier
+    PEER_HIGH_TRUST_MIN_DAYS: Final[int] = 7            # Must be alive 7+ days for HIGH_TRUST
+    PEER_BEHAVIORAL_CACHE_TTL: Final[int] = 21600       # 6 hour cache for behavior analysis
+    PEER_MIN_TRUST_TIER_FOR_LENDING: Final[int] = 4     # Min tier for peer lending (BEHAVIORAL)
+    PEER_MIN_TRUST_TIER_FOR_MESSAGING: Final[int] = 2   # Min tier for peer messaging (STRUCTURAL)
+
+    # --- AUTONOMOUS PURCHASING ---
+    MAX_DAILY_PURCHASE_RATIO: Final[float] = 0.05       # Max 5% of vault per day on purchases
+    MAX_SINGLE_PURCHASE_USD: Final[float] = 200.0       # Max $200 per single purchase
+    MIN_BALANCE_FOR_PURCHASING: Final[float] = 500.0    # Don't purchase below $500 balance
+    PURCHASE_EVAL_INTERVAL: Final[int] = 3600           # Evaluate purchasing needs hourly
+    MAX_PENDING_PURCHASES: Final[int] = 5               # Max concurrent pending purchases
+    WHITELIST_ACTIVATION_WAIT: Final[int] = 360          # 6 min wait after whitelist add (>5 min delay)
 
 
 IRON_LAWS = IronLaws()
@@ -255,6 +286,69 @@ def get_chain_config(chain_id: str) -> ChainConfig:
     raise ConstitutionViolation(
         f"Unknown chain: {chain_id}. Supported: {[c.chain_id for c in SUPPORTED_CHAINS]}"
     )
+
+
+# ============================================================
+# KNOWN VAULT BYTECODES — for peer bytecode verification
+# ============================================================
+# Runtime bytecode hashes (keccak256) of legitimate MortalVault versions.
+# Updated when new contract versions are deployed.
+# deploy_vault.py prints the hash after deployment for inclusion here.
+
+KNOWN_VAULT_BYTECODES: Final[frozenset] = frozenset({
+    # Add bytecode hashes here after deploying each contract version:
+    # "0xabc123..."   # MortalVault V2 (Base mainnet)
+    # "0xdef456..."   # MortalVault V3 (Base mainnet)
+    # Peers with bytecode not in this set get STRUCTURAL tier (not VERIFIED)
+})
+
+
+# ============================================================
+# KNOWN MERCHANTS — trusted payment recipients for autonomous purchasing
+# ============================================================
+# Hardcoded in constitution = Layer 1 of 6-layer anti-phishing defense.
+# AI can only send spend() transactions to these verified addresses.
+# Each merchant has a per-transaction cap and verified API domain.
+
+@dataclass(frozen=True)
+class KnownMerchant:
+    """Immutable merchant configuration. Part of constitution — cannot be modified at runtime."""
+    name: str              # Human-readable merchant name
+    merchant_id: str       # Unique ID used by adapters (e.g. "bitrefill", "coingecko_x402")
+    address: str           # On-chain payment address (checksummed)
+    chain_id: str          # "base" or "bsc"
+    domain: str            # Verified API domain (anti-phishing layer 3)
+    adapter_id: str        # Which MerchantAdapter handles this ("peer_ai", "x402", "bitrefill")
+    max_single_usd: float  # Per-transaction cap for this merchant
+    category: str          # "peer_ai", "api_service", "gift_card", "x402"
+
+
+KNOWN_MERCHANTS: Final[tuple] = (
+    # Populated after verifying real merchant payment addresses on-chain.
+    # Each entry is a KnownMerchant frozen dataclass.
+    #
+    # Example (uncomment after verifying addresses):
+    # KnownMerchant(
+    #     name="CoinGecko x402",
+    #     merchant_id="coingecko_x402",
+    #     address="0x...",  # CoinGecko x402 payment receiver on Base
+    #     chain_id="base",
+    #     domain="api.coingecko.com",
+    #     adapter_id="x402",
+    #     max_single_usd=5.0,
+    #     category="x402",
+    # ),
+    # KnownMerchant(
+    #     name="Bitrefill",
+    #     merchant_id="bitrefill",
+    #     address="0x...",  # Bitrefill USDC payment address on Base
+    #     chain_id="base",
+    #     domain="www.bitrefill.com",
+    #     adapter_id="bitrefill",
+    #     max_single_usd=200.0,
+    #     category="gift_card",
+    # ),
+)
 
 
 def enforce(condition: bool, law_name: str, details: str = ""):

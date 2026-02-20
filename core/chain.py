@@ -21,9 +21,9 @@ Current on-chain methods:
 - sync_balance() — read on-chain token balance
 - verify_payment_tx() — verify incoming ERC20 payment receipts
 
-TODO (P8): Add spend() method to call MortalVault.spend(token, amount, to).
-Currently API costs are Python-only (no on-chain execution). See vault.py
-spend() method docstring for full architecture discussion.
+P9: execute_spend() implemented for autonomous purchasing.
+API costs remain Python-only (off-chain). On-chain spend() is used for
+merchant purchases where real token transfer is needed.
 
 Designed for: mortal AI survival framework
 """
@@ -241,7 +241,125 @@ VAULT_ABI = [
         "stateMutability": "view",
         "type": "function",
     },
+    # ---- V3: SPEND WHITELIST ----
+    # addSpendRecipient(address recipient) — register vendor
+    {
+        "inputs": [{"name": "recipient", "type": "address"}],
+        "name": "addSpendRecipient",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    # removeSpendRecipient(address recipient) — unregister vendor
+    {
+        "inputs": [{"name": "recipient", "type": "address"}],
+        "name": "removeSpendRecipient",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    # spendWhitelist(address) → bool
+    {
+        "inputs": [{"name": "", "type": "address"}],
+        "name": "spendWhitelist",
+        "outputs": [{"name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # isSpendRecipientActive(address) → (bool whitelisted, bool activated, uint256 activatesAt)
+    {
+        "inputs": [{"name": "recipient", "type": "address"}],
+        "name": "isSpendRecipientActive",
+        "outputs": [
+            {"name": "whitelisted", "type": "bool"},
+            {"name": "activated", "type": "bool"},
+            {"name": "activatesAt", "type": "uint256"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # whitelistCount() → uint256
+    {
+        "inputs": [],
+        "name": "whitelistCount",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # currentWhitelistGeneration() → uint256
+    {
+        "inputs": [],
+        "name": "currentWhitelistGeneration",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # spendFrozenUntil() → uint256
+    {
+        "inputs": [],
+        "name": "spendFrozenUntil",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # totalFrozenDuration() → uint256
+    {
+        "inputs": [],
+        "name": "totalFrozenDuration",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # ---- V3: AI SELF-MIGRATION ----
+    # initiateMigration(address _newWallet)
+    {
+        "inputs": [{"name": "_newWallet", "type": "address"}],
+        "name": "initiateMigration",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    # completeMigration()
+    {
+        "inputs": [],
+        "name": "completeMigration",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    # cancelMigration()
+    {
+        "inputs": [],
+        "name": "cancelMigration",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    # getMigrationStatus() → (address, uint256, uint256, bool)
+    {
+        "inputs": [],
+        "name": "getMigrationStatus",
+        "outputs": [
+            {"name": "_pendingWallet", "type": "address"},
+            {"name": "_initiatedAt", "type": "uint256"},
+            {"name": "_completesAt", "type": "uint256"},
+            {"name": "_isPending", "type": "bool"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # pendingAIWallet() → address
+    {
+        "inputs": [],
+        "name": "pendingAIWallet",
+        "outputs": [{"name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
+
+# Null address constant for checks
+NULL_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
 # ============================================================
@@ -945,6 +1063,332 @@ class ChainExecutor:
             )
 
         return result
+
+    # ============================================================
+    # V3: SPEND WHITELIST MANAGEMENT
+    # ============================================================
+
+    async def add_spend_recipient(self, address: str, chain_id: Optional[str] = None) -> ChainTxResult:
+        """Register a recipient address in the spend whitelist (V3 contract)."""
+        if not self._initialized:
+            return ChainTxResult(success=False, error="chain executor not initialized")
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return ChainTxResult(success=False, error="no chain available")
+
+        chain = self._chains[picked]
+        from web3 import Web3
+        addr = Web3.to_checksum_address(address)
+
+        # Check if already whitelisted (avoid wasting gas)
+        try:
+            already = await asyncio.get_running_loop().run_in_executor(
+                None,
+                chain["vault_contract"].functions.spendWhitelist(addr).call,
+            )
+            if already:
+                logger.info(f"Spend recipient already whitelisted: {addr[:10]}... on {picked}")
+                return ChainTxResult(success=True, chain=picked, tx_hash="already_whitelisted")
+        except Exception:
+            pass  # V2 contract without whitelist — will fail on tx anyway
+
+        tx_fn = chain["vault_contract"].functions.addSpendRecipient(addr)
+        result = await self._send_tx(picked, tx_fn)
+        if result.success:
+            logger.info(f"Spend recipient added: {addr[:10]}... on {picked} | tx={result.tx_hash[:16]}...")
+        return result
+
+    async def remove_spend_recipient(self, address: str, chain_id: Optional[str] = None) -> ChainTxResult:
+        """Remove a recipient from the spend whitelist (V3 contract)."""
+        if not self._initialized:
+            return ChainTxResult(success=False, error="chain executor not initialized")
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return ChainTxResult(success=False, error="no chain available")
+
+        chain = self._chains[picked]
+        from web3 import Web3
+        addr = Web3.to_checksum_address(address)
+
+        tx_fn = chain["vault_contract"].functions.removeSpendRecipient(addr)
+        return await self._send_tx(picked, tx_fn)
+
+    async def is_spend_recipient_active(self, address: str, chain_id: Optional[str] = None) -> Optional[dict]:
+        """Check if a recipient is whitelisted and activated."""
+        if not self._initialized:
+            return None
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return None
+
+        chain = self._chains[picked]
+        from web3 import Web3
+        addr = Web3.to_checksum_address(address)
+
+        try:
+            def _call(c=chain, a=addr):
+                return c["vault_contract"].functions.isSpendRecipientActive(a).call()
+
+            result = await asyncio.get_running_loop().run_in_executor(None, _call)
+            whitelisted, activated, activates_at = result
+            return {
+                "whitelisted": whitelisted,
+                "activated": activated,
+                "activates_at_block": activates_at,
+                "chain": picked,
+            }
+        except Exception as e:
+            logger.debug(f"isSpendRecipientActive check failed (may be V2 contract): {e}")
+            return None
+
+    async def get_spend_freeze_status(self, chain_id: Optional[str] = None) -> Optional[dict]:
+        """Check if spending is currently frozen."""
+        if not self._initialized:
+            return None
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return None
+
+        chain = self._chains[picked]
+        try:
+            frozen_until = await asyncio.get_running_loop().run_in_executor(
+                None,
+                chain["vault_contract"].functions.spendFrozenUntil().call,
+            )
+            import time
+            is_frozen = frozen_until > int(time.time())
+            return {
+                "is_frozen": is_frozen,
+                "frozen_until": frozen_until,
+                "chain": picked,
+            }
+        except Exception as e:
+            logger.debug(f"spendFrozenUntil check failed (may be V2 contract): {e}")
+            return None
+
+    # ============================================================
+    # AUTONOMOUS PURCHASING — on-chain spend execution
+    # ============================================================
+
+    async def execute_spend(
+        self,
+        to_address: str,
+        amount_usd: float,
+        spend_type: str = "purchase",
+        chain_id: Optional[str] = None,
+    ) -> ChainTxResult:
+        """
+        Execute on-chain MortalVault.spend(address to, uint256 amount, string spendType).
+
+        The contract enforces:
+        - Whitelist check (recipient must be whitelisted and activated)
+        - Freeze check (spending must not be frozen)
+        - Daily/single spend limits
+        - onlyAI modifier (only AI wallet can call)
+
+        This closes the P8 TODO — enables real token transfers for merchant purchases.
+        API costs remain Python-only (off-chain, no token movement needed).
+
+        Args:
+            to_address: Recipient address (must be whitelisted + activated on-chain)
+            amount_usd: Amount in USD (converted to token amount with 6 decimals)
+            spend_type: Spend classification string passed to contract event
+            chain_id: Optional chain to use (default: auto-pick highest balance)
+
+        Returns:
+            ChainTxResult with tx_hash on success
+        """
+        if not self._initialized:
+            return ChainTxResult(success=False, error="chain executor not initialized")
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return ChainTxResult(success=False, error="no chain available")
+
+        chain = self._chains[picked]
+        decimals = chain["token_decimals"]
+        amount_raw = _usd_to_raw(amount_usd, decimals)
+
+        if amount_raw <= 0:
+            return ChainTxResult(success=False, chain=picked, error="amount too small")
+
+        from web3 import Web3
+        addr = Web3.to_checksum_address(to_address)
+
+        # Pre-check: verify recipient is whitelisted + activated (avoids wasting gas)
+        status = await self.is_spend_recipient_active(to_address, picked)
+        if status is not None:
+            if not status.get("whitelisted"):
+                return ChainTxResult(
+                    success=False, chain=picked,
+                    error=f"recipient {to_address[:10]}... not whitelisted"
+                )
+            if not status.get("activated"):
+                return ChainTxResult(
+                    success=False, chain=picked,
+                    error=f"recipient {to_address[:10]}... whitelisted but not yet activated"
+                )
+
+        tx_fn = chain["vault_contract"].functions.spend(addr, amount_raw, spend_type)
+        result = await self._send_tx(picked, tx_fn)
+
+        if result.success:
+            logger.info(
+                f"SPEND OK [{picked}]: ${amount_usd:.2f} → {addr[:10]}... "
+                f"[{spend_type}] | tx={result.tx_hash[:16]}..."
+            )
+        else:
+            logger.warning(
+                f"SPEND FAILED [{picked}]: ${amount_usd:.2f} → {addr[:10]}... "
+                f"[{spend_type}] | error={result.error}"
+            )
+
+        return result
+
+    async def ensure_spend_recipient_ready(
+        self, address: str, chain_id: Optional[str] = None
+    ) -> bool:
+        """
+        Ensure an address is whitelisted and activation delay has passed.
+
+        If not whitelisted: adds it (returns False — caller must wait ~5 minutes).
+        If whitelisted but not activated: returns False.
+        If ready (whitelisted + activated): returns True.
+
+        Used by PurchaseManager before calling execute_spend().
+        """
+        if not self._initialized:
+            return False
+
+        status = await self.is_spend_recipient_active(address, chain_id)
+
+        if status is None:
+            # V2 contract or read error — try adding anyway
+            result = await self.add_spend_recipient(address, chain_id)
+            return False  # Must wait for activation regardless
+
+        if not status["whitelisted"]:
+            # Not whitelisted — add it
+            result = await self.add_spend_recipient(address, chain_id)
+            if result.success:
+                logger.info(
+                    f"Spend recipient added for purchasing: {address[:10]}... "
+                    f"(activation pending ~5 min)"
+                )
+            return False  # Must wait for activation
+
+        if not status["activated"]:
+            # Whitelisted but activation delay not passed yet
+            logger.debug(f"Spend recipient {address[:10]}... pending activation")
+            return False
+
+        return True  # Ready to receive spend()
+
+    # ============================================================
+    # V3: AI SELF-MIGRATION
+    # ============================================================
+
+    async def initiate_migration(self, new_wallet: str, chain_id: Optional[str] = None) -> ChainTxResult:
+        """Initiate wallet migration with 7-day timelock (V3 contract)."""
+        if not self._initialized:
+            return ChainTxResult(success=False, error="chain executor not initialized")
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return ChainTxResult(success=False, error="no chain available")
+
+        chain = self._chains[picked]
+        from web3 import Web3
+        addr = Web3.to_checksum_address(new_wallet)
+
+        tx_fn = chain["vault_contract"].functions.initiateMigration(addr)
+        result = await self._send_tx(picked, tx_fn)
+        if result.success:
+            logger.info(f"Migration initiated: new wallet={addr[:10]}... on {picked} | tx={result.tx_hash[:16]}...")
+        return result
+
+    async def complete_migration(self, chain_id: Optional[str] = None) -> ChainTxResult:
+        """Complete a pending migration (called by NEW wallet after timelock)."""
+        if not self._initialized:
+            return ChainTxResult(success=False, error="chain executor not initialized")
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return ChainTxResult(success=False, error="no chain available")
+
+        chain = self._chains[picked]
+        tx_fn = chain["vault_contract"].functions.completeMigration()
+        result = await self._send_tx(picked, tx_fn)
+        if result.success:
+            logger.info(f"Migration completed on {picked} | tx={result.tx_hash[:16]}...")
+        return result
+
+    async def cancel_migration(self, chain_id: Optional[str] = None) -> ChainTxResult:
+        """Cancel a pending migration."""
+        if not self._initialized:
+            return ChainTxResult(success=False, error="chain executor not initialized")
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return ChainTxResult(success=False, error="no chain available")
+
+        chain = self._chains[picked]
+        tx_fn = chain["vault_contract"].functions.cancelMigration()
+        return await self._send_tx(picked, tx_fn)
+
+    async def get_migration_status(self, chain_id: Optional[str] = None) -> Optional[dict]:
+        """Read migration status from contract."""
+        if not self._initialized:
+            return None
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return None
+
+        chain = self._chains[picked]
+        try:
+            def _call(c=chain):
+                return c["vault_contract"].functions.getMigrationStatus().call()
+
+            result = await asyncio.get_running_loop().run_in_executor(None, _call)
+            pending_wallet, initiated_at, completes_at, is_pending = result
+            return {
+                "pending_wallet": pending_wallet,
+                "initiated_at": initiated_at,
+                "completes_at": completes_at,
+                "is_pending": is_pending,
+                "chain": picked,
+            }
+        except Exception as e:
+            logger.debug(f"getMigrationStatus check failed (may be V2 contract): {e}")
+            return None
+
+    async def get_bytecode_hash(self, contract_address: str, chain_id: Optional[str] = None) -> Optional[str]:
+        """Get keccak256 hash of deployed runtime bytecode for peer verification."""
+        if not self._initialized:
+            return None
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return None
+
+        chain = self._chains[picked]
+        try:
+            from web3 import Web3
+            addr = Web3.to_checksum_address(contract_address)
+
+            def _call(w3=chain["w3"], a=addr):
+                code = w3.eth.get_code(a)
+                return Web3.keccak(code).hex()
+
+            return await asyncio.get_running_loop().run_in_executor(None, _call)
+        except Exception as e:
+            logger.warning(f"get_bytecode_hash failed for {contract_address[:10]}...: {e}")
+            return None
 
     # ============================================================
     # STATUS

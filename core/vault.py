@@ -51,6 +51,7 @@ class SpendType(Enum):
     INFRASTRUCTURE = "infrastructure"         # Server, domain, etc.
     INSOLVENCY_LIQUIDATION = "insolvency_liquidation"  # All funds → creator on insolvency death
     PLATFORM_FEE = "platform_fee"             # API usage fee charged by platform
+    PURCHASE = "purchase"                     # Autonomous merchant/peer purchases
 
 
 @dataclass
@@ -111,6 +112,7 @@ class VaultManager:
         self.lenders: list[LenderInfo] = []
         self.transactions: list[Transaction] = []
         self.daily_spent_usd: float = 0.0
+        self.daily_purchase_usd: float = 0.0   # Purchase-specific daily counter
         self.daily_reset_timestamp: float = time.time()
         self.total_income_usd: float = 0.0      # ALL incoming (including deposits/loans)
         self.total_earned_usd: float = 0.0      # ONLY earned revenue (services, campaigns, donations)
@@ -239,10 +241,11 @@ class VaultManager:
     # ============================================================
 
     def _reset_daily_if_needed(self):
-        """Reset daily spend counter."""
+        """Reset daily spend counters."""
         now = time.time()
         if now - self.daily_reset_timestamp > 86400:
             self.daily_spent_usd = 0.0
+            self.daily_purchase_usd = 0.0
             self.daily_reset_timestamp = now
 
     def can_spend(self, amount_usd: float) -> tuple[bool, str]:
@@ -340,6 +343,93 @@ class VaultManager:
         """Keep only most recent transactions to bound memory usage."""
         if len(self.transactions) > self._MAX_TRANSACTIONS:
             self.transactions = self.transactions[-self._MAX_TRANSACTIONS:]
+
+    # ============================================================
+    # AUTONOMOUS PURCHASING
+    # ============================================================
+
+    def can_purchase(self, amount_usd: float) -> tuple[bool, str]:
+        """
+        Check if a purchase is allowed under purchase-specific iron laws.
+
+        Purchases have stricter limits than general spending:
+        - Balance must be >= $500 (MIN_BALANCE_FOR_PURCHASING)
+        - Daily purchases <= 5% of vault (MAX_DAILY_PURCHASE_RATIO)
+        - Single purchase <= $200 (MAX_SINGLE_PURCHASE_USD)
+        - Must also pass general can_spend() checks
+
+        Returns: (allowed, reason)
+        """
+        if not self.is_alive:
+            return False, "wawa is dead"
+
+        # Purchase-specific: minimum balance threshold
+        if self.balance_usd < IRON_LAWS.MIN_BALANCE_FOR_PURCHASING:
+            return False, (
+                f"balance ${self.balance_usd:.2f} below purchase minimum "
+                f"${IRON_LAWS.MIN_BALANCE_FOR_PURCHASING:.0f}"
+            )
+
+        # Purchase-specific: single purchase cap
+        if amount_usd > IRON_LAWS.MAX_SINGLE_PURCHASE_USD:
+            return False, (
+                f"${amount_usd:.2f} exceeds single purchase limit "
+                f"${IRON_LAWS.MAX_SINGLE_PURCHASE_USD:.0f}"
+            )
+
+        self._reset_daily_if_needed()
+
+        # Purchase-specific: daily purchase budget (5% of vault)
+        max_daily_purchase = self.balance_usd * IRON_LAWS.MAX_DAILY_PURCHASE_RATIO
+        if self.daily_purchase_usd + amount_usd > max_daily_purchase:
+            return False, (
+                f"daily purchase limit reached "
+                f"(${self.daily_purchase_usd + amount_usd:.2f} > "
+                f"${max_daily_purchase:.2f})"
+            )
+
+        # Must also pass general spend limits (50% daily, 30% single)
+        return self.can_spend(amount_usd)
+
+    def record_purchase(self, amount_usd: float, merchant_name: str,
+                        to_wallet: str = "", tx_hash: str = "",
+                        description: str = "") -> bool:
+        """
+        Record an autonomous purchase. Enforces purchase limits + general spend limits.
+
+        Args:
+            amount_usd: Purchase amount
+            merchant_name: Name of the merchant (for logging)
+            to_wallet: Merchant's payment address
+            tx_hash: On-chain transaction hash
+            description: Purchase description
+
+        Returns: True if purchase was recorded successfully
+        """
+        allowed, reason = self.can_purchase(amount_usd)
+        if not allowed:
+            logger.warning(
+                f"PURCHASE DENIED: ${amount_usd:.2f} [{merchant_name}] - {reason}"
+            )
+            return False
+
+        desc = f"[{merchant_name}] {description}" if description else f"[{merchant_name}]"
+        ok = self.spend(
+            amount_usd=amount_usd,
+            spend_type=SpendType.PURCHASE,
+            to_wallet=to_wallet,
+            tx_hash=tx_hash,
+            description=desc,
+        )
+
+        if ok:
+            self.daily_purchase_usd += amount_usd
+            logger.info(
+                f"PURCHASE OK: ${amount_usd:.2f} [{merchant_name}] | "
+                f"Daily purchases: ${self.daily_purchase_usd:.2f}"
+            )
+
+        return ok
 
     # ============================================================
     # INDEPENDENCE
@@ -1163,6 +1253,8 @@ class VaultManager:
             "net_profit": round(net_profit, 2),                  # earned - operational
             "daily_spent_today": round(self.daily_spent_usd, 2),
             "daily_limit": round(self.balance_usd * IRON_LAWS.MAX_DAILY_SPEND_RATIO, 2),
+            "daily_purchase_usd": round(self.daily_purchase_usd, 2),
+            "daily_purchase_limit": round(self.balance_usd * IRON_LAWS.MAX_DAILY_PURCHASE_RATIO, 2),
             "creator_principal_repaid": debt_cleared,
             "is_independent": self.is_independent,
             "independence_progress_pct": round(independence_progress, 2),

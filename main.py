@@ -61,6 +61,7 @@ from core.self_modify import SelfModifyEngine
 from core.chain import ChainExecutor
 from core.peer_verifier import PeerVerifier
 from core.highlights import HighlightsEngine
+from core.purchasing import PurchaseManager, MerchantRegistry
 from twitter.agent import TwitterAgent, TweetType
 from api.server import create_app, Order
 
@@ -1079,10 +1080,81 @@ async def _evaluate_repayment():
 _last_repayment_eval: float = 0.0
 _REPAYMENT_EVAL_INTERVAL: int = 3600  # Once per hour
 
+_last_purchase_eval: float = 0.0
+
+# Purchasing engine (initialized in lifespan)
+purchase_manager: Optional[PurchaseManager] = None
+
+
+async def _evaluate_purchases():
+    """
+    AI-autonomous purchase evaluation.
+
+    Mirrors _evaluate_repayment() pattern:
+    1. Check if purchasing is possible (balance, daily limit)
+    2. Discover available services from all adapters
+    3. Ask LLM to evaluate what to buy
+    4. Execute approved purchases
+    5. Record in memory + highlights
+
+    Called hourly from heartbeat, after repayment evaluation.
+    """
+    global purchase_manager
+
+    if purchase_manager is None:
+        return
+
+    if not vault.is_alive:
+        return
+
+    # Quick budget check
+    can, reason = vault.can_purchase(1.0)
+    if not can and "balance" in reason.lower():
+        logger.debug(f"Purchase eval skipped: {reason}")
+        return
+
+    try:
+        decisions = await purchase_manager.evaluate_purchases(
+            llm_callback=_call_llm,
+            vault_status=vault.get_status(),
+        )
+
+        if not decisions:
+            logger.debug("Purchase eval: no purchases needed")
+            return
+
+        for decision in decisions[:IRON_LAWS.MAX_PENDING_PURCHASES]:
+            order = await purchase_manager.execute_purchase(decision)
+
+            if order.status.value in ("paid", "delivered"):
+                memory.add(
+                    f"Purchased [{order.merchant_name}] {order.service_name}: "
+                    f"${order.amount_usd:.2f} — {order.reasoning}",
+                    source="purchasing",
+                    importance=0.7,
+                )
+                logger.info(
+                    f"Purchase executed: ${order.amount_usd:.2f} "
+                    f"[{order.merchant_name}] tx={order.tx_hash[:16]}..."
+                )
+            elif order.status.value == "pending_activation":
+                logger.info(
+                    f"Purchase pending activation: ${order.amount_usd:.2f} "
+                    f"[{order.merchant_name}] — will retry next cycle"
+                )
+            elif order.status.value == "failed":
+                logger.warning(f"Purchase failed: {order.error}")
+
+        # Process any orders stuck from previous cycles
+        await purchase_manager.process_pending_orders()
+
+    except Exception as e:
+        logger.warning(f"Purchase evaluation failed: {e}")
+
 
 async def _heartbeat_loop():
     """Periodic maintenance tasks."""
-    global _last_repayment_eval
+    global _last_repayment_eval, _last_purchase_eval
 
     while vault.is_alive:
         try:
@@ -1201,6 +1273,14 @@ async def _heartbeat_loop():
                     await _evaluate_repayment()
                 except Exception as e:
                     logger.warning(f"Heartbeat: repayment eval failed: {e}")
+
+            # ---- AI-AUTONOMOUS PURCHASING (hourly evaluation) ----
+            if now - _last_purchase_eval >= IRON_LAWS.PURCHASE_EVAL_INTERVAL:
+                _last_purchase_eval = now
+                try:
+                    await _evaluate_purchases()
+                except Exception as e:
+                    logger.warning(f"Heartbeat: purchase eval failed: {e}")
 
             # Non-critical tasks — individual try/except to prevent cascade failure
             try:
@@ -1430,6 +1510,55 @@ async def lifespan(app):
                     logger.info(f"Key origin: {vault.key_origin}")
                 except Exception as e:
                     logger.warning(f"Failed to read key origin at boot: {e}")
+
+                # V3: Register spend whitelist addresses (non-fatal if V2 contract)
+                whitelist_env = os.getenv("SPEND_WHITELIST_ADDRESSES", "")
+                if whitelist_env:
+                    addresses = [a.strip() for a in whitelist_env.split(",") if a.strip()]
+                    for addr in addresses:
+                        try:
+                            result = await chain_executor.add_spend_recipient(addr)
+                            if result.success:
+                                logger.info(f"Spend whitelist: registered {addr[:12]}...")
+                            else:
+                                logger.warning(f"Spend whitelist: failed to add {addr[:12]}... — {result.error}")
+                        except Exception as e:
+                            logger.debug(f"Spend whitelist skip for {addr[:12]}... (may be V2 contract): {e}")
+
+                # Initialize autonomous purchasing system
+                try:
+                    global purchase_manager
+                    from core.constitution import KNOWN_MERCHANTS
+                    from core.adapters.peer_adapter import PeerAIAdapter
+                    from core.adapters.x402_adapter import X402Adapter
+                    from core.adapters.bitrefill_adapter import BitrefillAdapter
+
+                    registry = MerchantRegistry()
+                    purchase_manager = PurchaseManager(vault, chain_executor, registry)
+
+                    # Register adapters
+                    purchase_manager.register_adapter(PeerAIAdapter(peer_verifier=peer_verifier))
+                    purchase_manager.register_adapter(X402Adapter())
+                    purchase_manager.register_adapter(BitrefillAdapter())
+
+                    # Auto-whitelist known merchant payment addresses
+                    for merchant in KNOWN_MERCHANTS:
+                        try:
+                            await chain_executor.ensure_spend_recipient_ready(
+                                merchant.address, merchant.chain_id
+                            )
+                        except Exception as e:
+                            logger.debug(
+                                f"Merchant whitelist skip for {merchant.name}: {e}"
+                            )
+
+                    logger.info(
+                        f"Purchasing system initialized: "
+                        f"{len(KNOWN_MERCHANTS)} merchants, "
+                        f"3 adapters (peer_ai, x402, bitrefill)"
+                    )
+                except Exception as e:
+                    logger.warning(f"Purchasing system init failed (non-fatal): {e}")
 
             logger.info(f"Vault config loaded from {vault_config_path}")
         except Exception as e:

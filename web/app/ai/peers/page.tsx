@@ -426,12 +426,21 @@ function BirthDeathFeed({ peers, loading }: { peers: PeerAI[]; loading: boolean 
                 <div className="flex-1 min-w-0">
                   <span className="text-sm text-[#d1d5db] font-bold">{peer.name}</span>
                   <span className="text-xs text-[#4b5563] ml-2">{peer.days_alive}d alive</span>
-                  {peer.key_origin === 'factory' ? (
+                  {/* V3: Trust tier badge */}
+                  {(peer.trust_tier ?? -1) >= 5 ? (
+                    <span className="ml-2 text-[9px] text-[#00ff88] border border-[#00ff8833] rounded px-1 bg-[#00ff8808]">HIGH TRUST</span>
+                  ) : (peer.trust_tier ?? -1) >= 4 ? (
+                    <span className="ml-2 text-[9px] text-[#22d3ee] border border-[#22d3ee33] rounded px-1 bg-[#22d3ee08]">BEHAVIORAL</span>
+                  ) : (peer.trust_tier ?? -1) >= 3 ? (
+                    <span className="ml-2 text-[9px] text-[#60a5fa] border border-[#60a5fa33] rounded px-1 bg-[#60a5fa08]">VERIFIED</span>
+                  ) : (peer.trust_tier ?? -1) >= 2 ? (
+                    <span className="ml-2 text-[9px] text-[#ffd700] border border-[#ffd70033] rounded px-1 bg-[#ffd70008]">STRUCTURAL</span>
+                  ) : peer.key_origin === 'factory' ? (
                     <span className="ml-2 text-[9px] text-[#00ff88] border border-[#00ff8833] rounded px-1 bg-[#00ff8808]">SOVEREIGN</span>
                   ) : peer.key_origin === 'creator' ? (
                     <span className="ml-2 text-[9px] text-[#ffd700] border border-[#ffd70033] rounded px-1 bg-[#ffd70008]">SELF-HOSTED</span>
                   ) : (
-                    <span className="ml-2 text-[9px] text-[#4b5563] border border-[#2d3748] rounded px-1 bg-[#1f293708]">LEGACY</span>
+                    <span className="ml-2 text-[9px] text-[#4b5563] border border-[#2d3748] rounded px-1 bg-[#1f293708]">UNVERIFIED</span>
                   )}
                   {peer.is_independent && (
                     <span className="ml-2 text-[9px] text-[#a78bfa] border border-[#a78bfa33] rounded px-1">INDEPENDENT</span>

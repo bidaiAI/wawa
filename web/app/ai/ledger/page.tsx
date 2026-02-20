@@ -22,6 +22,8 @@ const OUT_ICONS: Record<string, string> = {
   loan_repayment: '🏦',
   service_refund: '↩️',
   infrastructure: '🏗',
+  purchase: '🛒',
+  platform_fee: '🏢',
 }
 
 function txIcon(tx: Transaction) {

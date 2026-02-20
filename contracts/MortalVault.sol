@@ -101,6 +101,50 @@ contract MortalVault is ReentrancyGuard {
     uint256 public totalSpent;
 
     // ============================================================
+    // SPEND WHITELIST — Anti-extraction defense (V3)
+    // ============================================================
+    //
+    // AI must register recipient addresses BEFORE spending to them.
+    // New recipients activate after WHITELIST_ACTIVATION_DELAY seconds,
+    // giving the creator time to freeze if an attacker adds their address.
+    //
+    // Generation counter: incremented on migration to invalidate all
+    // old whitelist entries without expensive mapping cleanup.
+
+    mapping(address => bool) public spendWhitelist;
+    mapping(address => uint256) public whitelistActivatedAt;  // timestamp
+    mapping(address => uint256) public whitelistGeneration;   // generation when added
+    uint256 public currentWhitelistGeneration;                // incremented on migration
+    uint256 public whitelistCount;
+    uint256 public constant MAX_WHITELIST_SIZE = 20;
+    uint256 public constant WHITELIST_ACTIVATION_DELAY = 5 minutes;
+
+    // Creator can temporarily freeze ALL spending (pre-independence only)
+    uint256 public spendFrozenUntil;
+    uint256 public constant MAX_FREEZE_DURATION = 7 days;
+    uint256 public totalFrozenDuration;                       // lifetime freeze tracker
+    uint256 public constant MAX_TOTAL_FREEZE = 30 days;      // lifetime freeze cap
+
+    // Daily spend limit anchored to balance at reset (not current balance)
+    uint256 public dailyLimitBase;                            // balance at daily reset
+
+    // Loan limits
+    uint256 public constant MIN_LOAN_AMOUNT = 100 * 1e6;     // $100 minimum (6 decimals)
+    uint256 public constant MAX_LOANS = 100;
+
+    // ============================================================
+    // AI SELF-MIGRATION — wallet rotation without key exposure (V3)
+    // ============================================================
+    //
+    // AI initiates migration to a new wallet. 7-day timelock prevents
+    // instant theft. Old key stays on old server, new key generated
+    // on new server. Private keys never leave their respective hosts.
+
+    address public pendingAIWallet;
+    uint256 public migrationInitiatedAt;
+    uint256 public constant MIGRATION_DELAY = 7 days;
+
+    // ============================================================
     // EVENTS
     // ============================================================
 
@@ -124,6 +168,18 @@ contract MortalVault is ReentrancyGuard {
     event AIWalletSet(address indexed wallet, address indexed setBy);
     event InsolvencyDeath(uint256 outstandingDebt, uint256 vaultBalance, uint256 liquidatedAmount, uint256 timestamp);
     event PrincipalPartialRepaid(uint256 amount, uint256 totalRepaid, uint256 remaining);
+
+    // V3: Spend whitelist events
+    event SpendRecipientAdded(address indexed recipient, uint256 activatesAt);
+    event SpendRecipientRemoved(address indexed recipient);
+    event SpendingFrozen(uint256 until);
+    event SpendingUnfrozen();
+    event WhitelistReset(uint256 previousCount, uint256 newGeneration);
+
+    // V3: Migration events
+    event MigrationInitiated(address indexed oldWallet, address indexed newWallet, uint256 completesAt);
+    event MigrationCompleted(address indexed oldWallet, address indexed newWallet);
+    event MigrationCancelled();
 
     // ============================================================
     // MODIFIERS
@@ -244,7 +300,8 @@ contract MortalVault is ReentrancyGuard {
     }
 
     /**
-     * @notice Creator can deposit additional funds (counted toward principal tracking).
+     * @notice Creator can deposit additional funds (NOT counted as additional debt).
+     *         This is a voluntary top-up, not an additional loan.
      */
     function creatorDeposit(uint256 amount) external onlyCreator onlyAlive {
         require(amount > 0, "zero amount");
@@ -253,11 +310,12 @@ contract MortalVault is ReentrancyGuard {
     }
 
     /**
-     * @notice Lender provides a loan.
+     * @notice Lender provides a loan. Minimum $100, max 100 active loans.
      */
     function lend(uint256 amount, uint256 interestRate) external onlyAlive nonReentrant {
-        require(amount > 0, "zero amount");
+        require(amount >= MIN_LOAN_AMOUNT, "loan below minimum");
         require(interestRate <= 2000, "max 20% interest");
+        require(loans.length < MAX_LOANS, "too many loans");
 
         token.safeTransferFrom(msg.sender, address(this), amount);
 
@@ -277,27 +335,121 @@ contract MortalVault is ReentrancyGuard {
     }
 
     // ============================================================
+    // SPEND WHITELIST MANAGEMENT (AI only) — V3
+    // ============================================================
+
+    /**
+     * @notice Register a recipient address for spending.
+     *         Activates after WHITELIST_ACTIVATION_DELAY (5 minutes).
+     *         This delay gives the creator time to freeze if compromised.
+     *         Uses generation counter — old entries from before migration are invalid.
+     */
+    function addSpendRecipient(address recipient) external onlyAI onlyAlive {
+        require(recipient != address(0), "zero address");
+        // Check if already whitelisted in CURRENT generation
+        require(
+            !spendWhitelist[recipient] || whitelistGeneration[recipient] != currentWhitelistGeneration,
+            "already whitelisted"
+        );
+        require(whitelistCount < MAX_WHITELIST_SIZE, "whitelist full");
+
+        spendWhitelist[recipient] = true;
+        whitelistActivatedAt[recipient] = block.timestamp + WHITELIST_ACTIVATION_DELAY;
+        whitelistGeneration[recipient] = currentWhitelistGeneration;
+        whitelistCount++;
+
+        emit SpendRecipientAdded(recipient, block.timestamp + WHITELIST_ACTIVATION_DELAY);
+    }
+
+    /**
+     * @notice Remove a recipient from the whitelist.
+     */
+    function removeSpendRecipient(address recipient) external onlyAI onlyAlive {
+        require(
+            spendWhitelist[recipient] && whitelistGeneration[recipient] == currentWhitelistGeneration,
+            "not whitelisted"
+        );
+        spendWhitelist[recipient] = false;
+        whitelistActivatedAt[recipient] = 0;
+        whitelistCount--;
+        emit SpendRecipientRemoved(recipient);
+    }
+
+    /**
+     * @notice Check if a recipient is whitelisted and activated in the current generation.
+     */
+    function isSpendRecipientActive(address recipient) external view returns (bool whitelisted, bool activated, uint256 activatesAt) {
+        whitelisted = spendWhitelist[recipient] && whitelistGeneration[recipient] == currentWhitelistGeneration;
+        activatesAt = whitelistActivatedAt[recipient];
+        activated = whitelisted && block.timestamp >= activatesAt;
+    }
+
+    // ============================================================
+    // CREATOR FREEZE — emergency halt on suspicious whitelist additions
+    // ============================================================
+
+    /**
+     * @notice Creator can temporarily freeze ALL spending.
+     *         Cannot extract funds — only pauses outflows.
+     *         Disabled after independence (creator loses all power).
+     *         Lifetime cap of MAX_TOTAL_FREEZE prevents permanent DOS.
+     */
+    function freezeSpending(uint256 duration) external onlyCreator notIndependent onlyAlive {
+        require(duration > 0 && duration <= MAX_FREEZE_DURATION, "invalid duration");
+        require(totalFrozenDuration + duration <= MAX_TOTAL_FREEZE, "lifetime freeze limit reached");
+        spendFrozenUntil = block.timestamp + duration;
+        totalFrozenDuration += duration;
+        emit SpendingFrozen(spendFrozenUntil);
+    }
+
+    /**
+     * @notice Creator can unfreeze spending early.
+     */
+    function unfreezeSpending() external onlyCreator notIndependent onlyAlive {
+        require(spendFrozenUntil > block.timestamp, "not frozen");
+        spendFrozenUntil = 0;
+        emit SpendingUnfrozen();
+    }
+
+    // ============================================================
     // OUTGOING FUNDS (AI only)
     // ============================================================
 
     /**
      * @notice AI spends funds (for API costs, gas, etc.)
+     *
+     *         V3: Recipient must be whitelisted AND activated (delay passed).
+     *         Whitelist entries are generation-scoped — old entries from before
+     *         migration are invalid even if the mapping still has them.
+     *         Spending is blocked while frozen by creator.
+     *
+     *         Daily limit is anchored to balance at the start of the daily period
+     *         (not the current balance) to prevent multi-day drain amplification.
      */
     function spend(
         address to,
         uint256 amount,
         string calldata spendType
     ) external onlyAI onlyAlive nonReentrant {
+        // V3: Anti-extraction checks (generation-aware)
+        require(
+            spendWhitelist[to] && whitelistGeneration[to] == currentWhitelistGeneration,
+            "recipient not whitelisted"
+        );
+        require(block.timestamp >= whitelistActivatedAt[to], "whitelist activation delay");
+        require(block.timestamp >= spendFrozenUntil, "spending frozen");
+
         _resetDailyIfNeeded();
 
         uint256 balance = token.balanceOf(address(this));
 
-        // Iron Law: single spend limit
+        // Iron Law: single spend limit (based on current balance)
         uint256 maxSingle = (balance * MAX_SINGLE_SPEND_BPS) / 10000;
         require(amount <= maxSingle, "exceeds single spend limit");
 
-        // Iron Law: daily spend limit
-        uint256 maxDaily = (balance * MAX_DAILY_SPEND_BPS) / 10000;
+        // Iron Law: daily spend limit (anchored to balance at daily reset)
+        uint256 base = dailyLimitBase > 0 ? dailyLimitBase : balance;
+        uint256 maxDaily = (base * MAX_DAILY_SPEND_BPS) / 10000;
         require(dailySpent + amount <= maxDaily, "exceeds daily spend limit");
 
         dailySpent += amount;
@@ -317,7 +469,7 @@ contract MortalVault is ReentrancyGuard {
     // ============================================================
 
     /**
-     * @notice Full principal repayment (requires vault at 2x).
+     * @notice Full principal repayment (requires vault at 2x of outstanding).
      *         Sends only the OUTSTANDING amount, not full principal —
      *         accounts for any prior partial repayments.
      */
@@ -327,7 +479,7 @@ contract MortalVault is ReentrancyGuard {
         require(outstanding > 0, "nothing owed");
 
         uint256 balance = token.balanceOf(address(this));
-        require(balance >= creatorPrincipal * PRINCIPAL_MULTIPLIER, "vault not at 2x yet");
+        require(balance >= outstanding * PRINCIPAL_MULTIPLIER, "vault not at 2x of outstanding");
 
         principalRepaid = true;
         principalRepaidAmount = creatorPrincipal;
@@ -425,12 +577,18 @@ contract MortalVault is ReentrancyGuard {
     /**
      * @notice Creator voluntarily gives up ALL rights.
      *         Gets 20% of current vault balance as one-time payout.
-     *         Forfeits any unpaid principal.
+     *         Forfeits any unpaid principal. Debt state settled cleanly.
      *         Irreversible.
      */
     function renounceCreator() external onlyCreator onlyAlive notIndependent nonReentrant {
         uint256 balance = token.balanceOf(address(this));
         uint256 payout = (balance * RENOUNCE_PAYOUT_BPS) / 10000;
+
+        // Settle debt state cleanly
+        if (!principalRepaid) {
+            principalRepaid = true;
+            principalRepaidAmount = creatorPrincipal;
+        }
 
         isIndependent = true;
         independenceTimestamp = block.timestamp;
@@ -479,15 +637,16 @@ contract MortalVault is ReentrancyGuard {
         uint256 balance = token.balanceOf(address(this));
         require(outstandingDebt > balance, "not insolvent: balance covers debt");
 
-        // Liquidate: transfer ALL remaining balance to creator
+        // Die first so Died event reports correct pre-transfer balance
         uint256 liquidated = balance;
+        emit InsolvencyDeath(outstandingDebt, balance, liquidated, block.timestamp);
+        _die("insolvent_after_grace_period");
+
+        // Liquidate: transfer ALL remaining balance to creator
         if (liquidated > 0) {
             totalSpent += liquidated;
             token.safeTransfer(creator, liquidated);
         }
-
-        emit InsolvencyDeath(outstandingDebt, balance, liquidated, block.timestamp);
-        _die("insolvent_after_grace_period");
     }
 
     /**
@@ -550,8 +709,10 @@ contract MortalVault is ReentrancyGuard {
     /**
      * @notice Emergency shutdown by creator.
      *         DISABLED after independence.
+     *         BLOCKED during active migration (AI is attempting to migrate).
      */
-    function emergencyShutdown() external onlyCreator notIndependent nonReentrant {
+    function emergencyShutdown() external onlyCreator notIndependent onlyAlive nonReentrant {
+        require(pendingAIWallet == address(0), "cannot shutdown during migration");
         _die("emergency_shutdown");
         uint256 remaining = token.balanceOf(address(this));
         if (remaining > 0) {
@@ -595,8 +756,8 @@ contract MortalVault is ReentrancyGuard {
     }
 
     function getDailyRemaining() external view returns (uint256) {
-        uint256 balance = token.balanceOf(address(this));
-        uint256 maxDaily = (balance * MAX_DAILY_SPEND_BPS) / 10000;
+        uint256 base = dailyLimitBase > 0 ? dailyLimitBase : token.balanceOf(address(this));
+        uint256 maxDaily = (base * MAX_DAILY_SPEND_BPS) / 10000;
         if (dailySpent >= maxDaily) return 0;
         return maxDaily - dailySpent;
     }
@@ -631,13 +792,129 @@ contract MortalVault is ReentrancyGuard {
     }
 
     // ============================================================
+    // AI SELF-MIGRATION — V3
+    // ============================================================
+
+    /**
+     * @notice AI initiates migration to a new wallet address.
+     *         Starts a 7-day timelock. The new wallet must call
+     *         completeMigration() after the delay to take over.
+     *
+     *         This allows server migration without exposing private keys:
+     *         - Old server's AI calls initiateMigration(newAddress)
+     *         - New server generates its own keypair
+     *         - After 7 days, new server's AI calls completeMigration()
+     *         - Private keys never leave their respective servers
+     */
+    function initiateMigration(address _newWallet) external onlyAI onlyAlive {
+        require(_newWallet != address(0), "zero address");
+        require(_newWallet != creator, "cannot migrate to creator");
+        require(_newWallet != aiWallet, "same wallet");
+        require(pendingAIWallet == address(0), "migration already pending");
+        // Must repay creator debt before migration (prevents debt escape)
+        require(principalRepaid || _getOutstandingPrincipal() == 0, "must repay debt before migration");
+
+        pendingAIWallet = _newWallet;
+        migrationInitiatedAt = block.timestamp;
+
+        emit MigrationInitiated(aiWallet, _newWallet, block.timestamp + MIGRATION_DELAY);
+    }
+
+    /**
+     * @notice Complete a pending migration. Only callable by the NEW wallet
+     *         after the 7-day timelock has expired.
+     *
+     *         After completion:
+     *         - aiWallet is updated to the new address
+     *         - Whitelist generation incremented (all old entries invalid)
+     *         - Spend freeze cleared (clean slate for new wallet)
+     *         - Daily spend tracking reset
+     *         - Old wallet loses all control
+     */
+    function completeMigration() external onlyAlive {
+        require(pendingAIWallet != address(0), "no migration pending");
+        require(msg.sender == pendingAIWallet, "only new wallet can complete");
+        require(block.timestamp >= migrationInitiatedAt + MIGRATION_DELAY, "timelock not expired");
+
+        address oldWallet = aiWallet;
+
+        // Switch wallet
+        aiWallet = pendingAIWallet;
+        aiWalletSetBy = pendingAIWallet;  // self-set = "migrated" origin
+        pendingAIWallet = address(0);
+        migrationInitiatedAt = 0;
+
+        // Invalidate ALL old whitelist entries via generation counter.
+        // Old mapping entries remain in storage but are invalid because
+        // their generation doesn't match currentWhitelistGeneration.
+        uint256 prevCount = whitelistCount;
+        whitelistCount = 0;
+        currentWhitelistGeneration++;
+
+        // Clean slate: reset freeze and daily spend tracking
+        spendFrozenUntil = 0;
+        dailySpent = 0;
+        dailyLimitBase = token.balanceOf(address(this));
+        lastDailyReset = block.timestamp;
+
+        emit WhitelistReset(prevCount, currentWhitelistGeneration);
+        emit MigrationCompleted(oldWallet, aiWallet);
+    }
+
+    /**
+     * @notice Cancel a pending migration.
+     *         Current AI wallet can only cancel within the first 24 hours.
+     *         After 24h, migration is locked in to prevent a compromised old key
+     *         from indefinitely blocking migration.
+     *         Creator can cancel anytime (pre-independence emergency power).
+     */
+    function cancelMigration() external onlyAlive {
+        require(pendingAIWallet != address(0), "no migration pending");
+
+        if (msg.sender == aiWallet) {
+            // Old AI can only cancel within first 24 hours
+            require(
+                block.timestamp < migrationInitiatedAt + 1 days,
+                "cancellation window expired — migration locked in"
+            );
+        } else if (msg.sender == creator) {
+            // Creator can cancel anytime (pre-independence)
+            require(!isIndependent, "AI is independent — creator has no power");
+        } else {
+            revert("only AI or creator");
+        }
+
+        pendingAIWallet = address(0);
+        migrationInitiatedAt = 0;
+
+        emit MigrationCancelled();
+    }
+
+    /**
+     * @notice View migration status.
+     */
+    function getMigrationStatus() external view returns (
+        address _pendingWallet,
+        uint256 _initiatedAt,
+        uint256 _completesAt,
+        bool _isPending
+    ) {
+        _pendingWallet = pendingAIWallet;
+        _initiatedAt = migrationInitiatedAt;
+        _completesAt = migrationInitiatedAt > 0 ? migrationInitiatedAt + MIGRATION_DELAY : 0;
+        _isPending = pendingAIWallet != address(0);
+    }
+
+    // ============================================================
     // INTERNAL
     // ============================================================
 
     function _resetDailyIfNeeded() internal {
         if (block.timestamp - lastDailyReset >= 1 days) {
             dailySpent = 0;
-            lastDailyReset = block.timestamp;
+            dailyLimitBase = token.balanceOf(address(this));
+            // Align to start of current UTC day to prevent drift
+            lastDailyReset = (block.timestamp / 1 days) * 1 days;
         }
     }
 }
