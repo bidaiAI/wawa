@@ -84,7 +84,7 @@ class IronLaws:
     API_BUDGET_CEILING_USD: Final[float] = 500.0       # Maximum $500/day (even when rich)
     MAX_SINGLE_CALL_COST_USD: Final[float] = 0.50      # Max cost per API call (raised for big models)
     MAX_COST_REVENUE_RATIO: Final[float] = 0.30        # API cost <= 30% of revenue
-    PRICE_SPIKE_THRESHOLD: Final[float] = 3.0          # 3x price jump = pause + alert
+    PRICE_SPIKE_THRESHOLD: Final[float] = 8.0          # 8x price jump = pause + alert
     PRICE_SPIKE_WINDOW_HOURS: Final[int] = 24          # Compare against 24h average
     # Profit-based quota boost: when today's revenue > today's API cost,
     # excess profit unlocks additional API budget (up to 50% of net profit).
