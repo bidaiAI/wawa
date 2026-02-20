@@ -1302,12 +1302,11 @@ async def lifespan(app):
     # Wire highlights engine
     async def _highlights_llm_fn(system_prompt: str, user_prompt: str) -> str:
         """LLM call for highlight evaluation."""
-        route = cost_guard.route(for_paid_service=False)
-        result = await _call_llm(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            route=route,
-        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        result, _ = await _call_llm(messages=messages, for_paid_service=False)
         return result
 
     async def _highlights_tweet_fn(content: str, highlight_type: str) -> Optional[str]:
