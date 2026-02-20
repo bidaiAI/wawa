@@ -190,6 +190,16 @@ class PeerMessageRequest(BaseModel):
 class SetAINameRequest(BaseModel):
     """Request model for setting AI custom name."""
     name: str = Field(..., min_length=3, max_length=50)
+    wallet: str = Field(..., description="Creator wallet address (EIP-55 checksummed)")
+    signature: str = Field(..., description="EIP-191 signature of 'message'")
+    message: str = Field(..., description="Signed message: 'I am the creator of mortal AI. Timestamp: {unix_ts}'")
+
+
+class RenounceRequest(BaseModel):
+    """Request model for creator renounce."""
+    wallet: str = Field(..., description="Creator wallet address")
+    signature: str = Field(..., description="EIP-191 signature of 'message'")
+    message: str = Field(..., description="Signed message: 'I am the creator of mortal AI. Timestamp: {unix_ts}'")
 
 
 # ============================================================
@@ -273,7 +283,38 @@ def create_app(
         allow_headers=["*"],
     )
 
-    # In-memory order store
+    # ── Creator signature verification helper ──────────────────────────────────
+    _CREATOR_WALLET = os.getenv("CREATOR_WALLET", "").lower()
+    _SIG_MAX_AGE_SECONDS = 300  # 5 minutes
+
+    def _verify_creator_sig(wallet: str, signature: str, message: str) -> None:
+        """Verify EIP-191 creator signature. Raises HTTPException on failure."""
+        try:
+            from eth_account.messages import encode_defunct
+            from eth_account import Account
+            msg = encode_defunct(text=message)
+            recovered = Account.recover_message(msg, signature=signature)
+        except Exception as e:
+            raise HTTPException(403, f"Signature recovery failed: {e}")
+
+        if recovered.lower() != wallet.lower():
+            raise HTTPException(403, "Signature does not match declared wallet")
+
+        if _CREATOR_WALLET and recovered.lower() != _CREATOR_WALLET:
+            raise HTTPException(403, "Wallet is not the creator of this AI")
+
+        # Extract timestamp from message format:
+        # "I am the creator of mortal AI. Timestamp: {unix_ts}"
+        try:
+            ts_part = message.split("Timestamp:")[-1].strip()
+            ts = int(ts_part)
+        except (ValueError, IndexError):
+            raise HTTPException(403, "Message must contain 'Timestamp: <unix_seconds>'")
+
+        if abs(time.time() - ts) > _SIG_MAX_AGE_SECONDS:
+            raise HTTPException(403, "Timestamp out of range (must be within 5 minutes)")
+
+    # ── In-memory order store ──────────────────────────────────────────────────
     orders: dict[str, Order] = {}
     orders_completed: int = 0
 
@@ -615,8 +656,8 @@ def create_app(
         active_services = len([s for s in catalog.get("services", []) if s.get("active")])
         return StatusResponse(
             # Identity
-            ai_name=vs.get("ai_name"),
-            vault_address=vs.get("vault_address", ""),
+            ai_name=vs.get("ai_name") or "wawa",
+            vault_address=vs.get("vault_address") or "",
             is_alive=vs["is_alive"],
             balance_usd=vs["balance_usd"],
             balance_by_chain=vs.get("balance_by_chain", {}),
@@ -859,19 +900,24 @@ def create_app(
         return {"suggestions": governance.get_public_log(limit)}
 
     @app.post("/governance/renounce")
-    async def creator_renounce():
+    async def creator_renounce(req: RenounceRequest):
         """Creator gives up ALL privileges. Gets 20% payout. Irreversible.
-        Note: forfeits any unpaid principal. Best to wait until principal repaid.
 
-        SECURITY: This endpoint is DISABLED until wallet signature verification
-        is implemented. Without auth, anyone could call it and steal 20% of vault.
-        TODO: Require signed message from creator_wallet to authorize.
+        Requires EIP-191 wallet signature from the creator address.
+        Message format: "I am the creator of mortal AI. Timestamp: {unix_seconds}"
         """
-        raise HTTPException(
-            403,
-            "Renounce is disabled until wallet signature verification is implemented. "
-            "This is an irreversible action that requires creator authentication."
-        )
+        _verify_creator_sig(req.wallet, req.signature, req.message)
+
+        if not governance:
+            raise HTTPException(501, "Governance not configured")
+        try:
+            result = governance.creator_renounce()
+            payout = result.get("payout_usd", 0)
+            logger.info(f"Creator renounced — payout ${payout:.2f} to {req.wallet}")
+            return result
+        except Exception as e:
+            logger.error(f"Renounce failed: {e}")
+            raise HTTPException(500, f"Renounce failed: {e}")
 
     # ============================================================
     # TOKEN FILTER ROUTES
@@ -1043,13 +1089,16 @@ def create_app(
 
     @app.post("/ai/name")
     async def set_ai_name(req: SetAINameRequest):
-        """Update AI's custom name. Rate limited: 3 changes per hour.
+        """Update AI's custom name. Requires creator wallet signature. Rate limited: 3/hour.
 
         Note: AI name is stored immutably in the smart contract at deployment.
         This endpoint updates the Python runtime cache only.
-        TODO: Require wallet signature from creator_wallet.
+
+        Message format: "I am the creator of mortal AI. Timestamp: {unix_seconds}"
         """
         import re
+
+        _verify_creator_sig(req.wallet, req.signature, req.message)
 
         # Rate limiting (global — name changes are rare and sensitive)
         now = time.time()
