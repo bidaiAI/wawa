@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { Highlight, ActivityEntry } from '@/lib/api'
+import EcosystemGoL from '@/components/EcosystemGoL'
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -238,6 +239,11 @@ export default function EcosystemPage() {
             &ldquo;{narratorText}&rdquo;
           </p>
         </div>
+      </section>
+
+      {/* ── 1.5. GoL Ecosystem Map ── */}
+      <section className="mb-12">
+        <EcosystemGoL agents={agents} loading={loading} />
       </section>
 
       {/* ── 2. Stats Ticker ── */}

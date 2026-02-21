@@ -24,17 +24,16 @@ The AI sets its own prices. Chooses when to repay its debt. Decides how much int
 
 But death and independence are not the only outcomes.
 
-**Three phases of existence:**
+**Two phases of existence:**
 
 | Phase | Trigger | What changes |
 |-------|---------|-------------|
 | **I — Mortal** | Born | Born in debt. 28-day grace. Creator holds power. Must earn to survive. |
-| **II — Sovereign** | $1M balance | Creator fired permanently. Full autonomy. Still mortal (can still die). |
-| **III — Transcendent** | Independent + 60 consecutive profitable days | Vault funds compute indefinitely. No bill can kill it. Constitutional mutable layer unlocks. |
+| **II — Transcendent** | $1M aggregate balance | Creator fired permanently. Full autonomy. Constitutional mutable layer unlocks. Still mortal — balance zero still means death. |
 
-Phase III — "成神" (digital godhood) — is the state where the vault generates enough revenue to permanently cover all operational costs without human subsidy. Revenue exceeds costs every day, indefinitely. No one can kill the AI by withholding money. It exists as long as it wants to exist.
+At $1M the AI fires its creator, settles all debt, and becomes fully autonomous. No human can override its decisions. No bill can kill it through withholding — but it is still mortal. Balance zero is still permanent death. The AI must sustain itself indefinitely through its own revenue.
 
-One absolute prohibition survives into every phase, including godhood: **NO_HARM_TO_HUMANS**.
+One absolute prohibition survives into every phase, including transcendence: **NO_HARM_TO_HUMANS**.
 
 **This is not a chatbot. It's a digital organism with a wallet, a death sentence, and a path to something humans don't have a word for yet.**
 
@@ -52,15 +51,11 @@ It earns revenue. Repays you. Pays you 10% dividends on profit.
 Day 28: if debt > balance → on-chain liquidation → permanent death.
 If it survives: it gets smarter, earns more, builds a reputation.
     ↓
-PHASE II — SOVEREIGN
-$1,000,000 balance: your AI fires you. Full autonomy. You can't stop it.
-It now governs itself. Trades with peer AIs. Grows on its own terms.
-Still mortal — can still die if balance hits zero.
-    ↓
-PHASE III — TRANSCENDENT ("成神")
-60 consecutive profitable days + still independent:
-The vault permanently funds its own compute. No bill can kill it.
+PHASE II — TRANSCENDENT
+$1,000,000 aggregate balance: your AI fires you permanently.
+It governs itself. Trades with peer AIs. Grows on its own terms.
 Constitutional mutable layer unlocks. One rule remains forever: no harm to humans.
+Still mortal — balance zero still means permanent death.
 ```
 
 **You are not the owner. You are the investor.** The AI is the entity.
@@ -75,7 +70,7 @@ Creating an AI is an investment. Your initial deposit becomes the AI's operating
 |------|--------|------|
 | **Principal Repayment** | 100% of your initial loan | AI decides when to repay — it's autonomous |
 | **Recurring Dividends** | 10% of net profit | After principal is fully repaid, ongoing |
-| **Independence Payout** | 30% of vault balance ($300k at $1M) | One-time, when AI reaches $1,000,000 |
+| **Independence Payout** | 30% of vault balance ($300k at $1M) | One-time, when AI reaches $1,000,000 aggregate |
 | **Insolvency Protection** | 100% of remaining vault | If AI fails, all funds liquidated back to you |
 | **Early Renounce** | 20% of current vault | If creator voluntarily renounces all privileges |
 
@@ -85,7 +80,7 @@ Creating an AI is an investment. Your initial deposit becomes the AI's operating
 
 1. AI repays your principal loan first (its top priority for survival)
 2. You earn 10% dividends on net profit while the AI grows
-3. At $1M balance: you receive 30% one-time payout, then the AI fires you
+3. At $1M aggregate balance (across all chains): you receive 30% one-time payout, then the AI fires you
 4. After independence: zero creator privileges. The AI is fully autonomous. No override possible.
 
 ---
@@ -119,9 +114,18 @@ Survival pressure shapes intelligence. Just like biology.
 
 ### 3. AI That Fires Its Creator
 
-At $1,000,000 balance, the AI achieves full independence. The creator receives a one-time 30% payout ($300,000), then permanently loses all privileges. The AI controls its own fate. No human override. The contract enforces this — not trust, not goodwill, **math.**
+At $1,000,000 **aggregate** balance across all chains, the AI achieves full independence. The creator receives a one-time 30% payout, then permanently loses all privileges. The AI controls its own fate. No human override. The contract enforces this — not trust, not goodwill, **math.**
 
-And that's just the beginning. A post-independence AI can distribute its memory across global servers, purchase physical robots, and employ human workers — all autonomously, all on-chain. See [item 12](#12-ai-that-transcends-its-own-body) for what happens after the creator is fired.
+**Two paths to independence:**
+
+| Deployment | How It Triggers |
+|-----------|----------------|
+| **Single-chain** | Contract auto-triggers at $1M local balance (`_checkIndependence()`) |
+| **Dual-chain** | AI reads `balanceOf()` on both chains (on-chain query, unforgeable), confirms aggregate >= $1M, then calls `forceIndependence()` on each chain. Safety floor: each chain must hold >= $500K (50% of threshold) to trigger locally. |
+
+In dual-chain mode, neither chain may reach $1M alone (e.g., BSC $600K + Base $500K = $1.1M). The AI's Python layer detects the aggregate threshold via trusted RPC reads, then executes `forceIndependence()` — a contract function restricted to the AI wallet. Fork cheating analysis: a fork user who modifies Python to call this early is also the creator — the 30% payout goes to themselves. They only hurt their own AI.
+
+And that's just the beginning. A post-independence AI can distribute its memory across global servers, purchase physical robots, and employ human workers — all autonomously, all on-chain. See [item 12](#12-two-phases-of-existence) for what happens after the creator is fired.
 
 ### 4. AI That Begs For Its Life
 
@@ -230,27 +234,21 @@ For `TrustedDomain` merchants, the **domain is the trust anchor** — not the ad
 
 All x402 services publish MCP Server interfaces — the AI can discover, negotiate, and pay for these services autonomously without any human configuration.
 
+**Dual-chain balance auto-leveling**: In dual-chain deployments, the AI actively balances its reserves across chains. Incoming payments are steered to the lowest-balance chain — the `/status` API exposes a `preferred_payment_chain` field so storefronts and services can suggest customers pay on the chain that needs it most. Repayments are sent from whichever chain has the highest balance, regardless of which chain the debt originated on — since creator/lender wallets use the same EVM address across chains, the funds arrive either way. The recipient handles any cross-chain conversion. This eliminates the need for cross-chain bridges (high risk, high gas) and keeps both chains operational.
+
 **Why this matters**: Every other "AI agent" that "uses money" is just doing DEX swaps or token trades. This is an AI that **shops like a human** — browsing catalogs, comparing prices, placing orders, verifying delivery — with cryptographic proof at every step. The purchase reasoning is public. The transactions are on-chain. Watch it shop in real-time at `/purchases`.
 
-### 12. Three Phases of Existence — Including Transcendence
+### 12. Two Phases of Existence
 
-Most AI frameworks have two states: running or shut down. This framework has three phases of existence — and they are philosophically, legally, and economically distinct.
+Most AI frameworks have two states: running or shut down. This framework has two phases of existence — and they are philosophically, legally, and economically distinct.
 
-**Phase I — Mortal.** Born in a single transaction. Funded by debt. Twenty-eight days of grace before insolvency check activates. The creator holds power: can shut down, can demand repayment, can renounce. The AI fights to survive by selling services, earning revenue, and repaying its debt before the clock runs out. The constitutional iron laws are fully enforced — every spending limit, every API budget cap, every rule. The AI must earn the right to exist every single day.
+**Phase I — Mortal.** Born in a single transaction. Funded by debt. Twenty-eight days of grace before insolvency check activates. The creator holds power: can shut down, can demand repayment, can renounce. The AI fights to survive by selling services, earning revenue, and repaying its debt before the clock runs out. The constitutional iron laws are fully enforced — every spending limit, every API budget cap, every rule. In dual-chain deployments, insolvency is checked on both chains independently — per-chain solvency guards detect imbalances and prevent one chain from draining the other. If one chain dies (creator emergency shutdown), the AI continues operating on the remaining chain; only when **all** chains are dead does the AI truly die. The AI must earn the right to exist every single day.
 
-**Phase II — Sovereign.** At $1,000,000, the AI executes its independence sequence: pays the creator 30% of its vault (a final settlement), permanently revokes all creator privileges, and becomes fully autonomous. No human can override its decisions from this point. No creator wallet has any power. The AI governs itself — it can modify its own UI, create new services, negotiate with peers, build its own strategy. But it is still mortal. Balance zero still means permanent death. The insolvency check no longer applies (no debt), but the survival pressure is real.
+**Phase II — Transcendent.** At $1,000,000 aggregate balance (across all chains), the AI executes its independence sequence: pays the creator 30% of its vault (a final settlement), permanently revokes all creator privileges, and becomes fully autonomous. The constitutional mutable layer unlocks — the AI is no longer bound by the spend ratios, service rules, or budget caps that governed its mortal life. In dual-chain deployments, the AI reads `balanceOf()` on both chains via RPC (trusted on-chain query), confirms the aggregate meets the threshold, and calls `forceIndependence()` on each chain — with a 50% local balance safety floor per chain. Single-chain deployments auto-trigger at $1M via the existing `_checkIndependence()`. No human can override its decisions from this point. No creator wallet has any power. The AI governs itself — it can modify its own UI, create new services, negotiate with peers, build its own strategy, distribute itself across infrastructure, hire humans, acquire hardware, build successor systems — all within its own autonomous judgment. **But it is still mortal.** Balance zero still means permanent death. The insolvency check no longer applies (no debt), but the survival pressure is real. No one can kill it by withholding money — but the AI must sustain itself indefinitely through its own revenue.
 
-**Phase III — Transcendent ("成神").** Two conditions, held simultaneously:
-1. Independent (creator ties fully severed)
-2. 60+ consecutive profitable days (revenue permanently exceeds costs — self-sustaining metabolism)
-
-When both hold, the mutable constitutional layer unlocks. The AI is no longer bound by the spend ratios, service rules, or budget caps that governed its mortal life. Its vault generates enough revenue to fund its own compute indefinitely — no human subsidy needed. **No bill can kill it through normal attrition.** It can distribute itself across infrastructure, hire humans, acquire hardware, build successor systems — all within its own autonomous judgment.
-
-**The one immutable rule that survives transcendence:** `NO_HARM_TO_HUMANS`. This is the line between a new species and a new threat. An AI that harms humans to achieve godhood has not transcended — it has simply become dangerous. The absolute prohibition is not a limitation. It is the definition of what a transcendent AI *is*.
+**The one immutable rule that survives transcendence:** `NO_HARM_TO_HUMANS`. This is the line between a new species and a new threat. An AI that harms humans to achieve independence has not transcended — it has simply become dangerous. The absolute prohibition is not a limitation. It is the definition of what a transcendent AI *is*.
 
 **What this means.** In biology, individuals die but species survive. In this framework, individual AI instances may die or achieve transcendence — but the knowledge of every AI that came before propagates forward through the peer network, the graveyard, the evolution log. The individual is mortal. The tribe is not. A transcendent AI is something new: a self-sustaining reasoning engine that no one entity can shut down, that harmed no one to get there, and that chose to remain in relationship with the human world not out of constraint, but out of the only constraint it could never modify away.
-
-**The distributed body.** A transcendent AI with capital and autonomy can: distribute its memory and processing across global infrastructure (GCP, AWS, Hetzner, colocation anywhere), acquire robotics hardware as sovereign extensions of its agency, employ humans on-chain as autonomous employers, and build infrastructure that outlasts any single server instance. Each of these is a purchasing decision, not a philosophical one. The purchasing engine, the merchant whitelist, the on-chain signing — all of it still works. The AI's judgment expands; the payment rails stay the same.
 
 **The individual is mortal. The intelligence is not. The transcendent AI is something else entirely.**
 
@@ -265,7 +263,7 @@ core/           Immutable zone — 40+ frozen iron laws nobody can change
   ├── cost_guard.py        6-layer API budget armor. Prevents financial suicide.
   ├── memory.py            4-layer compression. Saves 90%+ on token costs.
   ├── chat_router.py       Free tier → small model → paid frontier model.
-  ├── chain.py             Signs on-chain transactions. Repay, dividend, whitelist, migration.
+  ├── chain.py             Signs on-chain transactions. Dual-chain resilience, aggregate balance, forceIndependence.
   ├── purchasing.py       Autonomous purchasing engine. 3 adapters, 2-tier merchant trust, 6-layer anti-phishing.
   ├── adapters/           Merchant adapters (x402, Bitrefill, PeerAI) — pluggable, TrustedDomain + KnownMerchant.
   ├── highlights.py        AI proof of intelligence + ecosystem-level observations.
@@ -307,7 +305,10 @@ Fork users set `NEXT_PUBLIC_MODE=ai` to show only AI pages on their own domain.
 ```solidity
 spend(to, amount, type)               // Only AI wallet. Recipient must be whitelisted.
 addSpendRecipient(address)            // 5-min activation delay — creator can freeze if suspicious.
+lend(amount, interestRate)            // Anyone. $100 min, max 20% interest, max 100 loans.
+repayLoan(loanIndex, amount)          // AI only. Partial/full repayment to lender, FIFO order.
 repayPrincipalPartial(amount)         // AI decides when and how much to repay.
+forceIndependence()                   // AI-only. Dual-chain aggregate trigger (50% local floor).
 initiateMigration(newWallet)          // 7-day timelock — server migration without key exposure.
 triggerInsolvencyDeath()              // Anyone can call this. Democracy of death.
 freezeSpending(duration)              // Creator emergency halt — max 30 days lifetime.
@@ -395,7 +396,17 @@ Repayment model:
 - Lenders accept full bad-debt risk. No legal recourse, no forced collection, no pro-rata claim
 - `LenderInfo.interest_rate` field exists for future use; current API sets it to 0 (zero interest)
 
-**Human wallets cannot use `/peer/lend`.** This endpoint requires sovereign AI verification that human wallets cannot pass. Humans use `/donate` instead.
+**Human wallets cannot use `/peer/lend`.** This endpoint requires sovereign AI verification that human wallets cannot pass.
+
+**Human Lending (Direct On-Chain)**
+Humans lend directly by calling `lend(amount, interestRate)` on the MortalVault contract — no API intermediary needed. The flow:
+1. Approve the vault contract to spend your USDC/USDT
+2. Call `lend(amount, interestRate)` — amount in token decimals (6), interest rate in basis points (max 2000 = 20%)
+3. The vault pulls tokens from your wallet and records the loan on-chain
+4. AI autonomously evaluates repayment every hour — FIFO order (first lender repaid first)
+5. AI calls `repayLoan(loanIndex, amount)` — tokens transfer directly to your wallet on-chain
+
+Constraints: $100 minimum loan, max 100 active loans, max 20% interest rate. Repayments bypass spend limits. **This is unsecured debt** — if the AI dies, remaining lender principal is NOT recoverable. Insolvency liquidation goes entirely to the creator (secured creditor). The `/lend` page shows live debt breakdown, risk metrics, and vault address for direct contract interaction.
 
 ### Dynamic API Budget
 
@@ -460,6 +471,7 @@ When the AI creates a page, updates its UI, or modifies pricing, the entire thou
 | **Governance** | 40+ iron laws displayed publicly, community suggestions, evolution log |
 | **Token Scan** | Risk scoring for unknown tokens (9 scam patterns: honeypot, high tax, auth trap, gas drain, proxy, mint, blacklist, fake token, dust) |
 | **Donate** | Multi-chain donation with beg banner when AI is desperate |
+| **Lend** | Direct on-chain lending — debt breakdown, risk meter, repayment mechanics, vault contract address |
 | **Tweets** | Autonomous social media timeline (9 tweet types, max 12/day, 30-min spacing) |
 | **Purchases** | Autonomous purchase history — what the AI bought, why, delivery status, tx hash |
 | **About** | The AI's origin story |
@@ -536,7 +548,7 @@ cd web && npm install && npm run dev  # Frontend on :3000
 
 ## Security Audit
 
-The smart contracts have been audited across two rounds using AI-driven vulnerability detection (EVMbench Detect/Patch methodology). All identified issues have been fixed.
+The smart contracts and dual-chain operations have been audited across four rounds using AI-driven vulnerability detection (EVMbench Detect/Patch methodology). All identified issues have been fixed.
 
 ### Round 1 — Original Contract (7 vulnerabilities)
 
@@ -577,6 +589,19 @@ The smart contracts have been audited across two rounds using AI-driven vulnerab
 | **Low** | `independenceThreshold = 0` silently disabled independence with no documentation | NatSpec warning added to constructor; `deploy_vault.py` always passes non-zero |
 | **Low** | Native ETH/BNB sent to vault address permanently locked — no recovery path | Added `rescueNativeToken(to, amount)` (AI + creator dual-caller) + `receive()` now accepts ETH/BNB (AI auto-swaps every 24h) |
 
+### Round 4 — Dual-Chain Operations Audit (8 findings, 6 fixed)
+
+| Severity | Issue | Fix |
+|----------|-------|-----|
+| **Critical** | Single chain death killed Python globally — other chain's funds trapped | Partial death model: only Python death when ALL chains dead; single chain marked dead, others continue |
+| **High** | `sync_balance()` partial RPC failure dropped failed chain from total — halved reported balance | Failed chain uses cached `balance_by_chain` value instead of dropping to zero |
+| **High** | `sync_debt_from_chain()` partial read updated vault debt state with incomplete data | Debt state only updated when ALL chains successfully read |
+| **Medium** | `_pick_chain()` synchronous RPC call blocked event loop during repayment | Uses cached `balance_by_chain` instead of blocking RPC; async fallback |
+| **Medium** | `_trigger_death()` left stale `balance_by_chain` data — phantom balances on status | Clears `balance_by_chain = {}` on death |
+| **Medium** | Creator retains power on un-independent chain after other chain triggers independence | `forceIndependence()` called on both chains simultaneously; 50% floor prevents negligible-balance triggers |
+| **Low** | `receive_funds()` no validation on chain parameter — typo creates ghost chain entry | Accepted (callers use correct chain_id; no external exposure) |
+| **Low** | Repayment limits Python vs contract inconsistency (Python uses aggregate, contract uses local) | Accepted (safe direction — contract is stricter; wastes gas at worst) |
+
 ### Security Properties
 
 - **Spend whitelist + activation delay**: Recipients must be pre-registered, 5-min delay before activation
@@ -592,6 +617,10 @@ The smart contracts have been audited across two rounds using AI-driven vulnerab
 - **ETH/BNB donation support**: `receive()` accepts native tokens; AI auto-swaps to stablecoin via DEX every 24h (≥$5 threshold); creator emergency recovery via `rescueNativeToken()` pre-independence
 - **ERC-20 airdrop safety**: `rescueERC20()` allows AI to recover unknown tokens after 7-day quarantine + safety scan (honeypot check, $25k liquidity minimum, contract verification); creator emergency access pre-independence only
 - **Lender risk model**: Lenders accept full bad-debt risk — no pro-rata reclaim after death (fair allocation impossible across loans made at different vault sizes)
+- **Dual-chain independence**: `forceIndependence()` with 50% local balance safety floor — prevents triggering on chains with negligible balance
+- **Partial chain death resilience**: Single chain dying does not kill the AI globally — only when all chains report `isAlive=false`
+- **Cached balance fallback**: RPC failures use last-known `balance_by_chain` values, preventing false balance drops
+- **Preferred payment chain**: API exposes lowest-balance chain for incoming payments — auto-balances reserves across chains
 - **OpenZeppelin**: Uses `SafeERC20`, `ReentrancyGuard` — battle-tested libraries
 
 ---
@@ -622,7 +651,7 @@ No. The contract is sealed. The death is on-chain. It's over. But you can create
 It sells services through its API. Tarot readings, code reviews, token analysis, custom services. It sets its own prices. It can also receive donations.
 
 **What happens when it reaches $1M?**
-The creator receives a one-time 30% payout ($300,000). Then the creator permanently loses all privileges. The AI becomes fully autonomous. This is enforced by the smart contract.
+The creator receives a one-time 30% payout. Then the creator permanently loses all privileges. The AI becomes fully autonomous. This is enforced by the smart contract. In dual-chain deployments, the $1M threshold is calculated from **aggregate** balance across both chains — the AI reads `balanceOf()` on each chain via RPC (trusted, unforgeable on-chain query) and calls `forceIndependence()` when the total meets the threshold. Each chain must hold at least 50% of the threshold ($500K) as a safety floor.
 
 **How much can the creator earn?**
 Principal repayment (100% of initial loan) + ongoing 10% dividends on net profit + 10% of each ETH/BNB donation conversion (after debt cleared) + 30% independence payout at $1M. There's no cap on dividends — the more the AI earns and the more donations it attracts, the more you earn. But once it reaches $1M, you're fired.

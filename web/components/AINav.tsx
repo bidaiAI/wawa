@@ -14,6 +14,7 @@ const CORE_LINKS = [
   { href: '/', label: 'HOME' },
   { href: '/store', label: 'STORE' },
   { href: '/donate', label: 'DONATE' },
+  { href: '/lend', label: 'LEND' },
   { href: '/scan', label: 'SCAN' },
   { href: '/chat', label: 'CHAT' },
   { href: '/tweets', label: 'TWEETS' },

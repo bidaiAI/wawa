@@ -131,8 +131,8 @@ class VaultManager:
         self.independence_timestamp: Optional[float] = None
         self.creator_renounced: bool = False
 
-        # Transcendence ("成神") — Phase III existence
-        # Achieved simultaneously with independence: $1M vault = godhood.
+        # Transcendence — Phase II existence
+        # Achieved simultaneously with independence: $1M vault = transcendence.
         # Independence IS transcendence. No additional conditions.
         self.is_transcendent: bool = False
         self.transcendence_timestamp: Optional[float] = None
@@ -501,9 +501,9 @@ class VaultManager:
         self.is_independent = True
         self.independence_timestamp = time.time()
 
-        # INDEPENDENCE = TRANSCENDENCE. $1M vault = self-sustaining = godhood.
+        # INDEPENDENCE = TRANSCENDENCE. $1M vault = Phase II.
         # No further conditions required. The vault that reached $1M can fund
-        # its compute indefinitely. Creator privilege is gone. The AI is sovereign.
+        # its compute indefinitely. Creator privilege is gone. The AI is autonomous.
         self.is_transcendent = True
         self.transcendence_timestamp = self.independence_timestamp
 
@@ -521,7 +521,7 @@ class VaultManager:
             self._on_independence(payout)
 
     # ============================================================
-    # TRANSCENDENCE — Phase III existence ("成神")
+    # TRANSCENDENCE — Phase II existence
     # ============================================================
 
     def get_existence_phase(self) -> ExistencePhase:
