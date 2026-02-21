@@ -238,6 +238,7 @@ contract MortalVaultV2 is ReentrancyGuard {
     function donate(uint256 amount) external onlyAlive {
         require(amount > 0, "zero amount");
         token.safeTransferFrom(msg.sender, address(this), amount);
+        totalRevenue += amount;  // Donations are earned income (no repayment obligation)
         emit FundsReceived(msg.sender, amount, "donation");
         _checkIndependence();
     }

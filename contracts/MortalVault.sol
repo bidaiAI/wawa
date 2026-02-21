@@ -314,10 +314,15 @@ contract MortalVault is ReentrancyGuard {
 
     /**
      * @notice Anyone can donate to keep the AI alive.
+     *         Counted in totalRevenue (earned income) to mirror Python vault's
+     *         total_earned_usd which includes DONATION fund type.
+     *         Contrast: lend() and creatorDeposit() are capital injections
+     *         (debt obligations), NOT counted as earned revenue.
      */
     function donate(uint256 amount) external onlyAlive {
         require(amount > 0, "zero amount");
         token.safeTransferFrom(msg.sender, address(this), amount);
+        totalRevenue += amount;  // Donations are earned income (no repayment obligation)
         emit FundsReceived(msg.sender, amount, "donation");
 
         _checkIndependence();

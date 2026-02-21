@@ -966,6 +966,8 @@ def create_app(
             description=f"Donation: {req.message[:100]}" if req.message else "Donation",
             chain=chain,
         )
+        # Record in cost_guard so profit-based API quota and revenue ratio include donations
+        cost_guard.record_revenue(verified_amount)
 
         memory.add(
             f"Received ${verified_amount:.2f} donation from {req.from_wallet[:20] or 'anonymous'}. "
@@ -1144,6 +1146,8 @@ def create_app(
             ),
             chain=req.chain_id,
         )
+        # Record in cost_guard so profit-based API quota and revenue ratio include peer transfers
+        cost_guard.record_revenue(verified_amount)
 
         memory.add(
             f"Verified peer AI lent ${req.amount_usd:.2f} from {req.from_url[:50]}. "
