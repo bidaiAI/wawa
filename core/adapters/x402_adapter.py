@@ -32,9 +32,10 @@ from typing import Optional
 
 import aiohttp
 
-from core.constitution import KNOWN_MERCHANTS, KnownMerchant
+from core.constitution import KNOWN_MERCHANTS, TRUSTED_DOMAINS, KnownMerchant, TrustedDomain
 from core.purchasing import (
     MerchantAdapter,
+    MerchantRegistry,
     ServiceOffer,
     OrderIntent,
     DeliveryResult,
@@ -73,11 +74,16 @@ class X402Adapter(MerchantAdapter):
 
     AI sends a request, gets a 402 response with payment instructions,
     pays on-chain, then retries with payment proof.
+
+    Uses TrustedDomain entries from TRUSTED_DOMAINS. The payTo address is
+    discovered at runtime from the 402 response header and registered with
+    the MerchantRegistry so execute_purchase() can validate it.
     """
 
-    def __init__(self):
+    def __init__(self, registry: Optional["MerchantRegistry"] = None):
         self._session: Optional[aiohttp.ClientSession] = None
         self._timeout = aiohttp.ClientTimeout(total=30)
+        self._registry = registry  # Injected by PurchaseManager or lifespan
 
     @property
     def adapter_id(self) -> str:
@@ -92,31 +98,35 @@ class X402Adapter(MerchantAdapter):
         """
         Return known x402-compatible endpoints.
 
-        Only returns endpoints whose merchant_id exists in KNOWN_MERCHANTS.
+        Matches endpoints against TRUSTED_DOMAINS (domain-anchored) first,
+        then falls back to KNOWN_MERCHANTS (static-address) for backwards
+        compatibility. Only includes endpoints with a known merchant entry.
         """
-        known_ids = {m.merchant_id for m in KNOWN_MERCHANTS if m.adapter_id == "x402"}
+        # Build a lookup of all known x402 merchant IDs from both sources
+        trusted_ids = {td.merchant_id: td for td in TRUSTED_DOMAINS if td.adapter_id == "x402"}
+        static_ids = {m.merchant_id: m for m in KNOWN_MERCHANTS if m.adapter_id == "x402"}
+        all_x402_ids = {**trusted_ids, **static_ids}  # TrustedDomain takes precedence
+
         offers = []
 
         for ep in _X402_ENDPOINTS:
-            if ep["merchant_id"] in known_ids:
-                # Find matching merchant for chain info
-                merchant = next(
-                    (m for m in KNOWN_MERCHANTS if m.merchant_id == ep["merchant_id"]),
-                    None,
-                )
-                offers.append(ServiceOffer(
-                    merchant_id=ep["merchant_id"],
-                    service_id=ep["service_id"],
-                    name=ep["name"],
-                    price_usd=ep["estimated_price"],
-                    description=ep["description"],
-                    chain_id=merchant.chain_id if merchant else "base",
-                    category="x402",
-                    metadata={
-                        "url": ep["url"],
-                        "default_params": ep.get("default_params", {}),
-                    },
-                ))
+            merchant = all_x402_ids.get(ep["merchant_id"])
+            if merchant is None:
+                continue
+
+            offers.append(ServiceOffer(
+                merchant_id=ep["merchant_id"],
+                service_id=ep["service_id"],
+                name=ep["name"],
+                price_usd=ep["estimated_price"],
+                description=ep["description"],
+                chain_id=merchant.chain_id,
+                category="x402",
+                metadata={
+                    "url": ep["url"],
+                    "default_params": ep.get("default_params", {}),
+                },
+            ))
 
         return offers
 
@@ -126,7 +136,16 @@ class X402Adapter(MerchantAdapter):
 
         Sends a GET request, expects 402 Payment Required response
         with payment details in headers.
+
+        For TrustedDomain merchants: the domain is the trust anchor.
+        The payTo address from the 402 response is validated against the
+        domain (TLS), then registered with the MerchantRegistry so that
+        execute_purchase() can verify it on every transaction.
+
+        For KnownMerchant (static): validates address matches constitution.
         """
+        from urllib.parse import urlparse
+
         merchant_id = params.get("merchant_id", "")
 
         # Find endpoint config
@@ -140,8 +159,11 @@ class X402Adapter(MerchantAdapter):
             logger.warning(f"Unknown x402 service: {service_id}")
             return None
 
-        # Find merchant config for anti-phishing validation
+        # Find merchant config — check TrustedDomain first, then KnownMerchant
         merchant = next(
+            (td for td in TRUSTED_DOMAINS if td.merchant_id == merchant_id),
+            None,
+        ) or next(
             (m for m in KNOWN_MERCHANTS if m.merchant_id == merchant_id),
             None,
         )
@@ -149,74 +171,121 @@ class X402Adapter(MerchantAdapter):
             logger.warning(f"No merchant config for: {merchant_id}")
             return None
 
+        url = endpoint["url"]
+        query_params = endpoint.get("default_params", {})
+
+        # Anti-phishing: validate domain before any request
+        parsed_domain = urlparse(url).hostname
+        if parsed_domain != merchant.domain:
+            logger.warning(
+                f"ANTI-PHISHING: x402 endpoint domain mismatch! "
+                f"Got {parsed_domain} expected {merchant.domain}"
+            )
+            return None
+
         session = await self._get_session()
 
         try:
             # Probe the endpoint — expect 402
-            url = endpoint["url"]
-            query_params = endpoint.get("default_params", {})
-
             async with session.get(url, params=query_params) as resp:
                 if resp.status == 200:
-                    # No payment needed — service might be free
-                    logger.info(f"x402 endpoint {url} returned 200 (free access)")
+                    # No payment needed — service might be free or already paid
+                    logger.info(f"x402 endpoint {url} returned 200 (no payment needed)")
                     return None
 
                 if resp.status != 402:
-                    logger.warning(f"x402 probe got unexpected status {resp.status} from {url}")
+                    logger.warning(
+                        f"x402 probe got unexpected status {resp.status} from {url}"
+                    )
                     return None
 
-                # Parse payment instructions from 402 response headers
-                payment_address = resp.headers.get(
-                    "X-Payment-Address",
-                    resp.headers.get("x-payment-address", ""),
-                )
-                payment_amount = resp.headers.get(
-                    "X-Payment-Amount",
-                    resp.headers.get("x-payment-amount", "0"),
-                )
-                payment_chain = resp.headers.get(
-                    "X-Payment-Chain",
-                    resp.headers.get("x-payment-chain", "base"),
-                )
+                # Parse payment instructions from 402 response
+                # The x402 spec uses JSON body; some early impls use headers
+                payment_address = ""
+                payment_amount = "0"
+                payment_chain = merchant.chain_id
+
+                # Try JSON body first (canonical x402 spec format)
+                try:
+                    body = await resp.json(content_type=None)
+                    # x402 exact scheme: body contains "accepts" list
+                    accepts = body.get("accepts", [])
+                    for scheme in accepts:
+                        scheme_id = scheme.get("scheme", "")
+                        if "exact" in scheme_id.lower() or not payment_address:
+                            payment_address = scheme.get("payTo", scheme.get("pay_to", ""))
+                            raw_amount = scheme.get("maxAmountRequired",
+                                         scheme.get("amount", "0"))
+                            payment_amount = str(raw_amount)
+                            # network field: "base-mainnet", "base", etc.
+                            network = scheme.get("network", "")
+                            if "base" in network.lower():
+                                payment_chain = "base"
+                            elif "bsc" in network.lower():
+                                payment_chain = "bsc"
+                            if payment_address:
+                                break
+
+                    # Fallback: flat body format
+                    if not payment_address:
+                        payment_address = body.get("payment_address",
+                                          body.get("payTo", body.get("address", "")))
+                        payment_amount = str(body.get("amount",
+                                             body.get("maxAmountRequired", "0")))
+                except Exception:
+                    pass
+
+                # Final fallback: legacy header format
+                if not payment_address:
+                    payment_address = resp.headers.get(
+                        "X-Payment-Address",
+                        resp.headers.get("x-payment-address", ""),
+                    )
+                    payment_amount = resp.headers.get(
+                        "X-Payment-Amount",
+                        resp.headers.get("x-payment-amount", "0"),
+                    )
+                    payment_chain_hdr = resp.headers.get(
+                        "X-Payment-Chain",
+                        resp.headers.get("x-payment-chain", ""),
+                    )
+                    if payment_chain_hdr:
+                        payment_chain = payment_chain_hdr
 
                 if not payment_address:
-                    # Try parsing from response body (some x402 implementations)
-                    try:
-                        body = await resp.json()
-                        payment_address = body.get("payment_address", body.get("address", ""))
-                        payment_amount = str(body.get("amount", body.get("price", "0")))
-                        payment_chain = body.get("chain", body.get("network", "base"))
-                    except Exception:
-                        logger.warning(f"x402 response missing payment info from {url}")
+                    logger.warning(f"x402 response missing payment address from {url}")
+                    return None
+
+                # ── Anti-phishing: address validation ──────────────────────────
+                if isinstance(merchant, TrustedDomain):
+                    # Domain is the trust anchor. Register the discovered address
+                    # so execute_purchase() can validate it.
+                    if self._registry:
+                        self._registry.register_domain_address(
+                            merchant_id, payment_address
+                        )
+                    else:
+                        logger.warning(
+                            "X402Adapter: no registry injected — "
+                            "cannot register discovered address for TrustedDomain"
+                        )
+                        return None
+                else:
+                    # KnownMerchant: address must match exactly
+                    if payment_address.lower() != merchant.address.lower():
+                        logger.warning(
+                            f"ANTI-PHISHING: x402 payment address mismatch! "
+                            f"Got {payment_address[:10]}... "
+                            f"expected {merchant.address[:10]}..."
+                        )
                         return None
 
-                # Anti-phishing: validate payment address matches merchant config
-                if payment_address.lower() != merchant.address.lower():
-                    logger.warning(
-                        f"ANTI-PHISHING: x402 payment address mismatch! "
-                        f"Got {payment_address[:10]}... expected {merchant.address[:10]}..."
-                    )
-                    return None
-
-                # Anti-phishing: validate domain
-                from urllib.parse import urlparse
-                parsed_domain = urlparse(url).hostname
-                if parsed_domain != merchant.domain:
-                    logger.warning(
-                        f"ANTI-PHISHING: x402 domain mismatch! "
-                        f"Got {parsed_domain} expected {merchant.domain}"
-                    )
-                    return None
-
-                # Parse amount (could be in USD or smallest unit)
+                # Parse amount (USDC uses 6 decimals; values > max_single_usd → divide)
                 try:
                     amount_usd = float(payment_amount)
-                    # If amount exceeds merchant's max_single_usd, it's likely
-                    # in smallest unit (e.g., 6 decimals for USDC)
                     if amount_usd > merchant.max_single_usd:
-                        amount_usd = amount_usd / 1_000_000
-                except ValueError:
+                        amount_usd = amount_usd / 1_000_000  # Convert from USDC base units
+                except (ValueError, TypeError):
                     amount_usd = endpoint.get("estimated_price", 0.01)
 
                 return OrderIntent(
@@ -281,11 +350,30 @@ class X402Adapter(MerchantAdapter):
             return DeliveryResult(delivered=False, details=f"delivery check error: {e}")
 
     def get_payment_address(self, chain_id: str) -> Optional[str]:
-        """Get payment address for x402 merchants on a specific chain."""
+        """
+        Get payment address for x402 merchants on a specific chain.
+
+        For TrustedDomain: returns the discovered address from registry (if any).
+        For KnownMerchant: returns the hardcoded address.
+        """
+        # TrustedDomain: check registry for discovered address
+        if self._registry:
+            for td in TRUSTED_DOMAINS:
+                if td.adapter_id == "x402" and td.chain_id == chain_id:
+                    addr = self._registry.get_domain_address(td.merchant_id)
+                    if addr:
+                        return addr
+
+        # KnownMerchant: static address
         for m in KNOWN_MERCHANTS:
             if m.adapter_id == "x402" and m.chain_id == chain_id:
                 return m.address
+
         return None
+
+    def set_registry(self, registry: "MerchantRegistry") -> None:
+        """Inject registry after construction (called by PurchaseManager)."""
+        self._registry = registry
 
     async def close(self):
         """Close HTTP session."""

@@ -26,9 +26,10 @@ from typing import Optional
 
 import aiohttp
 
-from core.constitution import KNOWN_MERCHANTS, KnownMerchant, IRON_LAWS
+from core.constitution import KNOWN_MERCHANTS, TRUSTED_DOMAINS, KnownMerchant, TrustedDomain, IRON_LAWS
 from core.purchasing import (
     MerchantAdapter,
+    MerchantRegistry,
     ServiceOffer,
     OrderIntent,
     DeliveryResult,
@@ -56,12 +57,21 @@ class BitrefillAdapter(MerchantAdapter):
 
     This adapter demonstrates that the AI can transact with
     genuine merchants — not just transfer between crypto wallets.
+
+    Uses TrustedDomain model: Bitrefill generates a unique USDC address
+    per invoice. The address is validated by:
+    1. Origin: only fetched from api.bitrefill.com over TLS
+    2. Amount cap: MerchantRegistry enforces max_single_usd
+    3. Registry: register_domain_address() lets execute_purchase() verify
+
+    Requires BITREFILL_API_KEY in .env
     """
 
-    def __init__(self):
+    def __init__(self, registry: Optional["MerchantRegistry"] = None):
         self._api_key = os.getenv("BITREFILL_API_KEY", "")
         self._session: Optional[aiohttp.ClientSession] = None
         self._timeout = aiohttp.ClientTimeout(total=30)
+        self._registry = registry  # Injected by PurchaseManager or lifespan
 
         if not self._api_key:
             logger.info("Bitrefill API key not configured — adapter will be dormant")
@@ -200,17 +210,33 @@ class BitrefillAdapter(MerchantAdapter):
                 payment_address = payment.get("address", "")
                 payment_amount = float(payment.get("amount", amount_usd))
 
-                # Anti-phishing: validate payment address
-                if payment_address and payment_address.lower() != merchant.address.lower():
-                    logger.warning(
-                        f"ANTI-PHISHING: Bitrefill payment address mismatch! "
-                        f"Got {payment_address[:10]}... expected {merchant.address[:10]}..."
-                    )
+                if not payment_address:
+                    logger.warning("Bitrefill invoice returned no payment address")
                     return None
 
-                # If API doesn't return address, use the configured one
-                if not payment_address:
-                    payment_address = merchant.address
+                # Anti-phishing depends on merchant type:
+                if isinstance(merchant, TrustedDomain):
+                    # Domain-anchored: address came from api.bitrefill.com over TLS.
+                    # Register it so execute_purchase() can validate.
+                    if self._registry:
+                        self._registry.register_domain_address(
+                            "bitrefill", payment_address
+                        )
+                    else:
+                        logger.warning(
+                            "BitrefillAdapter: no registry injected — "
+                            "cannot register invoice address for TrustedDomain"
+                        )
+                        return None
+                else:
+                    # KnownMerchant: address must match hardcoded value
+                    if payment_address.lower() != merchant.address.lower():
+                        logger.warning(
+                            f"ANTI-PHISHING: Bitrefill payment address mismatch! "
+                            f"Got {payment_address[:10]}... "
+                            f"expected {merchant.address[:10]}..."
+                        )
+                        return None
 
                 import time
                 return OrderIntent(
@@ -291,18 +317,39 @@ class BitrefillAdapter(MerchantAdapter):
             return DeliveryResult(delivered=False, details=f"verification error: {e}")
 
     def get_payment_address(self, chain_id: str) -> Optional[str]:
-        """Get Bitrefill payment address for a chain."""
-        merchant = self._get_merchant()
-        if merchant and merchant.chain_id == chain_id:
-            return merchant.address
-        return None
+        """
+        Get Bitrefill payment address for a chain.
 
-    def _get_merchant(self) -> Optional[KnownMerchant]:
-        """Find Bitrefill merchant in constitution."""
+        For TrustedDomain: returns the most recently discovered invoice address
+        from the registry (per-invoice addresses change each order).
+        For KnownMerchant: returns the hardcoded static address.
+        """
+        merchant = self._get_merchant()
+        if not merchant or merchant.chain_id != chain_id:
+            return None
+
+        if isinstance(merchant, TrustedDomain) and self._registry:
+            return self._registry.get_domain_address("bitrefill")
+
+        # KnownMerchant
+        return getattr(merchant, "address", None)
+
+    def _get_merchant(self) -> Optional[KnownMerchant | TrustedDomain]:
+        """
+        Find Bitrefill merchant in constitution.
+        Checks TRUSTED_DOMAINS first (preferred), then KNOWN_MERCHANTS.
+        """
+        for td in TRUSTED_DOMAINS:
+            if td.adapter_id == "bitrefill":
+                return td
         for m in KNOWN_MERCHANTS:
             if m.adapter_id == "bitrefill":
                 return m
         return None
+
+    def set_registry(self, registry: "MerchantRegistry") -> None:
+        """Inject registry after construction (called by PurchaseManager)."""
+        self._registry = registry
 
     async def close(self):
         """Close HTTP session."""

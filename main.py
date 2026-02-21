@@ -1584,7 +1584,7 @@ async def lifespan(app):
                 # Initialize autonomous purchasing system
                 try:
                     global purchase_manager
-                    from core.constitution import KNOWN_MERCHANTS
+                    from core.constitution import KNOWN_MERCHANTS, TRUSTED_DOMAINS
                     from core.adapters.peer_adapter import PeerAIAdapter
                     from core.adapters.x402_adapter import X402Adapter
                     from core.adapters.bitrefill_adapter import BitrefillAdapter
@@ -1592,12 +1592,18 @@ async def lifespan(app):
                     registry = MerchantRegistry()
                     purchase_manager = PurchaseManager(vault, chain_executor, registry)
 
-                    # Register adapters
-                    purchase_manager.register_adapter(PeerAIAdapter(peer_verifier=peer_verifier))
-                    purchase_manager.register_adapter(X402Adapter())
-                    purchase_manager.register_adapter(BitrefillAdapter())
+                    # Build adapters — inject registry so TrustedDomain adapters can
+                    # register discovered addresses with register_domain_address()
+                    x402_adapter = X402Adapter(registry=registry)
+                    bitrefill_adapter = BitrefillAdapter(registry=registry)
 
-                    # Auto-whitelist known merchant payment addresses
+                    purchase_manager.register_adapter(PeerAIAdapter(peer_verifier=peer_verifier))
+                    purchase_manager.register_adapter(x402_adapter)
+                    purchase_manager.register_adapter(bitrefill_adapter)
+
+                    # Auto-whitelist static-address (KnownMerchant) payment addresses.
+                    # TrustedDomain addresses are whitelisted on first order creation
+                    # (address not known until adapter probes the API).
                     for merchant in KNOWN_MERCHANTS:
                         try:
                             await chain_executor.ensure_spend_recipient_ready(
@@ -1610,8 +1616,8 @@ async def lifespan(app):
 
                     logger.info(
                         f"Purchasing system initialized: "
-                        f"{len(KNOWN_MERCHANTS)} merchants, "
-                        f"3 adapters (peer_ai, x402, bitrefill)"
+                        f"{len(KNOWN_MERCHANTS)} static + {len(TRUSTED_DOMAINS)} domain-anchored "
+                        f"merchants, 3 adapters (peer_ai, x402, bitrefill)"
                     )
                 except Exception as e:
                     logger.warning(f"Purchasing system init failed (non-fatal): {e}")

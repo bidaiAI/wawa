@@ -35,7 +35,9 @@ from typing import Optional, Callable, Any
 from core.constitution import (
     IRON_LAWS,
     KNOWN_MERCHANTS,
+    TRUSTED_DOMAINS,
     KnownMerchant,
+    TrustedDomain,
 )
 
 logger = logging.getLogger("mortal.purchasing")
@@ -198,38 +200,99 @@ class MerchantRegistry:
     """
     Manages known merchants from constitution + runtime registration.
 
-    Anti-phishing layer 1: only merchants in KNOWN_MERCHANTS can receive payments.
+    Two merchant types:
+    - KnownMerchant  — static address hardcoded in KNOWN_MERCHANTS
+    - TrustedDomain  — domain-anchored, address discovered at runtime
+      from TRUSTED_DOMAINS; adapters call register_domain_address() once
+      they have probed and confirmed the live payment address.
+
+    Anti-phishing layer 1: only registered merchants can receive payments.
     Anti-phishing layer 4: per-merchant amount caps enforced here.
     """
 
     def __init__(self):
-        self._merchants: dict[str, KnownMerchant] = {}
-        self._address_index: dict[str, str] = {}  # address.lower() → merchant_id
+        # merchant_id → KnownMerchant or TrustedDomain
+        self._merchants: dict[str, KnownMerchant | TrustedDomain] = {}
+        # address.lower() → merchant_id  (populated for KnownMerchant + discovered TrustedDomain)
+        self._address_index: dict[str, str] = {}
+        # merchant_id → discovered address (for TrustedDomain only)
+        self._discovered_addresses: dict[str, str] = {}
 
-        # Load from constitution (immutable)
+        # Load static-address merchants
         for m in KNOWN_MERCHANTS:
             self._merchants[m.merchant_id] = m
             self._address_index[m.address.lower()] = m.merchant_id
 
-        logger.info(f"MerchantRegistry initialized with {len(self._merchants)} known merchants")
+        # Load domain-anchored merchants (no address yet)
+        for td in TRUSTED_DOMAINS:
+            self._merchants[td.merchant_id] = td
 
-    def get_merchant(self, merchant_id: str) -> Optional[KnownMerchant]:
-        """Get merchant by ID."""
+        logger.info(
+            f"MerchantRegistry initialized: "
+            f"{len(KNOWN_MERCHANTS)} static, {len(TRUSTED_DOMAINS)} domain-anchored"
+        )
+
+    def register_domain_address(self, merchant_id: str, address: str) -> bool:
+        """
+        Register the discovered payment address for a TrustedDomain merchant.
+
+        Called by adapters after probing the live API and extracting the payTo
+        address (e.g. from a 402 response header or an invoice response).
+
+        Returns True if the merchant_id is a TrustedDomain and address is valid.
+        """
+        merchant = self._merchants.get(merchant_id)
+        if not isinstance(merchant, TrustedDomain):
+            logger.warning(
+                f"register_domain_address: {merchant_id} is not a TrustedDomain"
+            )
+            return False
+
+        if not address or len(address) < 10:
+            return False
+
+        old = self._discovered_addresses.get(merchant_id, "")
+        self._discovered_addresses[merchant_id] = address.lower()
+        self._address_index[address.lower()] = merchant_id
+
+        if old and old != address.lower():
+            logger.warning(
+                f"TrustedDomain {merchant_id}: payment address changed "
+                f"{old[:10]}... → {address[:10]}..."
+            )
+        else:
+            logger.info(
+                f"TrustedDomain {merchant_id}: payment address registered "
+                f"{address[:10]}..."
+            )
+        return True
+
+    def get_domain_address(self, merchant_id: str) -> Optional[str]:
+        """Return the discovered address for a TrustedDomain, or None."""
+        addr = self._discovered_addresses.get(merchant_id)
+        return addr  # already lower-cased
+
+    def is_domain_anchored(self, merchant_id: str) -> bool:
+        """Return True if merchant uses domain-trust (TrustedDomain)."""
+        return isinstance(self._merchants.get(merchant_id), TrustedDomain)
+
+    def get_merchant(self, merchant_id: str) -> Optional[KnownMerchant | TrustedDomain]:
+        """Get merchant by ID (either type)."""
         return self._merchants.get(merchant_id)
 
-    def get_merchants_by_category(self, category: str) -> list[KnownMerchant]:
+    def get_merchants_by_category(self, category: str) -> list:
         """Get all merchants in a category."""
         return [m for m in self._merchants.values() if m.category == category]
 
-    def get_merchants_by_adapter(self, adapter_id: str) -> list[KnownMerchant]:
+    def get_merchants_by_adapter(self, adapter_id: str) -> list:
         """Get all merchants handled by a specific adapter."""
         return [m for m in self._merchants.values() if m.adapter_id == adapter_id]
 
     def is_trusted_address(self, address: str) -> bool:
-        """Anti-phishing check: is this address a known merchant?"""
+        """Anti-phishing check: is this address a known/discovered merchant?"""
         return address.lower() in self._address_index
 
-    def get_merchant_by_address(self, address: str) -> Optional[KnownMerchant]:
+    def get_merchant_by_address(self, address: str) -> Optional[KnownMerchant | TrustedDomain]:
         """Look up merchant by payment address."""
         mid = self._address_index.get(address.lower())
         if mid:
@@ -262,8 +325,9 @@ class MerchantRegistry:
 
     def get_all_merchants(self) -> list[dict]:
         """Get all merchants for API response."""
-        return [
-            {
+        result = []
+        for m in self._merchants.values():
+            entry = {
                 "merchant_id": m.merchant_id,
                 "name": m.name,
                 "chain_id": m.chain_id,
@@ -271,17 +335,25 @@ class MerchantRegistry:
                 "adapter_id": m.adapter_id,
                 "max_single_usd": m.max_single_usd,
                 "category": m.category,
+                "address_type": "static" if isinstance(m, KnownMerchant) else "domain_anchored",
             }
-            for m in self._merchants.values()
-        ]
+            if isinstance(m, TrustedDomain):
+                discovered = self._discovered_addresses.get(m.merchant_id)
+                entry["address_discovered"] = bool(discovered)
+            result.append(entry)
+        return result
 
     def get_status(self) -> dict:
         """Status for dashboard."""
+        categories = set(m.category for m in self._merchants.values())
         return {
             "total_merchants": len(self._merchants),
+            "static_merchants": len(KNOWN_MERCHANTS),
+            "domain_anchored_merchants": len(TRUSTED_DOMAINS),
+            "domain_addresses_discovered": len(self._discovered_addresses),
             "by_category": {
                 cat: len(self.get_merchants_by_category(cat))
-                for cat in set(m.category for m in self._merchants.values())
+                for cat in categories
             } if self._merchants else {},
         }
 
@@ -313,8 +385,16 @@ class PurchaseManager:
         self._max_orders = 200  # Cap order history
 
     def register_adapter(self, adapter: MerchantAdapter):
-        """Register a merchant adapter."""
+        """
+        Register a merchant adapter.
+
+        If the adapter exposes set_registry(), inject our registry so it can
+        call register_domain_address() for TrustedDomain merchants.
+        """
         self._adapters[adapter.adapter_id] = adapter
+        # Inject registry for adapters that support domain-anchored merchants
+        if hasattr(adapter, "set_registry") and callable(adapter.set_registry):
+            adapter.set_registry(self._registry)
         logger.info(f"Registered purchase adapter: {adapter.adapter_id}")
 
     # ----------------------------------------------------------
@@ -532,13 +612,34 @@ class PurchaseManager:
             order.service_name = decision.service_id
             order.order_metadata = intent.metadata
 
-            # Validate payment address matches merchant config (anti-phishing)
-            if intent.payment_address.lower() != merchant.address.lower():
+            # Validate payment address — two paths:
+            #   KnownMerchant: compare against hardcoded address
+            #   TrustedDomain: compare against discovered address registered by adapter
+            if isinstance(merchant, KnownMerchant):
+                expected_addr = merchant.address.lower()
+                addr_source = "hardcoded"
+            else:
+                # TrustedDomain: adapter must have registered the address via
+                # registry.register_domain_address() before calling execute_purchase
+                expected_addr = self._registry.get_domain_address(merchant.merchant_id) or ""
+                addr_source = "domain-discovered"
+
+            if not expected_addr:
                 order.status = PurchaseStatus.FAILED
                 order.error = (
-                    f"payment address mismatch: "
+                    f"payment address not yet discovered for TrustedDomain "
+                    f"merchant {merchant.merchant_id} — adapter probe may have failed"
+                )
+                logger.warning(f"ANTI-PHISHING: {order.error}")
+                self._record_order(order)
+                return order
+
+            if intent.payment_address.lower() != expected_addr:
+                order.status = PurchaseStatus.FAILED
+                order.error = (
+                    f"payment address mismatch ({addr_source}): "
                     f"got {intent.payment_address[:10]}... "
-                    f"expected {merchant.address[:10]}..."
+                    f"expected {expected_addr[:10]}..."
                 )
                 logger.warning(f"ANTI-PHISHING: {order.error}")
                 self._record_order(order)

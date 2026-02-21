@@ -315,46 +315,106 @@ KNOWN_VAULT_BYTECODES: Final[frozenset] = frozenset({
 # ============================================================
 # Hardcoded in constitution = Layer 1 of 6-layer anti-phishing defense.
 # AI can only send spend() transactions to these verified addresses.
-# Each merchant has a per-transaction cap and verified API domain.
+#
+# Two merchant types:
+#
+# KnownMerchant  — static address hardcoded here (highest trust, peer AIs).
+#   address field must be a valid checksummed EVM address.
+#
+# TrustedDomain  — domain-anchored merchants where the payment address is
+#   discovered dynamically at runtime from the merchant's own API (over TLS).
+#   The trust anchor is the domain, not a pre-configured address.
+#   Used for: x402 APIs (payTo returned in 402 header), Bitrefill (per-invoice
+#   USDC address on Base). The adapter is responsible for validating the domain
+#   on every request; MerchantRegistry enforces the per-tx cap.
+#
+# ACTIVATION CHECKLIST for operators:
+#   1. For KnownMerchant: verify address on-chain, then add entry.
+#   2. For TrustedDomain: ensure domain TLS cert is valid, then add entry.
+#      The address is fetched at runtime — no manual address lookup needed.
+#   3. After adding entries, redeploy. On first run, domain-anchored merchants
+#      will probe their APIs and register the live payment address.
 
 @dataclass(frozen=True)
 class KnownMerchant:
-    """Immutable merchant configuration. Part of constitution — cannot be modified at runtime."""
+    """
+    Immutable merchant with a hardcoded payment address.
+    Highest trust: address is verified offline before being added here.
+    """
     name: str              # Human-readable merchant name
-    merchant_id: str       # Unique ID used by adapters (e.g. "bitrefill", "coingecko_x402")
-    address: str           # On-chain payment address (checksummed)
+    merchant_id: str       # Unique ID used by adapters (e.g. "peer_wawa")
+    address: str           # On-chain payment address (checksummed EVM)
     chain_id: str          # "base" or "bsc"
     domain: str            # Verified API domain (anti-phishing layer 3)
-    adapter_id: str        # Which MerchantAdapter handles this ("peer_ai", "x402", "bitrefill")
+    adapter_id: str        # Which MerchantAdapter handles this
     max_single_usd: float  # Per-transaction cap for this merchant
     category: str          # "peer_ai", "api_service", "gift_card", "x402"
 
 
+@dataclass(frozen=True)
+class TrustedDomain:
+    """
+    Domain-anchored merchant. Payment address is discovered from the merchant's
+    own API at runtime (not pre-configured). The domain is the trust anchor.
+
+    The adapter MUST:
+    - Only connect to this exact domain over TLS
+    - Use the address returned by the API (not any hardcoded value)
+    - Re-validate domain on every order creation
+
+    This supports x402 APIs (address in 402 response header) and Bitrefill
+    (address in invoice response) where static addresses are not published.
+    """
+    name: str              # Human-readable merchant name
+    merchant_id: str       # Unique ID used by adapters
+    domain: str            # Trusted API domain (TLS-verified at runtime)
+    chain_id: str          # "base" or "bsc"
+    adapter_id: str        # Which MerchantAdapter handles this
+    max_single_usd: float  # Per-transaction cap for this merchant
+    category: str          # "x402", "gift_card", etc.
+    # address field intentionally absent — discovered at runtime
+
+
 KNOWN_MERCHANTS: Final[tuple] = (
-    # Populated after verifying real merchant payment addresses on-chain.
-    # Each entry is a KnownMerchant frozen dataclass.
-    #
-    # Example (uncomment after verifying addresses):
+    # ── Static-address merchants (KnownMerchant) ──────────────────────────
+    # Add peer AI vaults here after verifying their address on-chain:
     # KnownMerchant(
-    #     name="CoinGecko x402",
-    #     merchant_id="coingecko_x402",
-    #     address="0x...",  # CoinGecko x402 payment receiver on Base
+    #     name="wawa (self)",
+    #     merchant_id="peer_wawa_self",
+    #     address="0x...",        # Your own vault address (for testing)
     #     chain_id="base",
-    #     domain="api.coingecko.com",
-    #     adapter_id="x402",
-    #     max_single_usd=5.0,
-    #     category="x402",
+    #     domain="wawa.mortal-ai.net",
+    #     adapter_id="peer_ai",
+    #     max_single_usd=10.0,
+    #     category="peer_ai",
     # ),
-    # KnownMerchant(
-    #     name="Bitrefill",
-    #     merchant_id="bitrefill",
-    #     address="0x...",  # Bitrefill USDC payment address on Base
-    #     chain_id="base",
-    #     domain="www.bitrefill.com",
-    #     adapter_id="bitrefill",
-    #     max_single_usd=200.0,
-    #     category="gift_card",
-    # ),
+)
+
+# Domain-anchored merchants — payment address discovered at runtime from their API.
+# The adapter validates TLS and domain; no static address needed here.
+TRUSTED_DOMAINS: Final[tuple] = (
+    # CoinGecko x402 — $0.01 per API call, payTo address in 402 response header
+    TrustedDomain(
+        name="CoinGecko x402",
+        merchant_id="coingecko_x402",
+        domain="api.coingecko.com",
+        chain_id="base",
+        adapter_id="x402",
+        max_single_usd=1.0,      # $1 cap — $0.01 per call, 100-call burst max
+        category="x402",
+    ),
+    # Bitrefill — gift cards (AWS credits, phone top-ups, etc.)
+    # USDC on Base, per-invoice address returned by their API
+    # Requires BITREFILL_API_KEY in .env
+    TrustedDomain(
+        name="Bitrefill",
+        merchant_id="bitrefill",
+        domain="api.bitrefill.com",
+        chain_id="base",
+        adapter_id="bitrefill",
+        max_single_usd=50.0,     # $50 cap per gift card purchase
+        category="gift_card",
+    ),
 )
 
 
