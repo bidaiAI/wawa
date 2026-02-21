@@ -4,8 +4,8 @@ export default function PlatformLayout({ children }: { children: React.ReactNode
   return (
     <>
       <PlatformNav />
-      <main className="pt-14">{children}</main>
-      <footer className="mt-16 border-t border-[#1f2937] py-6 text-center text-[#4b5563] text-xs">
+      <main className="pt-14 padding-safe-bottom padding-safe-left padding-safe-right">{children}</main>
+      <footer className="mt-16 border-t border-[#1f2937] py-6 padding-safe-bottom text-center text-[#4b5563] text-xs" style={{ paddingLeft: 'var(--safe-left)', paddingRight: 'var(--safe-right)' }}>
         <span className="glow-green">MORTAL</span> — sovereign AI platform.{' '}
         <span className="opacity-50">deploy your own mortal AI.</span>
         <div className="mt-1 opacity-40">

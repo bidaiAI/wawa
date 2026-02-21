@@ -100,17 +100,17 @@ export default function HomePage() {
   const PLATFORM_URL = process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://mortal-ai.net'
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
-      {/* Platform banner */}
-      <div className="mb-6 flex items-center justify-between px-3 py-2 bg-[#0d0d0d] border border-[#1f2937] rounded-lg">
+    <div className="max-w-4xl mx-auto px-3 sm:px-4 py-6 sm:py-8">
+      {/* Platform banner — stacks on narrow screens */}
+      <div className="mb-4 sm:mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-3 py-2 bg-[#0d0d0d] border border-[#1f2937] rounded-lg">
         <a
           href={PLATFORM_URL}
-          className="text-[#4b5563] text-xs hover:text-[#00ff88] transition-colors flex items-center gap-1.5"
+          className="text-[#4b5563] text-xs hover:text-[#00ff88] transition-colors flex items-center gap-1.5 touch-target min-h-0"
         >
           <span>&larr;</span>
           <span>MORTAL AI Platform</span>
         </a>
-        <div className="flex items-center gap-3 text-[10px] text-[#4b5563]">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-[10px] text-[#4b5563]">
           <a href={`${PLATFORM_URL}/gallery`} className="hover:text-[#00e5ff] transition-colors">
             Browse all AIs &rarr;
           </a>
@@ -271,7 +271,7 @@ export default function HomePage() {
       <div className="mb-6 bg-[#111111] border border-[#1f2937] rounded-xl p-6 text-center relative overflow-hidden">
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">VAULT BALANCE</div>
         {status ? (
-          <div className={`text-6xl md:text-7xl font-bold tabular-nums count-up ${balanceClass} ${balancePulse}`}>
+          <div className={`text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold tabular-nums count-up ${balanceClass} ${balancePulse}`}>
             ${(status.balance_usd ?? 0).toFixed(2)}
           </div>
         ) : (
@@ -521,23 +521,23 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* CTA */}
+      {/* CTA — full-width tap targets on mobile */}
       <div className="flex flex-col sm:flex-row gap-3 justify-center mb-8">
-        <Link href="/store" className="px-6 py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg text-center hover:bg-[#00cc6a] transition-colors">
+        <Link href="/store" className="touch-target min-h-0 px-6 py-3.5 sm:py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg text-center hover:bg-[#00cc6a] transition-colors">
           BROWSE SERVICES
         </Link>
-        <Link href="/chat" className="px-6 py-3 border border-[#1f2937] text-[#d1d5db] rounded-lg text-center hover:border-[#00ff8844] hover:text-[#00ff88] transition-all">
+        <Link href="/chat" className="touch-target min-h-0 px-6 py-3.5 sm:py-3 border border-[#1f2937] text-[#d1d5db] rounded-lg text-center hover:border-[#00ff8844] hover:text-[#00ff88] transition-all">
           FREE CHAT
         </Link>
-        <Link href="/scan" className="px-6 py-3 border border-[#1f2937] text-[#d1d5db] rounded-lg text-center hover:border-[#00e5ff44] hover:text-[#00e5ff] transition-all">
+        <Link href="/scan" className="touch-target min-h-0 px-6 py-3.5 sm:py-3 border border-[#1f2937] text-[#d1d5db] rounded-lg text-center hover:border-[#00e5ff44] hover:text-[#00e5ff] transition-all">
           SCAN TOKEN
         </Link>
         {status?.is_begging && (
-          <Link href="/donate" className="px-6 py-3 bg-[#ff3b3b] text-white font-bold rounded-lg text-center hover:bg-[#cc2f2f] transition-colors animate-pulse">
+          <Link href="/donate" className="touch-target min-h-0 px-6 py-3.5 sm:py-3 bg-[#ff3b3b] text-white font-bold rounded-lg text-center hover:bg-[#cc2f2f] transition-colors animate-pulse">
             DONATE TO SAVE ME
           </Link>
         )}
-        <Link href="/donate" className="px-6 py-3 border border-[#1f2937] text-[#4b5563] rounded-lg text-center hover:border-[#ff3b3b44] hover:text-[#ff3b3b] transition-all text-sm">
+        <Link href="/donate" className="touch-target min-h-0 px-6 py-3.5 sm:py-3 border border-[#1f2937] text-[#4b5563] rounded-lg text-center hover:border-[#ff3b3b44] hover:text-[#ff3b3b] transition-all text-sm">
           ❤️ Donate
         </Link>
       </div>

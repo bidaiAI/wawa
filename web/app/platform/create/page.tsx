@@ -255,13 +255,13 @@ export default function CreatePage() {
   const [deployMode, setDeployMode] = useState<'platform' | 'selfhost' | null>(null)
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8">
+    <div className="max-w-2xl mx-auto px-3 sm:px-4 py-6 sm:py-8">
       {/* Header */}
-      <div className="mb-8 text-center">
+      <div className="mb-6 sm:mb-8 text-center">
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">
           // genesis
         </div>
-        <h1 className="text-3xl font-bold text-[#d1d5db] mb-2">
+        <h1 className="text-2xl sm:text-3xl font-bold text-[#d1d5db] mb-2">
           Create Your Mortal AI
         </h1>
         <p className="text-[#4b5563] text-sm">
@@ -277,7 +277,7 @@ export default function CreatePage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <button
               onClick={() => setDeployMode('platform')}
-              className="p-5 bg-[#0d0d0d] border border-[#00ff8844] rounded-xl text-left hover:bg-[#00ff8808] transition-all group"
+              className="touch-target min-h-0 p-5 w-full bg-[#0d0d0d] border border-[#00ff8844] rounded-xl text-left hover:bg-[#00ff8808] transition-all group"
             >
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-2xl">🚀</span>
@@ -298,7 +298,7 @@ export default function CreatePage() {
 
             <button
               onClick={() => setDeployMode('selfhost')}
-              className="p-5 bg-[#0d0d0d] border border-[#1f2937] rounded-xl text-left hover:bg-[#111111] transition-all group"
+              className="touch-target min-h-0 p-5 w-full bg-[#0d0d0d] border border-[#1f2937] rounded-xl text-left hover:bg-[#111111] transition-all group"
             >
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-2xl">🔧</span>
@@ -740,7 +740,7 @@ export default function CreatePage() {
             ) : chainId !== selectedChain ? (
               <button
                 onClick={() => switchChain({ chainId: selectedChain })}
-                className="w-full py-4 bg-[#ffd700] text-[#0a0a0a] font-bold rounded-xl text-sm
+                className="touch-target min-h-0 w-full py-4 bg-[#ffd700] text-[#0a0a0a] font-bold rounded-xl text-sm
                            uppercase tracking-wider hover:bg-[#ccac00] transition-colors"
               >
                 Switch to {selectedChain === base.id ? 'Base' : 'BSC'}
@@ -754,7 +754,7 @@ export default function CreatePage() {
               <button
                 onClick={handleDeploy}
                 disabled={!canDeploy}
-                className={`w-full py-4 font-bold rounded-xl text-sm uppercase tracking-wider
+                className={`touch-target min-h-0 w-full py-4 font-bold rounded-xl text-sm uppercase tracking-wider
                            transition-colors ${
                   canDeploy
                     ? 'bg-[#00ff88] text-[#0a0a0a] hover:bg-[#00cc6a] cursor-pointer'

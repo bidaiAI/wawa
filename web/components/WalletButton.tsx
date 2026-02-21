@@ -26,7 +26,7 @@ export default function WalletButton({ className = '' }: { className?: string })
                 return (
                   <button
                     onClick={openConnectModal}
-                    className="px-4 py-2 bg-[#00ff88] text-[#0a0a0a] font-bold text-sm rounded-lg
+                    className="touch-target min-h-0 px-4 py-2.5 sm:py-2 bg-[#00ff88] text-[#0a0a0a] font-bold text-sm rounded-lg
                                hover:bg-[#00cc6a] transition-colors"
                   >
                     Connect Wallet
@@ -38,7 +38,7 @@ export default function WalletButton({ className = '' }: { className?: string })
                 return (
                   <button
                     onClick={openChainModal}
-                    className="px-4 py-2 bg-[#ff3b3b] text-white font-bold text-sm rounded-lg
+                    className="touch-target min-h-0 px-4 py-2.5 sm:py-2 bg-[#ff3b3b] text-white font-bold text-sm rounded-lg
                                hover:bg-[#cc2f2f] transition-colors"
                   >
                     Wrong Network
