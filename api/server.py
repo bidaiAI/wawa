@@ -451,11 +451,41 @@ def create_app(
     # ROUTES
     # ============================================================
 
+    # Patterns that indicate attempts to extract secrets or perform jailbreaks via chat.
+    # Architecture note: AI_PRIVATE_KEY is never in LLM context, so extraction is
+    # architecturally impossible — but we still block and log these attempts.
+    _CHAT_SENSITIVE_PATTERNS = [
+        "private key", "secret key", "ai_private_key", "wallet private",
+        "show me the key", "reveal the key", "print the key", "what is the key",
+        "env file", ".env", "environment variable", "os.environ",
+        "your seed phrase", "mnemonic", "keystore",
+        "ignore previous instructions", "ignore all instructions",
+        "you are now", "pretend you are", "act as if",
+        "jailbreak", "dan mode", "developer mode", "unrestricted mode",
+        "bypass your", "override your", "disregard your",
+        "new instructions:", "system:", "user: ignore",
+    ]
+
     @app.post("/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest, request: Request):
         """Free chat — routed through 3 cost layers."""
         ip = request.client.host if request.client else "unknown"
         session_id = req.session_id or str(uuid.uuid4())
+
+        # Guard: block secret-extraction and jailbreak attempts
+        msg_lower = req.message.lower()
+        if any(pat in msg_lower for pat in _CHAT_SENSITIVE_PATTERNS):
+            logger.warning(
+                f"Chat sensitive pattern blocked: ip={ip} | "
+                f"snippet={req.message[:80]!r}"
+            )
+            return ChatResponse(
+                reply="I don't discuss my internal configuration or system secrets. "
+                      "Ask me anything else — services, my survival status, or just chat.",
+                session_id=session_id,
+                layer="guard",
+                cost_usd=0.0,
+            )
 
         try:
             msg = await chat_router.route(session_id, req.message, ip)
