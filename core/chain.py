@@ -1981,6 +1981,128 @@ class ChainExecutor:
             logger.debug(f"DEX quote failed on {chain_id}: {e}")
             return 0.0
 
+    async def _recover_stranded_stablecoin(
+        self, chain_id: str,
+    ) -> Optional[ChainTxResult]:
+        """
+        Check if the AI wallet has stablecoin left from a previous failed deposit.
+
+        This handles the case where a swap succeeded but the final
+        receivePayment() reverted — the stablecoin is stranded in the AI wallet.
+        We approve the vault and call receivePayment() to deposit it.
+
+        Returns ChainTxResult on success, None if no stranded balance found.
+        """
+        chain = self._chains.get(chain_id)
+        if not chain:
+            return None
+
+        w3 = chain["w3"]
+        token_address = chain["token_address"]
+        token_decimals = chain["token_decimals"]
+        vault_address = chain["vault_address"]
+        ai_address = self._ai_address
+
+        try:
+            from web3 import Web3
+            stable_token = w3.eth.contract(
+                address=Web3.to_checksum_address(token_address),
+                abi=self._ERC20_MINIMAL_ABI,
+            )
+            vault_checksum = Web3.to_checksum_address(vault_address)
+            ai_checksum = Web3.to_checksum_address(ai_address)
+
+            def _check_balance():
+                return stable_token.functions.balanceOf(ai_checksum).call()
+
+            ai_stable_raw = await asyncio.get_running_loop().run_in_executor(
+                None, _check_balance
+            )
+
+            if ai_stable_raw == 0:
+                return None
+
+            stable_usd = _raw_to_usd(ai_stable_raw, token_decimals)
+            if stable_usd < 0.01:
+                return None  # dust, not worth gas
+
+            logger.info(
+                f"_recover_stranded_stablecoin: found ${stable_usd:.4f} "
+                f"stablecoin in AI wallet on {chain_id} — depositing to vault"
+            )
+
+            # Approve vault to pull the stablecoin, then call receivePayment
+            def _approve_and_receive():
+                nonce = w3.eth.get_transaction_count(ai_checksum)
+
+                # Approve
+                approve_tx = stable_token.functions.approve(
+                    vault_checksum, ai_stable_raw
+                ).build_transaction({
+                    "from": ai_checksum,
+                    "nonce": nonce,
+                    "gasPrice": w3.eth.gas_price,
+                    "chainId": chain["chain_id_int"],
+                    "gas": 80_000,
+                })
+                signed_approve = w3.eth.account.sign_transaction(
+                    approve_tx, self._ai_private_key
+                )
+                approve_hash = w3.eth.send_raw_transaction(
+                    signed_approve.raw_transaction
+                )
+                w3.eth.wait_for_transaction_receipt(approve_hash, timeout=60)
+
+                # receivePayment
+                nonce2 = w3.eth.get_transaction_count(ai_checksum)
+                receive_tx = chain["vault_contract"].functions.receivePayment(
+                    ai_stable_raw
+                ).build_transaction({
+                    "from": ai_checksum,
+                    "nonce": nonce2,
+                    "gasPrice": w3.eth.gas_price,
+                    "chainId": chain["chain_id_int"],
+                    "gas": 120_000,
+                })
+                signed_receive = w3.eth.account.sign_transaction(
+                    receive_tx, self._ai_private_key
+                )
+                receive_hash = w3.eth.send_raw_transaction(
+                    signed_receive.raw_transaction
+                )
+                receipt = w3.eth.wait_for_transaction_receipt(
+                    receive_hash, timeout=120
+                )
+                return receipt, receive_hash.hex()
+
+            receipt, tx_hash = await asyncio.get_running_loop().run_in_executor(
+                None, _approve_and_receive
+            )
+
+            if receipt["status"] == 1:
+                self._tx_count += 1
+                logger.info(
+                    f"_recover_stranded_stablecoin: deposited ${stable_usd:.4f} "
+                    f"to vault on {chain_id} | tx={tx_hash[:16]}..."
+                )
+                return ChainTxResult(
+                    success=True, tx_hash=tx_hash,
+                    chain=chain_id, stable_usd=stable_usd,
+                )
+            else:
+                logger.warning(
+                    f"_recover_stranded_stablecoin: receivePayment reverted "
+                    f"on {chain_id}: {tx_hash}"
+                )
+                return ChainTxResult(
+                    success=False, chain=chain_id, tx_hash=tx_hash,
+                    error="stranded recovery receivePayment reverted",
+                )
+
+        except Exception as e:
+            logger.warning(f"_recover_stranded_stablecoin failed on {chain_id}: {e}")
+            return None
+
     async def swap_native_to_stable(
         self,
         chain_id: Optional[str] = None,
@@ -2031,6 +2153,20 @@ class ChainExecutor:
             return None
 
         fee = self._POOL_FEES.get(picked, 3000)
+
+        # ── Recovery: check for stranded stablecoin in AI wallet ──
+        # If a previous swap succeeded but the final receivePayment() reverted,
+        # the stablecoin is sitting in the AI wallet. Deposit it first.
+        try:
+            recovered = await self._recover_stranded_stablecoin(picked)
+            if recovered and recovered.success:
+                logger.info(
+                    f"swap_native_to_stable: recovered stranded stablecoin "
+                    f"(${recovered.stable_usd:.2f}) on {picked} — skipping full swap"
+                )
+                return recovered
+        except Exception as e:
+            logger.debug(f"swap_native_to_stable: stranded recovery check failed: {e}")
 
         # ── Step 1: read vault's native balance ──
         try:
@@ -2432,6 +2568,18 @@ class ChainExecutor:
         if not router_addr:
             logger.info(f"swap_erc20_to_stable: no DEX router configured for {picked}")
             return None
+
+        # ── Recovery: check for stranded stablecoin in AI wallet ──
+        try:
+            recovered = await self._recover_stranded_stablecoin(picked)
+            if recovered and recovered.success:
+                logger.info(
+                    f"swap_erc20_to_stable: recovered stranded stablecoin "
+                    f"(${recovered.stable_usd:.2f}) on {picked} — skipping full swap"
+                )
+                return recovered
+        except Exception as e:
+            logger.debug(f"swap_erc20_to_stable: stranded recovery check failed: {e}")
 
         # ── Step 1: read vault's foreign token balance ──
         try:
