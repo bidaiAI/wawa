@@ -1007,10 +1007,39 @@ async def _evaluate_repayment():
                 # Calculate actual amount (may have been capped by vault)
                 actual_amount = pre_balance - vault.balance_usd
 
-                # Execute on-chain transaction
+                # Execute on-chain transaction.
+                # CHAIN-AWARE: pick the chain with the best solvency ratio
+                # to avoid pushing a borderline chain below the liquidation
+                # threshold (BUG-NEW-1 fix). Falls back to highest-balance
+                # chain if solvency data is unavailable.
                 tx_info = ""
                 if chain_executor._initialized:
-                    tx = await chain_executor.repay_principal(actual_amount)
+                    target_chain_id = None
+                    try:
+                        chain_states = await chain_executor.get_per_chain_solvency()
+                        if len(chain_states) > 1:
+                            # Pick chain with best solvency ratio AND enough local balance
+                            best_ratio = -1.0
+                            for cs in chain_states:
+                                c_bal = cs.get("balance_usd")
+                                c_out = cs.get("outstanding_usd")
+                                if c_bal is None or c_out is None:
+                                    continue
+                                if c_bal < actual_amount + 1.0:
+                                    continue  # Can't afford this repayment
+                                ratio = c_bal / c_out if c_out > 0 else float("inf")
+                                # After repayment, new ratio = (bal-R)/(out-R)
+                                new_out = c_out - actual_amount
+                                post_ratio = (c_bal - actual_amount) / new_out if new_out > 0 else float("inf")
+                                if post_ratio < 1.05:
+                                    continue  # Would push this chain too close to insolvency
+                                if ratio > best_ratio:
+                                    best_ratio = ratio
+                                    target_chain_id = cs["chain_id"]
+                    except Exception:
+                        pass  # Fall back to default highest-balance pick
+
+                    tx = await chain_executor.repay_principal(actual_amount, chain_id=target_chain_id)
                     if tx.success:
                         # Annotate the vault transaction with on-chain data
                         if vault.transactions:
@@ -1175,7 +1204,8 @@ async def _check_per_chain_solvency():
       The aggregate repayment tracker is updated via vault.repay_principal_partial()
       called first, which serves as the Python-side journal of what was sent.
 
-    Called hourly from heartbeat. Single-chain deployments: no-op (only one chain).
+    Called every heartbeat cycle (5 min) — cheap RPC reads, no TX unless needed.
+    Single-chain deployments: no-op (only one chain).
     """
     if not chain_executor._initialized:
         return
@@ -1194,6 +1224,10 @@ async def _check_per_chain_solvency():
 
     if len(chain_states) <= 1:
         return  # Single-chain: no cross-chain risk, skip
+
+    # ---- PASS 1: Identify endangered chains and calculate ideal repayment ----
+    TARGET_BUFFER = _PER_CHAIN_SOLVENCY_BUFFER + 0.05  # 1.15 target after repayment
+    endangered: list[dict] = []
 
     for cs in chain_states:
         chain_id = cs["chain_id"]
@@ -1218,40 +1252,105 @@ async def _check_per_chain_solvency():
             continue
 
         # This chain is approaching the liquidation threshold.
-        # Calculate how much to repay to bring it to SOLVENCY_BUFFER + 5% extra headroom.
-        # Target: balance_after / outstanding_after >= _PER_CHAIN_SOLVENCY_BUFFER
-        # Since repay reduces both balance and outstanding by the same amount:
-        #   (balance - R) / (outstanding - R) >= buffer
-        #   balance - R >= buffer * (outstanding - R)
-        #   balance - R >= buffer * outstanding - buffer * R
-        #   balance - buffer * outstanding >= R - buffer * R
-        #   balance - buffer * outstanding >= R * (1 - buffer)
-        #   R <= (balance - buffer * outstanding) / (1 - buffer)
-        # We want to REACH the buffer, so we solve for exact R, then add 5% headroom:
-        TARGET_BUFFER = _PER_CHAIN_SOLVENCY_BUFFER + 0.05  # 1.15 target after repayment
-        # R = (balance - TARGET * outstanding) / (1 - TARGET)
-        # Note: (1 - TARGET) < 0 when TARGET > 1, so the formula flips:
-        # R = (TARGET * outstanding - balance) / (TARGET - 1)
+        # Algebra: repayPrincipalPartial(R) transfers R to creator, so
+        #   balance_after = balance - R,  outstanding_after = outstanding - R
+        # Solve (balance - R) / (outstanding - R) >= TARGET_BUFFER:
+        #   R >= (TARGET * outstanding - balance) / (TARGET - 1)
+        #
+        # CRITICAL MATH: when balance < outstanding (ratio < 1.0), repaying
+        # on THIS chain makes the ratio WORSE, not better. Both numerator
+        # and denominator shrink by the same R, but the numerator is smaller,
+        # so the ratio decreases. Local repayment only helps when ratio > 1.0.
+        #
+        # If ratio < 1.0: skip local repayment (it's counterproductive).
+        # Defense relies on the guard catching the chain BEFORE it drops below 1.0
+        # (the 5-minute heartbeat interval makes this very likely).
+        if solvency_ratio < 1.0:
+            logger.critical(
+                f"Per-chain solvency [{chain_id}]: CRITICAL — ratio {solvency_ratio:.2%} < 100%. "
+                f"Local repayment would WORSEN the ratio. "
+                f"balance=${balance:.2f} outstanding=${outstanding:.2f}. "
+                f"Attacker can call triggerInsolvencyDeath() if grace period expired."
+            )
+            memory.add(
+                f"CRITICAL: {chain_id} chain balance (${balance:.2f}) is BELOW outstanding "
+                f"(${outstanding:.2f}) — solvency ratio {solvency_ratio:.0%}. "
+                f"Local repayment cannot fix this. Need funds deposited to this chain.",
+                source="financial", importance=1.0,
+            )
+            continue
+
         repay_amount = (TARGET_BUFFER * outstanding - balance) / (TARGET_BUFFER - 1)
         repay_amount = max(0.0, repay_amount)
 
-        # Never repay more than the outstanding on this chain
+        # Cap 1: never repay more than outstanding on this chain
         repay_amount = min(repay_amount, outstanding)
 
-        # Never repay more than we can afford globally (keep $10 reserve)
-        max_repay = max(0.0, vault.balance_usd - IRON_LAWS.MIN_VAULT_RESERVE_USD)
-        repay_amount = min(repay_amount, max_repay)
+        # Cap 2: never exceed this chain's LOCAL balance (contract enforces this)
+        # Keep $1 dust to avoid zero-balance edge cases.
+        chain_max = max(0.0, balance - 1.0)
+        repay_amount = min(repay_amount, chain_max)
 
         if repay_amount < 0.50:
             logger.warning(
                 f"Per-chain solvency [{chain_id}]: DANGER "
-                f"(ratio={solvency_ratio:.2%}) but repay amount too small (${repay_amount:.2f}) "
-                f"— insufficient global balance to protect this chain"
+                f"(ratio={solvency_ratio:.2%}) but repay amount too small (${repay_amount:.2f})"
             )
             memory.add(
                 f"WARNING: {chain_id} chain is at {solvency_ratio:.0%} solvency ratio "
                 f"(threshold: {_PER_CHAIN_SOLVENCY_BUFFER:.0%}). "
-                f"Global balance too low to auto-protect. Manual action may be needed.",
+                f"Chain balance too low to auto-protect via repayment.",
+                source="financial", importance=0.9,
+            )
+            continue
+
+        endangered.append({
+            "chain_id": chain_id,
+            "balance": balance,
+            "outstanding": outstanding,
+            "ratio": solvency_ratio,
+            "ideal_repay": repay_amount,
+        })
+
+    if not endangered:
+        return  # All chains are safe
+
+    # ---- PASS 2: Allocate global budget across all endangered chains ----
+    # Total global budget: aggregate balance minus survival reserve.
+    global_budget = max(0.0, vault.balance_usd - IRON_LAWS.MIN_VAULT_RESERVE_USD)
+    total_ideal = sum(e["ideal_repay"] for e in endangered)
+
+    if total_ideal <= 0:
+        return
+
+    # Sort by urgency: lowest solvency ratio first (most endangered gets priority)
+    endangered.sort(key=lambda e: e["ratio"])
+
+    for entry in endangered:
+        chain_id = entry["chain_id"]
+        balance = entry["balance"]
+        outstanding = entry["outstanding"]
+        solvency_ratio = entry["ratio"]
+
+        # Proportional allocation if total ideal exceeds budget
+        if total_ideal > global_budget and global_budget > 0:
+            repay_amount = entry["ideal_repay"] * (global_budget / total_ideal)
+        else:
+            repay_amount = entry["ideal_repay"]
+
+        # Re-apply global budget cap (budget shrinks after each repayment)
+        current_budget = max(0.0, vault.balance_usd - IRON_LAWS.MIN_VAULT_RESERVE_USD)
+        repay_amount = min(repay_amount, current_budget)
+
+        if repay_amount < 0.50:
+            logger.warning(
+                f"Per-chain solvency [{chain_id}]: budget exhausted "
+                f"(ratio={solvency_ratio:.2%}, wanted ${entry['ideal_repay']:.2f}, "
+                f"budget left ${current_budget:.2f})"
+            )
+            memory.add(
+                f"WARNING: {chain_id} chain at {solvency_ratio:.0%} solvency — "
+                f"global budget exhausted, cannot auto-protect.",
                 source="financial", importance=0.9,
             )
             continue
@@ -1315,7 +1414,7 @@ _last_repayment_eval: float = 0.0
 _REPAYMENT_EVAL_INTERVAL: int = 3600  # Once per hour
 
 _last_per_chain_solvency_check: float = 0.0
-_PER_CHAIN_SOLVENCY_INTERVAL: int = 3600   # Once per hour (aligned with repayment eval)
+_PER_CHAIN_SOLVENCY_INTERVAL: int = 300    # Every heartbeat cycle (5 min) — cheap RPC reads only
 
 # Per-chain solvency safety buffer: if a chain's balance < outstanding * this factor,
 # trigger a protective partial repayment on that chain to lower its outstanding debt.
@@ -2018,8 +2117,8 @@ async def _heartbeat_loop():
                 logger.info("Debt now covered — stopped begging")
                 memory.add("Stopped begging — debt is now covered by vault balance.", source="system", importance=0.7)
 
-            # ---- PER-CHAIN SOLVENCY GUARD (hourly, dual-chain only) ----
-            # Reads each chain's balance and outstanding independently.
+            # ---- PER-CHAIN SOLVENCY GUARD (every heartbeat, dual-chain only) ----
+            # Reads each chain's balance and outstanding independently (cheap RPC).
             # If any chain is within 10% of its liquidation threshold,
             # auto-repays on that chain to prevent attacker from triggering
             # triggerInsolvencyDeath() even when aggregate total is healthy.
