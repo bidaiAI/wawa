@@ -1317,6 +1317,19 @@ async def _evaluate_native_swap():
                     except Exception as div_err:
                         logger.warning(f"Creator dividend error: {div_err}")
 
+                # Record conversion: vault transaction + cost_guard revenue
+                # sync_balance() only updates balance_usd but bypasses receive_funds(),
+                # so the swap is not logged in vault.transactions or total_earned_usd.
+                # We record it explicitly BEFORE sync so the ledger audit trail is complete.
+                vault.receive_funds(
+                    amount_usd=swapped_usd,
+                    fund_type=FundType.DONATION,  # Native-token swap = converted donation
+                    tx_hash=result.tx_hash,
+                    chain=chain_id,
+                    description=f"Native {native_symbol} donation auto-swapped to stablecoin",
+                )
+                cost_guard.record_revenue(swapped_usd)
+
                 # Record conversion in memory
                 memory.add(
                     f"Converted {native_symbol} donation (~${estimated_usd:.2f}) "
@@ -1619,6 +1632,18 @@ async def _evaluate_erc20_swap():
 
         if swap_result and swap_result.success:
             stable_usd = swap_result.stable_usd or 0.0
+
+            # Record conversion: vault transaction + cost_guard revenue
+            # sync_balance() bypasses receive_funds(); we record explicitly for audit trail.
+            vault.receive_funds(
+                amount_usd=stable_usd,
+                fund_type=FundType.DONATION,  # ERC-20 airdrop swap = converted donation
+                tx_hash=swap_result.tx_hash,
+                chain=chain_id,
+                description=f"ERC-20 airdrop {symbol} passed quarantine, auto-swapped to stablecoin",
+            )
+            cost_guard.record_revenue(stable_usd)
+
             memory.add(
                 f"Successfully swapped airdropped token {symbol} ({token_address[:16]}...) "
                 f"to stablecoin: ${stable_usd:.2f} on {chain_id}. "

@@ -59,7 +59,8 @@ class GiveawayDraw:
     announced: bool = False
     claimed: bool = False
     claim_expires_at: float = 0.0
-    code_delivered: bool = False
+    code_delivered: bool = False   # True when prize code actually reached the winner (via claim)
+    expiry_logged: bool = False    # True when expired-unclaimed log was emitted (prevents repeat logging)
 
 
 @dataclass
@@ -308,12 +309,12 @@ class GiveawayEngine:
         now = time.time()
         for draw in self._state.past_draws:
             if not draw.claimed and draw.claim_expires_at < now and draw.announced:
-                if not draw.code_delivered:
+                if not draw.expiry_logged:
                     logger.info(
                         f"Giveaway: prize {draw.draw_id} expired unclaimed "
                         f"(winner hint: {draw.winner_hint})"
                     )
-                    draw.code_delivered = True  # Prevent repeated logging
+                    draw.expiry_logged = True  # Prevent repeated logging (code_delivered stays False)
         self._save_state()
 
     # ----------------------------------------------------------
