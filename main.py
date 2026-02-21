@@ -87,6 +87,7 @@ from core.token_filter import TokenFilter
 from core.self_modify import SelfModifyEngine
 from core.chain import ChainExecutor
 from core.peer_verifier import PeerVerifier
+import core.xai_search as xai_search
 from core.highlights import HighlightsEngine
 from core.purchasing import PurchaseManager, MerchantRegistry
 from twitter.agent import TwitterAgent, TweetType
@@ -193,6 +194,12 @@ def _setup_llm():
     if not _provider_configs:
         logger.warning("NO LLM PROVIDER CONFIGURED — wawa will run in rules-only mode")
         logger.warning("Set GEMINI_API_KEY, DEEPSEEK_API_KEY, or OPENROUTER_API_KEY")
+
+    # xAI Search (on-demand Twitter/X context injection — NOT a tier provider)
+    xai_key = os.getenv("XAI_API_KEY", "")
+    xai_base = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1")
+    if xai_search.initialize(xai_key, xai_base):
+        logger.info("xAI Search: X Search + Web Search enabled (on-demand injection)")
 
     # Log routing table
     tier = cost_guard.get_current_tier()
@@ -358,6 +365,19 @@ async def _call_llm(
 async def _small_llm_fn(messages: list[dict], max_tokens: int) -> tuple[str, float]:
     """Free chat — uses whatever tier the vault balance qualifies for."""
     return await _call_llm(messages, max_tokens=max_tokens)
+
+
+async def _fetch_search_context_fn(message: str, session_id: str) -> Optional[str]:
+    """
+    On-demand xAI Search callback for chat_router.
+    Called before LLM when Twitter/X keywords are detected in user message.
+    Returns context string to inject, or None if no search needed.
+    Cost is charged to vault as SpendType.SEARCH_TOOL.
+    """
+    context, cost = await xai_search.fetch_context(message, session_id)
+    if context and cost > 0:
+        vault.spend(cost, SpendType.SEARCH_TOOL, description="xAI:search")
+    return context
 
 
 async def _big_llm_fn(service_id: str, user_input: str) -> tuple[str, float]:
@@ -2397,6 +2417,7 @@ async def lifespan(app):
     chat_router.set_small_llm_function(_small_llm_fn)
     chat_router.set_vault_status_function(vault.get_status)
     chat_router.set_cost_status_function(cost_guard.get_status)
+    chat_router.set_search_context_function(_fetch_search_context_fn)
 
     tarot.set_interpret_function(_tarot_interpret_fn)
     token_analysis.set_interpret_function(_token_interpret_fn)

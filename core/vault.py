@@ -53,6 +53,7 @@ class SpendType(Enum):
     INSOLVENCY_LIQUIDATION = "insolvency_liquidation"  # All funds → creator on insolvency death
     PLATFORM_FEE = "platform_fee"             # API usage fee charged by platform
     PURCHASE = "purchase"                     # Autonomous merchant/peer purchases
+    SEARCH_TOOL = "search_tool"               # xAI X Search / Web Search tool calls
 
 
 @dataclass
