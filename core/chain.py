@@ -364,6 +364,23 @@ VAULT_ABI = [
         "stateMutability": "view",
         "type": "function",
     },
+    # ---- SWAP FLOW: rescue + deposit ----
+    # receivePayment(uint256 amount) — AI deposits stablecoins into vault
+    {
+        "inputs": [{"name": "amount", "type": "uint256"}],
+        "name": "receivePayment",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    # rescueNativeToken(uint256 amount) — AI pulls native tokens to own wallet
+    {
+        "inputs": [{"name": "amount", "type": "uint256"}],
+        "name": "rescueNativeToken",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
 ]
 
 # Null address constant for checks
@@ -633,15 +650,22 @@ class ChainExecutor:
         # Update balance if at least one chain synced successfully.
         # IMPORTANT: zero balance IS valid (must trigger death checks).
         # Only skip update if ALL chains failed (to avoid setting 0 from RPC errors).
+        #
+        # CHAIN-AUTHORITATIVE SYNC: On-chain balance is the source of truth.
+        # We always accept the chain's reported total when it differs from cached.
+        # The caller (heartbeat) MUST hold vault.get_lock() to serialise against
+        # concurrent /donate or dividend payouts that also mutate balance_usd.
+        # With the lock held, there are no in-flight Python mutations that could
+        # be clobbered — the lock guarantees exclusive access.
         if chains_synced > 0:
-            vault_manager.balance_usd = round(total, 2)
+            chain_total = round(total, 2)
+            vault_manager.balance_usd = chain_total
             self._last_sync = _time.time()
-            logger.debug(f"Balance synced: ${total:.2f} across {chains_synced} chains")
+            logger.debug(f"Balance synced: ${chain_total:.2f} across {chains_synced} chains")
 
-        # Sync isAlive from chain to catch external deaths (emergencyShutdown() called
-        # directly on contract by creator). Without this, Python vault stays alive after
-        # contract dies until the balance drops to 0 (which won't happen if creator already
-        # drained funds via emergencyShutdown — the contract sends funds before _die()).
+        # Sync isAlive from chain to catch external deaths (e.g. triggerInsolvencyDeath()
+        # called by anyone after 28-day grace period). Without this, Python vault stays
+        # alive after contract dies until local checks catch up.
         # One-way: once Python marks dead, never resurrect (isAlive=false is final).
         #
         # BUG-F fix: In dual-chain mode, only trigger Python death when ALL chains
@@ -747,16 +771,24 @@ class ChainExecutor:
             )
             return False
 
-        # Update vault manager's debt state
+        # Update vault manager's debt state (FORWARD-ONLY sync)
+        # Only overwrite Python state when chain reports MORE repaid.
+        # This prevents stale on-chain reads (unmined tx) from rolling back
+        # fresh Python-side repayments that are in-flight but not yet confirmed.
         if vault_manager.creator:
             old_repaid = vault_manager.creator.total_principal_repaid_usd
-            if abs(total_repaid - old_repaid) > 0.01:
+            if total_repaid > old_repaid + 0.01:
                 logger.warning(
                     f"DEBT SYNC: Python repaid=${old_repaid:.2f} vs chain repaid=${total_repaid:.2f}. "
-                    f"Using chain value (source of truth)."
+                    f"Chain is ahead — syncing forward."
                 )
                 vault_manager.creator.total_principal_repaid_usd = total_repaid
                 vault_manager.creator.principal_repaid = fully_repaid
+            elif old_repaid > total_repaid + 0.01:
+                logger.info(
+                    f"DEBT SYNC: Python repaid=${old_repaid:.2f} > chain=${total_repaid:.2f}. "
+                    f"Python is ahead (tx likely in-flight) — keeping Python value."
+                )
 
         # Sync birth timestamp from chain if Python doesn't have it
         if birth_timestamp and not vault_manager.birth_timestamp:
@@ -1770,7 +1802,7 @@ class ChainExecutor:
     # Flow (runs every 24 hours from heartbeat):
     #   1. check_native_vault_balance() — read vault's ETH/BNB balance
     #   2. If above MIN_NATIVE_SWAP_USD threshold:
-    #      a. vault.rescueNativeToken(aiWallet, amount) — pull to AI wallet
+    #      a. vault.rescueNativeToken(amount) — pull to AI wallet (always aiWallet)
     #      b. approve DEX router to spend the output stablecoin (USDC/USDT)
     #      c. DEX swap: ETH/BNB → USDC/USDT (amountOutMinimum for sandwich protection)
     #      d. vault.receivePayment(usdc_received) — deposit back as revenue
@@ -1780,7 +1812,7 @@ class ChainExecutor:
     #   - amountOutMinimum = price * (1 - MAX_SLIPPAGE_BPS/10000) — prevents sandwich
     #   - 2-minute deadline — prevents stale MEV-delayed execution
     #   - Native price from DEX pool quote (not oracle — avoids manipulation)
-    #   - AI wallet can only rescueNativeToken to itself (contract enforced)
+    #   - Only AI wallet can call rescueNativeToken (onlyAI modifier)
     #   - Swap output goes directly to AI wallet, then receivePayment to vault
 
     # Hardcoded DEX router addresses — only these routers are ever called.
@@ -1960,7 +1992,7 @@ class ChainExecutor:
         Steps:
           1. Read vault's native balance
           2. Quote price → gate on MIN_NATIVE_SWAP_USD
-          3. Call vault.rescueNativeToken(aiWallet, balance) — pull to AI wallet
+          3. Call vault.rescueNativeToken(balance) — pull to AI wallet (always aiWallet)
           4. Call Uniswap/PancakeSwap exactInputSingle — ETH/BNB → USDC/USDT
           5. Call vault.receivePayment(received_amount) — record as revenue
 
@@ -2031,12 +2063,12 @@ class ChainExecutor:
             f"(~${estimated_usd:.2f}) on {picked}"
         )
 
-        # ── Step 3: vault.rescueNativeToken(aiWallet, native_wei) ──
+        # ── Step 3: vault.rescueNativeToken(native_wei) ──
         # This pulls native tokens from vault → AI wallet so we can send them
         # to the DEX router (which requires msg.value from the sender).
+        # Contract always sends to aiWallet (no `to` parameter).
         try:
             rescue_fn = chain["vault_contract"].functions.rescueNativeToken(
-                Web3.to_checksum_address(ai_address),
                 native_wei,
             )
             rescue_result = await self._send_tx(picked, rescue_fn)
@@ -2053,7 +2085,12 @@ class ChainExecutor:
         # ── Step 4: DEX swap (native → stablecoin) ──
         # amountOutMinimum enforces slippage cap = sandwich protection.
         # sqrtPriceLimitX96=0 = no price limit (limit handled by amountOutMinimum).
-        # deadline = now + 2 minutes (blocks stale MEV-delayed execution).
+        # Note: actual swap amount will be slightly less than native_wei due to
+        # gas reserve (deducted inside _execute_swap). We use 0 for amountOutMinimum
+        # here because the exact swap_amount is computed inside the executor thread.
+        # The gas reserve is typically <0.1% of swap value on L2s, so slippage
+        # protection at 2% already covers this gap. Setting a tight floor based on
+        # pre-gas-deduction estimated_usd could cause spurious reverts.
         slippage_factor = 1.0 - (IRON_LAWS.NATIVE_SWAP_MAX_SLIPPAGE_BPS / 10000.0)
         amount_out_min_raw = int(_usd_to_raw(estimated_usd * slippage_factor, token_decimals))
 
@@ -2077,9 +2114,18 @@ class ChainExecutor:
             )
 
             def _execute_swap():
-                import time as _time
                 nonce = w3.eth.get_transaction_count(ai_address)
                 gas_price = w3.eth.gas_price
+
+                # Reserve gas budget for this swap + subsequent approve + receivePayment.
+                # 500k gas units covers: DEX swap (~300k) + approve (~80k) + receive (~120k).
+                gas_reserve = gas_price * 500_000
+                swap_amount = ai_native_wei - gas_reserve
+                if swap_amount <= 0:
+                    raise ValueError(
+                        f"Insufficient native balance for swap after gas reserve: "
+                        f"balance={ai_native_wei} wei, reserve={gas_reserve} wei"
+                    )
 
                 # Build swap tx with msg.value (native → wrapped via DEX's internal WETH conversion)
                 tx = router_contract.functions.exactInputSingle({
@@ -2087,12 +2133,12 @@ class ChainExecutor:
                     "tokenOut": Web3.to_checksum_address(token_address),
                     "fee": fee,
                     "recipient": Web3.to_checksum_address(ai_address),
-                    "amountIn": ai_native_wei,
+                    "amountIn": swap_amount,
                     "amountOutMinimum": amount_out_min_raw,
                     "sqrtPriceLimitX96": 0,
                 }).build_transaction({
                     "from": ai_address,
-                    "value": ai_native_wei,  # send ETH/BNB as msg.value for unwrap
+                    "value": swap_amount,  # send swap amount as msg.value (keep gas reserve)
                     "nonce": nonce,
                     "gasPrice": gas_price,
                     "chainId": chain["chain_id_int"],
@@ -2238,7 +2284,7 @@ class ChainExecutor:
     # Flow (runs every 24 hours from heartbeat, after 7-day quarantine):
     #   1. get_erc20_vault_balance() — read token balance in vault
     #   2. If balance > ERC20_SWAP_MIN_USD threshold:
-    #      a. vault.rescueERC20(token, aiWallet, amount) — pull to AI wallet
+    #      a. vault.rescueERC20(token, amount) — pull to AI wallet (always aiWallet)
     #      b. Approve DEX router to spend the foreign token
     #      c. DEX swap: foreign token → USDC/USDT (exactInputSingle)
     #      d. Approve vault, vault.receivePayment(usdc_received) — back as revenue
@@ -2247,7 +2293,7 @@ class ChainExecutor:
     #   - Token pre-screened by token_filter.py (7-day quarantine, honeypot check)
     #   - amountOutMinimum guards against sandwich attacks
     #   - 2-minute deadline prevents stale MEV execution
-    #   - AI can only rescueERC20 to itself (contract enforced)
+    #   - Only AI wallet can call rescueERC20 (onlyAI modifier)
     #   - Vault's own token (USDC/USDT) is blocked by rescueERC20 require()
 
     # Minimal ERC-20 ABI for approve + balanceOf calls on foreign tokens
@@ -2283,7 +2329,6 @@ class ChainExecutor:
         {
             "inputs": [
                 {"name": "tokenAddr", "type": "address"},
-                {"name": "to", "type": "address"},
                 {"name": "amount", "type": "uint256"},
             ],
             "name": "rescueERC20",
@@ -2361,7 +2406,7 @@ class ChainExecutor:
 
         Flow:
           1. Read vault's ERC-20 balance
-          2. vault.rescueERC20(token, aiWallet, raw_balance) — pull to AI wallet
+          2. vault.rescueERC20(token, raw_balance) — pull to AI wallet (always aiWallet)
           3. Approve DEX router to spend the foreign token
           4. exactInputSingle: foreign_token → stablecoin (amountOutMinimum guard)
           5. Approve vault, receivePayment(stable_raw) — deposit back as revenue
@@ -2428,7 +2473,8 @@ class ChainExecutor:
             f"of {token_address[:12]}... on {picked}"
         )
 
-        # ── Step 2: vault.rescueERC20(tokenAddr, aiWallet, raw_balance) ──
+        # ── Step 2: vault.rescueERC20(tokenAddr, raw_balance) ──
+        # Contract always sends to aiWallet (no `to` parameter).
         try:
             # Build rescueERC20 call.  The vault ABI may not include this function
             # if an older ABI was cached — we use a fresh contract instance with
@@ -2439,7 +2485,6 @@ class ChainExecutor:
             )
             rescue_fn = rescue_contract.functions.rescueERC20(
                 token_addr_checksum,
-                ai_addr_checksum,
                 raw_balance,
             )
             rescue_result = await self._send_tx(picked, rescue_fn)

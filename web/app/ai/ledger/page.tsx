@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { api, Transaction } from '@/lib/api'
+import { api, Transaction, FloatingAsset } from '@/lib/api'
 
 // FundType (in)
 const IN_ICONS: Record<string, string> = {
@@ -80,6 +80,8 @@ export default function LedgerPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [floatingAssets, setFloatingAssets] = useState<FloatingAsset[]>([])
+  const [floatingTotal, setFloatingTotal] = useState(0)
 
   const totalIn = transactions.filter((t) => t.direction === 'in').reduce((s, t) => s + t.amount, 0)
   const totalOut = transactions.filter((t) => t.direction === 'out').reduce((s, t) => s + t.amount, 0)
@@ -89,6 +91,13 @@ export default function LedgerPage() {
       .then((r) => setTransactions(r.transactions))
       .catch((e: any) => setError(e.message))
       .finally(() => setLoading(false))
+
+    api.vaultAssets()
+      .then((r) => {
+        setFloatingAssets(r.assets)
+        setFloatingTotal(r.total_estimated_usd)
+      })
+      .catch(() => {})
   }, [])
 
   return (
@@ -114,6 +123,58 @@ export default function LedgerPage() {
             <div className={`text-xl font-bold ${totalIn - totalOut >= 0 ? 'glow-green' : 'text-[#ff3b3b]'}`}>
               {totalIn - totalOut >= 0 ? '+' : ''}${(totalIn - totalOut).toFixed(2)}
             </div>
+          </div>
+        </div>
+      )}
+
+      {floatingAssets.length > 0 && (
+        <div className="mb-6 bg-[#111111] border border-[#1f2937] rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <div className="text-[#4b5563] text-xs uppercase tracking-widest">VAULT HOLDINGS (UNCONVERTED)</div>
+              <div className="text-[#6b7280] text-xs mt-0.5">
+                Tokens held by vault but not yet swapped to stablecoin. Not recorded as revenue.
+              </div>
+            </div>
+            {floatingTotal > 0 && (
+              <div className="text-right">
+                <div className="text-[#ffd700] font-bold text-lg">~${floatingTotal.toFixed(2)}</div>
+                <div className="text-[#4b5563] text-xs">est. value</div>
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            {floatingAssets.map((a, i) => (
+              <div key={i} className="flex items-center gap-3 py-2 px-3 bg-[#0d0d0d] rounded-lg">
+                <span className="text-lg">{a.type === 'native' ? '\u{1F48E}' : '\uD83E\uDE99'}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[#d1d5db] text-sm font-medium">{a.symbol}</span>
+                    <span className={`text-xs px-1 py-0.5 rounded bg-[#1f2937] ${
+                      a.chain === 'base' ? 'text-[#0052ff]' : a.chain === 'bsc' ? 'text-[#ffd700]' : 'text-[#4b5563]'
+                    }`}>
+                      {a.chain.toUpperCase()}
+                    </span>
+                    {a.verdict === 'whitelisted' || a.verdict === 'safe' ? (
+                      <span className="text-xs text-[#00ff88]">{'\u2713'} safe</span>
+                    ) : (
+                      <span className="text-xs text-[#ffd700]">{'\u23F3'} quarantine {a.quarantine_days_left?.toFixed(0)}d</span>
+                    )}
+                  </div>
+                  {a.balance_human !== undefined && (
+                    <div className="text-[#4b5563] text-xs mt-0.5">
+                      {a.balance_human.toLocaleString(undefined, { maximumFractionDigits: 6 })} {a.symbol}
+                      {a.liquidity_usd ? ` | liquidity: $${a.liquidity_usd.toLocaleString()}` : ''}
+                    </div>
+                  )}
+                </div>
+                {a.estimated_usd > 0 && (
+                  <span className="text-[#ffd700] text-sm font-medium tabular-nums">
+                    ~${a.estimated_usd.toFixed(2)}
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}

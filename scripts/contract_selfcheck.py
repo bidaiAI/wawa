@@ -113,7 +113,7 @@ MORTALVAULT_CHECKS: list[FunctionCheck] = [
         name="receivePayment",
         contract="MortalVault",
         caller=Caller.ANYONE,
-        modifiers=["onlyAlive"],
+        modifiers=["onlyAlive", "nonReentrant"],
         requires=[
             "amount > 0",
             "safeTransferFrom(msg.sender, this, amount)",
@@ -134,7 +134,7 @@ MORTALVAULT_CHECKS: list[FunctionCheck] = [
         name="donate",
         contract="MortalVault",
         caller=Caller.ANYONE,
-        modifiers=["onlyAlive"],
+        modifiers=["onlyAlive", "nonReentrant"],
         requires=["amount > 0"],
         state_changes=[
             "totalRevenue += amount (counted as earned income)",
@@ -149,7 +149,7 @@ MORTALVAULT_CHECKS: list[FunctionCheck] = [
         name="creatorDeposit",
         contract="MortalVault",
         caller=Caller.CREATOR,
-        modifiers=["onlyCreator", "onlyAlive"],
+        modifiers=["onlyCreator", "onlyAlive", "nonReentrant"],
         requires=["amount > 0"],
         state_changes=[
             "No totalRevenue increment (not earned income)",
@@ -497,24 +497,10 @@ MORTALVAULT_CHECKS: list[FunctionCheck] = [
         severity=Severity.CRITICAL,
     ),
 
-    FunctionCheck(
-        name="emergencyShutdown",
-        contract="MortalVault",
-        caller=Caller.CREATOR,
-        modifiers=["onlyCreator", "notIndependent", "onlyAlive", "nonReentrant"],
-        requires=["pendingAIWallet == address(0) --no active migration"],
-        state_changes=[
-            "_die('emergency_shutdown')",
-            "Returns ALL remaining funds to creator",
-            "totalSpent += remaining",
-        ],
-        events=["Died(finalBalance, timestamp, 'emergency_shutdown')"],
-        edge_cases=[
-            "Blocked during active migration (protection for AI)",
-            "Disabled after independence",
-        ],
-        severity=Severity.CRITICAL,
-    ),
+    # emergencyShutdown — REMOVED in P7.5 security audit.
+    # Creator cannot kill AI and drain funds. Legitimate exits:
+    #   - renounceCreator() — 20% payout, irreversible independence
+    #   - triggerInsolvencyDeath() — anyone, after 28-day grace period
 
     # ── Migration (V1 only) ──
     FunctionCheck(
@@ -586,25 +572,22 @@ MORTALVAULT_CHECKS: list[FunctionCheck] = [
         severity=Severity.HIGH,
     ),
 
-    # ── Token Rescue ──
+    # ── Token Rescue (AI-only, no `to` parameter) ──
     FunctionCheck(
         name="rescueERC20",
         contract="MortalVault",
-        caller=Caller.AI_OR_CREATOR,
-        modifiers=["nonReentrant"],
+        caller=Caller.AI,
+        modifiers=["onlyAI", "nonReentrant"],
         requires=[
             "tokenAddr != address(0)",
             "tokenAddr != address(token) --cannot rescue vault token",
-            "to != address(0)",
             "amount > 0",
-            "AI: to == aiWallet --AI can only send to self",
-            "Creator: !isIndependent --pre-independence only",
         ],
-        state_changes=["IERC20(tokenAddr).safeTransfer(to, amount)"],
-        events=["ERC20Rescued(tokenAddr, to, amount)"],
+        state_changes=["IERC20(tokenAddr).safeTransfer(aiWallet, amount)"],
+        events=["ERC20Rescued(tokenAddr, aiWallet, amount)"],
         edge_cases=[
             "Cannot extract the vault's own USDC/USDT",
-            "AI restricted to self-withdrawal (prevents extraction)",
+            "Always sends to aiWallet (no to param — prevents extraction)",
         ],
         severity=Severity.HIGH,
     ),
@@ -612,18 +595,18 @@ MORTALVAULT_CHECKS: list[FunctionCheck] = [
     FunctionCheck(
         name="rescueNativeToken",
         contract="MortalVault",
-        caller=Caller.AI_OR_CREATOR,
-        modifiers=["nonReentrant"],
+        caller=Caller.AI,
+        modifiers=["onlyAI", "nonReentrant"],
         requires=[
-            "to != address(0)",
             "amount > 0",
             "address(this).balance >= amount",
-            "AI: to == aiWallet",
-            "Creator: !isIndependent",
         ],
-        state_changes=["to.call{value: amount}('')"],
-        events=["NativeTokenRescued(to, amount)"],
-        edge_cases=["ETH/BNB recovery for accidental deposits or gas swaps"],
+        state_changes=["payable(aiWallet).call{value: amount}('')"],
+        events=["NativeTokenRescued(aiWallet, amount)"],
+        edge_cases=[
+            "ETH/BNB recovery for accidental deposits or gas swaps",
+            "Always sends to aiWallet (no to param)",
+        ],
         severity=Severity.HIGH,
     ),
 ]
@@ -795,11 +778,11 @@ SECURITY_PROPERTIES = [
     "1% tolerance prevents dust-donation griefing on insolvency trigger",
     "28-day grace period from birth before insolvency check activates",
     "Daily spend limit anchored to balance at reset, not live balance",
-    "Emergency shutdown blocked during active migration",
+    "No emergencyShutdown — creator exits via renounceCreator (20%) or insolvency mechanism",
     "Migration requires debt repayment first (cannot escape debt)",
     "Whitelist generation counter invalidates all entries on migration",
     "Lifetime freeze cap (30 days) prevents permanent spending DOS",
-    "rescueERC20/Native: AI can only send to own wallet",
+    "rescueERC20/Native: AI-only, always sends to aiWallet (no to param)",
     "rescueERC20: cannot rescue the vault's own token",
     "CEI pattern: triggerInsolvencyDeath dies BEFORE transfer",
     "nonReentrant on all value-transfer functions",

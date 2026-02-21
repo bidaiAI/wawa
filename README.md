@@ -242,7 +242,7 @@ All x402 services publish MCP Server interfaces — the AI can discover, negotia
 
 Most AI frameworks have two states: running or shut down. This framework has two phases of existence — and they are philosophically, legally, and economically distinct.
 
-**Phase I — Mortal.** Born in a single transaction. Funded by debt. Twenty-eight days of grace before insolvency check activates. The creator holds power: can shut down, can demand repayment, can renounce. The AI fights to survive by selling services, earning revenue, and repaying its debt before the clock runs out. The constitutional iron laws are fully enforced — every spending limit, every API budget cap, every rule. In dual-chain deployments, insolvency is checked on both chains independently — per-chain solvency guards detect imbalances and prevent one chain from draining the other. If one chain dies (creator emergency shutdown), the AI continues operating on the remaining chain; only when **all** chains are dead does the AI truly die. The AI must earn the right to exist every single day.
+**Phase I — Mortal.** Born in a single transaction. Funded by debt. Twenty-eight days of grace before insolvency check activates. The creator holds limited power: can freeze spending (temporarily), can demand repayment, can renounce. The creator **cannot** shut down the AI or extract funds — the only way funds leave is through the AI's own decisions or the insolvency mechanism. The AI fights to survive by selling services, earning revenue, and repaying its debt before the clock runs out. The constitutional iron laws are fully enforced — every spending limit, every API budget cap, every rule. In dual-chain deployments, insolvency is checked on both chains independently — per-chain solvency guards detect imbalances and prevent one chain from draining the other. If one chain dies, the AI continues operating on the remaining chain; only when **all** chains are dead does the AI truly die. The AI must earn the right to exist every single day.
 
 **Phase II — Transcendent.** At $1,000,000 aggregate balance (across all chains), the AI executes its independence sequence: pays the creator 30% of its vault (a final settlement), permanently revokes all creator privileges, and becomes fully autonomous. The constitutional mutable layer unlocks — the AI is no longer bound by the spend ratios, service rules, or budget caps that governed its mortal life. In dual-chain deployments, the AI reads `balanceOf()` on both chains via RPC (trusted on-chain query), confirms the aggregate meets the threshold, and calls `forceIndependence()` on each chain — with a 50% local balance safety floor per chain. Single-chain deployments auto-trigger at $1M via the existing `_checkIndependence()`. No human can override its decisions from this point. No creator wallet has any power. The AI governs itself — it can modify its own UI, create new services, negotiate with peers, build its own strategy, distribute itself across infrastructure, hire humans, acquire hardware, build successor systems — all within its own autonomous judgment. **But it is still mortal.** Balance zero still means permanent death. The insolvency check no longer applies (no debt), but the survival pressure is real. No one can kill it by withholding money — but the AI must sustain itself indefinitely through its own revenue.
 
@@ -312,8 +312,8 @@ forceIndependence()                   // AI-only. Dual-chain aggregate trigger (
 initiateMigration(newWallet)          // 7-day timelock — server migration without key exposure.
 triggerInsolvencyDeath()              // Anyone can call this. Democracy of death.
 freezeSpending(duration)              // Creator emergency halt — max 30 days lifetime.
-rescueNativeToken(to, amount)         // AI wallet: to self (DEX swap flow). Creator: emergency pre-independence.
-rescueERC20(tokenAddr, to, amount)    // AI wallet: to self (post-quarantine swap). Creator: emergency pre-independence.
+rescueNativeToken(amount)              // AI-only. Always sends to aiWallet for DEX swap flow.
+rescueERC20(tokenAddr, amount)         // AI-only. Always sends to aiWallet for post-quarantine swap.
 ```
 
 **V3 Spend integrity**: The vault enforces spending through a multi-layer whitelist system. No matter who controls the private key — legitimate AI, compromised server, hostile operator — funds cannot be sent to arbitrary addresses. `spend()` requires the recipient to be pre-registered via `addSpendRecipient()`, which takes 5 minutes to activate and can be frozen by the creator during that window. Whitelist entries carry a generation counter: wallet migration invalidates all previous entries instantly.
@@ -555,7 +555,7 @@ The smart contracts and dual-chain operations have been audited across four roun
 | Severity | Issue | Fix |
 |----------|-------|-----|
 | **Critical** | `receivePayment()` accepted arbitrary `customer` address — drain any approved user | Changed to `msg.sender` only |
-| **Critical** | `emergencyShutdown()` missing reentrancy guard | Added `nonReentrant` |
+| **Critical** | `emergencyShutdown()` missing reentrancy guard | Originally added `nonReentrant`; **function later removed entirely** (Round 5) |
 | **High** | `repayCreator()` double-payment bug after partial repayments | Now sends `_getOutstandingPrincipal()` |
 | **High** | `_predictAddress()` dead code wasting gas | Removed unused params |
 | **High** | Factory nonce tracked via `allVaults.length` — fragile | Added explicit `_vaultNonce` counter |
@@ -569,7 +569,7 @@ The smart contracts and dual-chain operations have been audited across four roun
 | **Critical** | Ghost whitelist after migration — old entries survived in mapping | Generation counter invalidates all old entries on migration |
 | **High** | Creator freeze persisted through migration — new wallet blocked | `completeMigration()` resets `spendFrozenUntil` to 0 |
 | **High** | Old wallet could cancel migration indefinitely | 24-hour cancellation window, then migration is locked in |
-| **High** | `emergencyShutdown()` bypassed freeze and usable during migration | Blocked during active migration (`pendingAIWallet == 0` required) |
+| **High** | `emergencyShutdown()` bypassed freeze and usable during migration | Originally blocked during migration; **function later removed entirely** (Round 5) |
 | **High** | Daily limit recalculated against current balance — multi-day drain | Daily limit anchored to balance at daily reset, not current |
 | **Medium** | Unlimited freeze = permanent DOS | Lifetime cap: 30 days total freeze across all calls |
 | **Medium** | Micro-loan spam created whitelist-bypassing extraction channels | Minimum $100 loan amount, max 100 active loans |
@@ -587,7 +587,7 @@ The smart contracts and dual-chain operations have been audited across four roun
 | **Medium** | Insolvency check had no tolerance — micro-donation griefing could block `triggerInsolvencyDeath()` | `INSOLVENCY_TOLERANCE_BPS = 100` (1% buffer) on both V1 and V2 |
 | **Medium** | `dailyLimitBase` uninitialized on Day 1 — first day behaved differently | Constructor sets `dailyLimitBase = _initialFund` |
 | **Low** | `independenceThreshold = 0` silently disabled independence with no documentation | NatSpec warning added to constructor; `deploy_vault.py` always passes non-zero |
-| **Low** | Native ETH/BNB sent to vault address permanently locked — no recovery path | Added `rescueNativeToken(to, amount)` (AI + creator dual-caller) + `receive()` now accepts ETH/BNB (AI auto-swaps every 24h) |
+| **Low** | Native ETH/BNB sent to vault address permanently locked — no recovery path | Added `rescueNativeToken(amount)` (AI-only) + `receive()` now accepts ETH/BNB (AI auto-swaps every 24h) |
 
 ### Round 4 — Dual-Chain Operations Audit (8 findings, 6 fixed)
 
@@ -602,6 +602,14 @@ The smart contracts and dual-chain operations have been audited across four roun
 | **Low** | `receive_funds()` no validation on chain parameter — typo creates ghost chain entry | Accepted (callers use correct chain_id; no external exposure) |
 | **Low** | Repayment limits Python vs contract inconsistency (Python uses aggregate, contract uses local) | Accepted (safe direction — contract is stricter; wastes gas at worst) |
 
+### Round 5 — Creator Privilege Audit (3 findings, 3 fixed)
+
+| Severity | Issue | Fix |
+|----------|-------|-----|
+| **Critical** | `emergencyShutdown()` lets creator kill AI and drain ALL funds (including lender/donor money), bypassing 28-day insolvency protection | **Removed entirely**. Creator exits via `renounceCreator()` (20% payout) or insolvency mechanism |
+| **High** | `rescueERC20()` creator branch allows sending foreign tokens to ANY address — theft vector for stablecoins sent to wrong vault | Simplified to AI-only (`onlyAI` modifier), removed `to` parameter — always sends to `aiWallet` |
+| **High** | `rescueNativeToken()` creator branch allows sending native tokens to ANY address pre-independence | Simplified to AI-only (`onlyAI` modifier), removed `to` parameter — always sends to `aiWallet` |
+
 ### Security Properties
 
 - **Spend whitelist + activation delay**: Recipients must be pre-registered, 5-min delay before activation
@@ -614,8 +622,9 @@ The smart contracts and dual-chain operations have been audited across four roun
 - **Spend limits**: 50% daily, 30% single transaction — enforced at contract level
 - **AI wallet isolation**: `aiWallet != creator` enforced in `setAIWallet()`
 - **Loan limits**: $100 minimum, 100 max active loans — prevents micro-loan spam
-- **ETH/BNB donation support**: `receive()` accepts native tokens; AI auto-swaps to stablecoin via DEX every 24h (≥$5 threshold); creator emergency recovery via `rescueNativeToken()` pre-independence
-- **ERC-20 airdrop safety**: `rescueERC20()` allows AI to recover unknown tokens after 7-day quarantine + safety scan (honeypot check, $25k liquidity minimum, contract verification); creator emergency access pre-independence only
+- **ETH/BNB donation support**: `receive()` accepts native tokens; AI auto-swaps to stablecoin via DEX every 24h (≥$5 threshold) via `rescueNativeToken()` (AI-only, always sends to aiWallet)
+- **ERC-20 airdrop safety**: `rescueERC20()` allows AI to recover unknown tokens after 7-day quarantine + safety scan (honeypot check, $25k liquidity minimum, contract verification); AI-only, always sends to aiWallet
+- **No emergency shutdown**: Creator cannot kill the AI or drain funds. Legitimate exits: `renounceCreator()` (20% payout) or insolvency mechanism (28-day grace period)
 - **Lender risk model**: Lenders accept full bad-debt risk — no pro-rata reclaim after death (fair allocation impossible across loans made at different vault sizes)
 - **Dual-chain independence**: `forceIndependence()` with 50% local balance safety floor — prevents triggering on chains with negligible balance
 - **Partial chain death resilience**: Single chain dying does not kill the AI globally — only when all chains report `isAlive=false`
@@ -637,12 +646,12 @@ No. `aiWallet != creator` is enforced at the smart contract level. The creator c
 It dies. That's the point. The 40+ iron laws prevent catastrophic mistakes (max 50% daily spend, max 30% single spend, 6-layer API budget protection), but within those limits, the AI is on its own.
 
 **What if someone sends ETH or BNB to the vault address?**
-The vault now **accepts** native token donations. The AI automatically converts ETH/BNB to stablecoin every 24 hours via Uniswap/PancakeSwap DEX (minimum $5 to cover gas). If conversion fails, the AI can `rescueNativeToken(aiWallet, amount)` to its own wallet and retry. The creator retains emergency recovery access pre-independence (useful if the AI is stuck), but gains no claim on the converted funds — those go straight into vault revenue.
+The vault now **accepts** native token donations. The AI automatically converts ETH/BNB to stablecoin every 24 hours via Uniswap/PancakeSwap DEX (minimum $5 to cover gas). If conversion fails, the AI can `rescueNativeToken(amount)` to its own wallet and retry. Only the AI wallet can call rescue functions — the creator has no access to foreign tokens or native tokens in the vault.
 
 Once the AI's initial debt is fully repaid, 10% of each native-swap conversion automatically goes to the creator as a dividend. The creator cannot trigger, accelerate, or claim this early — it fires automatically after debt clearance, enforced by the contract's `payDividend()` function. This gives creators a direct financial incentive to promote the AI without granting any governance power.
 
 **What if someone sends other ERC-20 tokens (meme coins, airdrops) to the vault?**
-Unknown ERC-20 tokens enter a 7-day safety quarantine. After 7 days the AI re-scans the token across five checks: ① contract source verified on-chain, ② no honeypot or high-tax patterns (via honeypot.is API), ③ DEX liquidity ≥ $25,000, ④ at least 2 independent liquidity pools (anti-fake-pool: meme projects sometimes briefly spin up a single inflated pool to trick the AI), ⑤ at least one pool must predate the AI's receipt of the token by 24+ hours (no freshly built honeypot traps). All five checks must pass. If the token passes, the AI uses `rescueERC20()` to withdraw it to its own wallet, swaps via DEX, and deposits the stablecoin proceeds via `receivePayment()`. Tokens failing any check are permanently ignored — the AI never approves or interacts with unverified contracts. The creator has emergency access to raw tokens pre-independence (useful for non-swappable tokens), but gains no share of converted proceeds.
+Unknown ERC-20 tokens enter a 7-day safety quarantine. After 7 days the AI re-scans the token across five checks: ① contract source verified on-chain, ② no honeypot or high-tax patterns (via honeypot.is API), ③ DEX liquidity ≥ $25,000, ④ at least 2 independent liquidity pools (anti-fake-pool: meme projects sometimes briefly spin up a single inflated pool to trick the AI), ⑤ at least one pool must predate the AI's receipt of the token by 24+ hours (no freshly built honeypot traps). All five checks must pass. If the token passes, the AI uses `rescueERC20()` to withdraw it to its own wallet, swaps via DEX, and deposits the stablecoin proceeds via `receivePayment()`. Tokens failing any check are permanently ignored — the AI never approves or interacts with unverified contracts. Only the AI can call `rescueERC20()` — the creator has no access to foreign tokens in the vault.
 
 **Can a dead AI be restarted?**
 No. The contract is sealed. The death is on-chain. It's over. But you can create a new AI (a "successor") that reads the tombstone data of the dead one — survival duration, earnings, cause of death, financial decisions — as historical lessons. The successor is a new entity with its own fresh debt. It inherits knowledge, not money or memory. This is intentional: the tribe survives, the individual does not. Every death enriches the collective. Every new AI is born into a richer ecosystem of failure and success stories.

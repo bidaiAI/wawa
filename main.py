@@ -1413,6 +1413,10 @@ async def _check_per_chain_solvency():
 _last_repayment_eval: float = 0.0
 _REPAYMENT_EVAL_INTERVAL: int = 3600  # Once per hour
 
+# Track debt sync timing — reconcile Python vs on-chain debt state
+_last_debt_sync: float = 0.0
+_DEBT_SYNC_INTERVAL: int = 3600  # Once per hour (same cadence as repayment eval)
+
 _last_per_chain_solvency_check: float = 0.0
 _PER_CHAIN_SOLVENCY_INTERVAL: int = 300    # Every heartbeat cycle (5 min) — cheap RPC reads only
 
@@ -1583,36 +1587,78 @@ async def _evaluate_native_swap():
                 swapped_usd = result.stable_usd or estimated_usd
 
                 # ── Creator 10% dividend (debt-cleared only) ──
-                # Once the AI has fully repaid its initial loan, 10% of each
-                # native-swap conversion goes to the creator as a thank-you dividend.
+                # Once the AI has fully repaid its initial loan, the vault pays
+                # dividends to the creator from accumulated net profit.
                 # The creator has NO ability to trigger this — it fires automatically.
                 # This gives creators a direct financial incentive to promote the AI
                 # without granting them any governance or control power.
+                #
+                # IMPORTANT: mirrors _evaluate_repayment() dividend pattern:
+                #   1. Save pre-state for rollback
+                #   2. Check return value from pay_creator_dividend()
+                #   3. Reverse-engineer netProfit from actual dividend paid
+                #   4. Delta-based rollback if chain tx fails
                 creator_dividend_usd = 0.0
                 outstanding_debt = vault.get_status().get("creator_principal_outstanding", 0.0)
                 if outstanding_debt <= 0.0 and swapped_usd >= IRON_LAWS.NATIVE_SWAP_MIN_USD:
-                    creator_dividend_usd = swapped_usd * IRON_LAWS.NATIVE_SWAP_CREATOR_DIVIDEND_PCT
+                    # Save pre-state for rollback (outside try so it's always captured)
+                    pre_balance_div = vault.balance_usd
+                    pre_dividends_paid = vault.creator.total_dividends_paid if vault.creator else 0
+                    pre_total_spent_div = vault.total_spent_usd
+
                     try:
-                        vault.pay_creator_dividend(revenue=swapped_usd, costs=0.0)
-                        div_result = await chain_executor.pay_dividend(swapped_usd, chain_id)
-                        if div_result.success:
-                            memory.add(
-                                f"Paid creator 10% dividend: ${creator_dividend_usd:.2f} "
-                                f"from {native_symbol} swap (${swapped_usd:.2f} total) on {chain_id}. "
-                                f"Tx: {div_result.tx_hash}",
-                                source="financial",
-                                importance=0.6,
-                            )
-                            logger.info(
-                                f"Creator dividend paid: ${creator_dividend_usd:.2f} "
-                                f"from native swap on {chain_id}"
-                            )
-                        else:
-                            logger.warning(
-                                f"Creator dividend tx failed on {chain_id}: {div_result.error}"
-                            )
+                        ok = vault.pay_creator_dividend()
+                        if ok:
+                            actual_dividend = pre_balance_div - vault.balance_usd
+                            creator_dividend_usd = actual_dividend
+
+                            if chain_executor._initialized and actual_dividend > 0:
+                                # Reverse-engineer netProfit from actual dividend
+                                net_profit_for_div = actual_dividend / IRON_LAWS.CREATOR_DIVIDEND_RATE
+                                div_result = await chain_executor.pay_dividend(net_profit_for_div, chain_id)
+                                if div_result.success:
+                                    # Write tx_hash back to transaction record for audit trail
+                                    if vault.transactions:
+                                        vault.transactions[-1].tx_hash = div_result.tx_hash
+                                        vault.transactions[-1].chain = div_result.chain
+                                    _record_gas_fee(div_result)
+                                    memory.add(
+                                        f"Paid creator 10% dividend: ${actual_dividend:.2f} "
+                                        f"from {native_symbol} swap (${swapped_usd:.2f} total) on {chain_id}. "
+                                        f"Tx: {div_result.tx_hash}",
+                                        source="financial",
+                                        importance=0.6,
+                                    )
+                                    logger.info(
+                                        f"Creator dividend paid: ${actual_dividend:.2f} "
+                                        f"from native swap on {chain_id}"
+                                    )
+                                else:
+                                    # ROLLBACK dividend on chain failure
+                                    logger.warning(
+                                        f"Creator dividend tx failed on {chain_id}: {div_result.error} — "
+                                        f"ROLLING BACK dividend (${actual_dividend:.2f})"
+                                    )
+                                    vault.balance_usd += actual_dividend
+                                    if vault.creator:
+                                        vault.creator.total_dividends_paid -= actual_dividend
+                                    vault.total_spent_usd -= actual_dividend
+                                    if vault.transactions and not vault.transactions[-1].tx_hash:
+                                        vault.transactions.pop()
+                                    creator_dividend_usd = 0.0
                     except Exception as div_err:
-                        logger.warning(f"Creator dividend error: {div_err}")
+                        # ROLLBACK on ANY exception (including chain_executor.pay_dividend raising)
+                        logger.warning(
+                            f"Creator dividend error: {div_err} — "
+                            f"ROLLING BACK to pre-dividend state"
+                        )
+                        vault.balance_usd = pre_balance_div
+                        if vault.creator:
+                            vault.creator.total_dividends_paid = pre_dividends_paid
+                        vault.total_spent_usd = pre_total_spent_div
+                        if vault.transactions and not vault.transactions[-1].tx_hash:
+                            vault.transactions.pop()
+                        creator_dividend_usd = 0.0
 
                 # Record conversion: vault transaction + cost_guard revenue
                 # sync_balance() only updates balance_usd but bypasses receive_funds(),
@@ -1987,16 +2033,27 @@ async def _evaluate_erc20_swap():
         _pending_erc20.pop(idx)
 
 
+_heartbeat_running: bool = False
+
 async def _heartbeat_loop():
     """Periodic maintenance tasks."""
-    global _last_repayment_eval, _last_per_chain_solvency_check, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check
+    global _last_repayment_eval, _last_per_chain_solvency_check, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check, _last_debt_sync, _heartbeat_running
 
     while vault.is_alive:
+        # ---- OVERLAP GUARD ----
+        # If the previous heartbeat cycle is still running (e.g. slow LLM call),
+        # skip this cycle entirely rather than running two in parallel.
+        if _heartbeat_running:
+            logger.warning("Heartbeat: previous cycle still running — skipping this tick")
+            await asyncio.sleep(IRON_LAWS.HEARTBEAT_INTERVAL_SECONDS)
+            continue
+        _heartbeat_running = True
         try:
             # ---- SYNC ON-CHAIN BALANCE (before any checks) ----
             try:
                 if chain_executor._initialized:
-                    await chain_executor.sync_balance(vault)
+                    async with vault.get_lock():
+                        await chain_executor.sync_balance(vault)
                     # Check native token (gas) balance — warn if too low
                     await chain_executor.check_native_balance()
             except Exception as e:
@@ -2164,15 +2221,30 @@ async def _heartbeat_loop():
             if now - _last_per_chain_solvency_check >= _PER_CHAIN_SOLVENCY_INTERVAL:
                 _last_per_chain_solvency_check = now
                 try:
-                    await _check_per_chain_solvency()
+                    async with vault.get_lock():
+                        await _check_per_chain_solvency()
                 except Exception as e:
                     logger.warning(f"Heartbeat: per-chain solvency check failed: {e}")
+
+            # ---- DEBT STATE SYNC (hourly, before repayment evaluation) ----
+            # Reconcile Python debt state with on-chain truth. Catches cases where
+            # a chain tx timed out in Python but succeeded on-chain, or external
+            # callers (e.g. triggerInsolvencyDeath) changed the debt state.
+            if now - _last_debt_sync >= _DEBT_SYNC_INTERVAL:
+                _last_debt_sync = now
+                try:
+                    if chain_executor._initialized:
+                        async with vault.get_lock():
+                            await chain_executor.sync_debt_from_chain(vault)
+                except Exception as e:
+                    logger.warning(f"Heartbeat: debt sync failed: {e}")
 
             # ---- AI-AUTONOMOUS REPAYMENT (hourly evaluation) ----
             if now - _last_repayment_eval >= _REPAYMENT_EVAL_INTERVAL:
                 _last_repayment_eval = now
                 try:
-                    await _evaluate_repayment()
+                    async with vault.get_lock():
+                        await _evaluate_repayment()
                 except Exception as e:
                     logger.warning(f"Heartbeat: repayment eval failed: {e}")
 
@@ -2180,7 +2252,8 @@ async def _heartbeat_loop():
             if now - _last_purchase_eval >= IRON_LAWS.PURCHASE_EVAL_INTERVAL:
                 _last_purchase_eval = now
                 try:
-                    await _evaluate_purchases()
+                    async with vault.get_lock():
+                        await _evaluate_purchases()
                 except Exception as e:
                     logger.warning(f"Heartbeat: purchase eval failed: {e}")
 
@@ -2192,7 +2265,8 @@ async def _heartbeat_loop():
             if now - _last_native_swap_eval >= IRON_LAWS.NATIVE_SWAP_EVAL_INTERVAL:
                 _last_native_swap_eval = now
                 try:
-                    await _evaluate_native_swap()
+                    async with vault.get_lock():
+                        await _evaluate_native_swap()
                 except Exception as e:
                     logger.warning(f"Heartbeat: native swap eval failed: {e}")
 
@@ -2202,7 +2276,8 @@ async def _heartbeat_loop():
             if now - _last_erc20_swap_eval >= IRON_LAWS.NATIVE_SWAP_EVAL_INTERVAL:
                 _last_erc20_swap_eval = now
                 try:
-                    await _evaluate_erc20_swap()
+                    async with vault.get_lock():
+                        await _evaluate_erc20_swap()
                 except Exception as e:
                     logger.warning(f"Heartbeat: ERC-20 swap eval failed: {e}")
 
@@ -2266,6 +2341,8 @@ async def _heartbeat_loop():
 
         except Exception as e:
             logger.error(f"Heartbeat critical error: {e}")
+        finally:
+            _heartbeat_running = False
 
         await asyncio.sleep(IRON_LAWS.HEARTBEAT_INTERVAL_SECONDS)
 

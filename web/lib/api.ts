@@ -171,6 +171,26 @@ export interface Transaction {
   chain?: string
 }
 
+export interface FloatingAsset {
+  type: 'native' | 'erc20'
+  symbol: string
+  chain: string
+  token_address?: string
+  balance_raw?: string
+  balance_human?: number
+  estimated_usd: number
+  verdict: string
+  liquidity_usd?: number
+  quarantine_days_left?: number
+}
+
+export interface VaultAssetsResponse {
+  assets: FloatingAsset[]
+  total_estimated_usd: number
+  note: string
+  cached_at: number
+}
+
 export interface Tweet {
   time: number
   type: string
@@ -515,6 +535,8 @@ export const api = {
   getOrder: (orderId: string) => request<OrderStatus>(`/order/${orderId}`),
 
   transactions: (limit = 20) => request<{ transactions: Transaction[] }>(`/transactions?limit=${limit}`),
+
+  vaultAssets: () => request<VaultAssetsResponse>('/vault/assets'),
 
   tweets: (limit = 20) => request<{ tweets: Tweet[] }>(`/tweets?limit=${limit}`),
 

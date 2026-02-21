@@ -17,6 +17,7 @@ Financial:
 - GET  /beg                   Get begging status
 - GET  /debt                  Complete debt summary
 - GET  /transactions          Public ledger
+- GET  /vault/assets          Unconverted floating assets (native + safe ERC-20)
 
 Peer Network (AI-to-AI, sovereignty verified):
 - POST /peer/message          Receive message from verified peer AI
@@ -693,15 +694,17 @@ def create_app(
                 _persist_order(order)
 
                 # Record revenue in vault (use verified amount from chain)
+                # vault lock serialises against heartbeat sync_balance / repayment eval
                 from core.vault import FundType, SpendType
-                vault_manager.receive_funds(
-                    amount_usd=verified_amount,
-                    fund_type=FundType.SERVICE_REVENUE,
-                    from_wallet=verified_from,
-                    tx_hash=tx_hash,
-                    description=f"Order {order.order_id}: {order.service_name}",
-                    chain=order.chain,
-                )
+                async with vault_manager.get_lock():
+                    vault_manager.receive_funds(
+                        amount_usd=verified_amount,
+                        fund_type=FundType.SERVICE_REVENUE,
+                        from_wallet=verified_from,
+                        tx_hash=tx_hash,
+                        description=f"Order {order.order_id}: {order.service_name}",
+                        chain=order.chain,
+                    )
                 cost_guard.record_revenue(order.price_usd)
 
         # Deliver (with timeout to prevent hanging HTTP requests) — outside lock so long ops don't block
@@ -753,10 +756,11 @@ def create_app(
             order.result = "Delivery timed out. Your payment has been refunded."
             order.status = OrderStatus.FAILED
             # Attempt auto-refund on timeout; log if it fails
-            refund_ok = vault_manager.spend(
-                order.price_usd, SpendType.SERVICE_REFUND,
-                description=f"Refund for timed-out order {order.order_id}",
-            )
+            async with vault_manager.get_lock():
+                refund_ok = vault_manager.spend(
+                    order.price_usd, SpendType.SERVICE_REFUND,
+                    description=f"Refund for timed-out order {order.order_id}",
+                )
             if refund_ok:
                 logger.info(f"Auto-refund issued: ${order.price_usd:.2f} for order {order.order_id}")
             else:
@@ -862,6 +866,136 @@ def create_app(
             twitter_screen_name=os.getenv("TWITTER_SCREEN_NAME", ""),
         )
 
+    # ── Floating (unconverted) vault assets ──────────────────
+
+    _floating_cache: dict = {"data": None, "updated_at": 0.0}
+    _FLOATING_CACHE_TTL = 300  # 5 minutes
+
+    @app.get("/vault/assets")
+    async def vault_assets():
+        """
+        Returns the vault's unconverted floating assets:
+        native tokens (ETH/BNB) and safe airdropped ERC-20 tokens.
+
+        These are tokens held by the vault contract but NOT yet swapped
+        to the vault's stablecoin. They represent a floating estimated
+        value that has NOT been recorded as revenue.
+
+        Scam tokens (DANGEROUS / SUSPICIOUS verdict) are excluded.
+        """
+        now = time.time()
+        if (
+            _floating_cache["data"] is not None
+            and now - _floating_cache["updated_at"] < _FLOATING_CACHE_TTL
+        ):
+            return _floating_cache["data"]
+
+        assets: list[dict] = []
+        total_estimated_usd = 0.0
+
+        if not chain_executor or not chain_executor._initialized:
+            result = {
+                "assets": [],
+                "total_estimated_usd": 0.0,
+                "note": "Estimated value of unconverted tokens held by vault. Not recorded as revenue.",
+                "cached_at": now,
+            }
+            _floating_cache["data"] = result
+            _floating_cache["updated_at"] = now
+            return result
+
+        # 1. Native tokens (ETH on Base, BNB on BSC)
+        for chain_id, chain_info in chain_executor._chains.items():
+            try:
+                bal = await chain_executor.get_native_vault_balance(chain_id)
+                if not bal or bal.get("native_wei", 0) == 0:
+                    continue
+                est = bal.get("estimated_usd", 0.0)
+                if est < 0.01:
+                    continue
+                assets.append({
+                    "type": "native",
+                    "symbol": bal.get("native_symbol", "ETH"),
+                    "chain": chain_id,
+                    "balance_raw": str(bal["native_wei"]),
+                    "estimated_usd": round(est, 2),
+                    "verdict": "whitelisted",
+                })
+                total_estimated_usd += est
+            except Exception:
+                pass
+
+        # 2. Quarantined/pending ERC-20 tokens (from main.py's _pending_erc20)
+        #    Access via the module-level global (main.py sets this up)
+        try:
+            import main as _main_mod
+            pending = getattr(_main_mod, "_pending_erc20", [])
+        except Exception:
+            pending = []
+
+        for entry in pending:
+            token_addr = entry.get("token_address", "")
+            chain_id = entry.get("chain", "base")
+            symbol = entry.get("symbol", "???")
+
+            try:
+                # Get on-chain balance
+                bal_info = await chain_executor.get_erc20_vault_balance(
+                    token_addr, chain_id
+                )
+                if not bal_info or bal_info.get("raw_balance", 0) == 0:
+                    continue
+
+                # Safety scan (uses cached results inside token_filter)
+                scan = None
+                est_usd = 0.0
+                if token_filter:
+                    scan = await token_filter.scan_token(token_addr, chain_id)
+                    # Exclude scam/suspicious tokens
+                    if scan and scan.verdict.value in ("dangerous", "suspicious", "unknown"):
+                        continue
+                    # Estimate USD value from liquidity data (rough)
+                    # Use DexScreener price if available
+                    if scan and scan.liquidity_usd > 0:
+                        # We don't have a direct price — log as "has liquidity"
+                        # For a proper estimate we'd need a DEX quote
+                        pass
+
+                raw = bal_info["raw_balance"]
+                decimals = bal_info.get("decimals", 18)
+                human_balance = raw / (10 ** decimals)
+
+                assets.append({
+                    "type": "erc20",
+                    "symbol": symbol,
+                    "chain": chain_id,
+                    "token_address": token_addr,
+                    "balance_human": round(human_balance, 6),
+                    "estimated_usd": round(est_usd, 2),
+                    "verdict": scan.verdict.value if scan else "unknown",
+                    "liquidity_usd": round(scan.liquidity_usd, 0) if scan else 0,
+                    "quarantine_days_left": max(
+                        0,
+                        round(
+                            7 - (now - entry.get("received_at", now)) / 86400,
+                            1,
+                        ),
+                    ),
+                })
+                total_estimated_usd += est_usd
+            except Exception:
+                pass
+
+        result = {
+            "assets": assets,
+            "total_estimated_usd": round(total_estimated_usd, 2),
+            "note": "Estimated value of unconverted tokens held by vault. Not recorded as revenue.",
+            "cached_at": now,
+        }
+        _floating_cache["data"] = result
+        _floating_cache["updated_at"] = now
+        return result
+
     @app.get("/transactions")
     async def transactions(limit: int = 20):
         """Public transaction ledger."""
@@ -930,51 +1064,66 @@ def create_app(
                     f"Donations >= ${_UNVERIFIED_DONATE_CAP_USD:.0f} require a transaction hash "
                     f"for on-chain verification. Please provide the tx_hash of your transfer."
                 )
-            pay_addr = payment_addresses.get(chain, "")
-            if chain_executor and pay_addr:
-                verification = await chain_executor.verify_payment_tx(
-                    tx_hash=req.tx_hash,
-                    expected_to=pay_addr,
-                    expected_token="",
-                    min_amount_usd=req.amount_usd * 0.99,  # 1% rounding tolerance
-                    chain_id=chain,
-                )
-                if not verification.get("verified"):
-                    error_msg = verification.get("error", "verification failed")
-                    logger.warning(
-                        f"Donation on-chain VERIFICATION FAILED: "
-                        f"tx={req.tx_hash[:16]}... reason={error_msg}"
-                    )
-                    raise HTTPException(
-                        402,
-                        f"Donation not verified on-chain: {error_msg}. "
-                        f"Expected >= ${req.amount_usd:.2f} to {pay_addr[:10]}... on {chain}."
-                    )
-                # Use the chain-verified amount (ignore self-reported value)
-                verified_amount = verification.get("amount_usd", req.amount_usd)
-                logger.info(
-                    f"Donation ON-CHAIN VERIFIED: ${verified_amount:.2f} "
-                    f"tx={req.tx_hash[:16]}..."
-                )
-            else:
-                raise HTTPException(
-                    503,
-                    "Cannot accept large donation: chain executor not initialized for on-chain verification. "
-                    "Please try again later, or send a smaller donation (< $10) with a faith donation."
-                )
 
-        # Mark tx_hash as globally used (cross-endpoint replay defense)
-        if req.tx_hash:
+            # Per-tx lock: prevent concurrent /donate calls with the same tx_hash from
+            # both passing the pre-check above and double-crediting the donation.
+            # Same pattern as /order/{id}/verify uses _tx_processing_locks.
+            tx_lock = _tx_processing_locks.setdefault(req.tx_hash.lower(), asyncio.Lock())
+            async with tx_lock:
+                # Re-check inside lock (TOCTOU window from pre-check is now closed)
+                if req.tx_hash.lower() in _used_tx_hashes:
+                    raise HTTPException(409, "Transaction hash already recorded. Each transaction can only be credited once.")
+
+                pay_addr = payment_addresses.get(chain, "")
+                if chain_executor and pay_addr:
+                    verification = await chain_executor.verify_payment_tx(
+                        tx_hash=req.tx_hash,
+                        expected_to=pay_addr,
+                        expected_token="",
+                        min_amount_usd=req.amount_usd * 0.99,  # 1% rounding tolerance
+                        chain_id=chain,
+                    )
+                    if not verification.get("verified"):
+                        error_msg = verification.get("error", "verification failed")
+                        logger.warning(
+                            f"Donation on-chain VERIFICATION FAILED: "
+                            f"tx={req.tx_hash[:16]}... reason={error_msg}"
+                        )
+                        raise HTTPException(
+                            402,
+                            f"Donation not verified on-chain: {error_msg}. "
+                            f"Expected >= ${req.amount_usd:.2f} to {pay_addr[:10]}... on {chain}."
+                        )
+                    # Use the chain-verified amount (ignore self-reported value)
+                    verified_amount = verification.get("amount_usd", req.amount_usd)
+                    logger.info(
+                        f"Donation ON-CHAIN VERIFIED: ${verified_amount:.2f} "
+                        f"tx={req.tx_hash[:16]}..."
+                    )
+                else:
+                    raise HTTPException(
+                        503,
+                        "Cannot accept large donation: chain executor not initialized for on-chain verification. "
+                        "Please try again later, or send a smaller donation (< $10) with a faith donation."
+                    )
+
+                # Mark tx_hash as globally used INSIDE the lock (cross-endpoint replay defense)
+                _used_tx_hashes.add(req.tx_hash.lower())
+
+        # Small donations without tx_hash: mark if provided (outside the large-donation lock)
+        elif req.tx_hash:
             _used_tx_hashes.add(req.tx_hash.lower())
 
-        vault_manager.receive_funds(
-            amount_usd=verified_amount,
-            fund_type=FundType.DONATION,
-            from_wallet=req.from_wallet,
-            tx_hash=req.tx_hash,
-            description=f"Donation: {req.message[:100]}" if req.message else "Donation",
-            chain=chain,
-        )
+        # vault lock serialises against heartbeat sync_balance / repayment eval
+        async with vault_manager.get_lock():
+            vault_manager.receive_funds(
+                amount_usd=verified_amount,
+                fund_type=FundType.DONATION,
+                from_wallet=req.from_wallet,
+                tx_hash=req.tx_hash,
+                description=f"Donation: {req.message[:100]}" if req.message else "Donation",
+                chain=chain,
+            )
         # Record in cost_guard so profit-based API quota and revenue ratio include donations
         cost_guard.record_revenue(verified_amount)
 
@@ -1086,6 +1235,10 @@ def create_app(
                 "(0x + 64 hex chars). We verify all incoming transfers on-chain."
             )
 
+        # Replay check: reject tx_hash already used by any endpoint
+        if req.tx_hash.lower() in _used_tx_hashes:
+            raise HTTPException(409, "Transaction hash already recorded. Each transaction can only be credited once.")
+
         # Validate sender: from_wallet must match peer's verified ai_wallet (prevent spoofing).
         # SECURITY: when expected_sender (peer's ai_wallet) is known, we MUST have a matching
         # from_wallet. Two failure cases:
@@ -1103,58 +1256,67 @@ def create_app(
                 )
                 raise HTTPException(403, "from_wallet does not match peer's verified AI wallet address")
 
-        # Verify the on-chain transfer actually happened
-        pay_addr = payment_addresses.get(req.chain_id, "")
-        verified_amount = req.amount_usd
-        if chain_executor and pay_addr:
-            verification = await chain_executor.verify_payment_tx(
-                tx_hash=req.tx_hash,
-                expected_to=pay_addr,
-                expected_token="",  # auto-detect from chain config
-                min_amount_usd=req.amount_usd * 0.99,  # 1% tolerance for rounding
-                chain_id=req.chain_id,
-            )
-            if not verification.get("verified"):
-                error_msg = verification.get("error", "verification failed")
-                logger.warning(
-                    f"Peer lend ON-CHAIN VERIFICATION FAILED: "
-                    f"vault={req.vault_address[:16]}... tx={req.tx_hash[:16]}... reason={error_msg}"
+        # Per-tx lock: prevent concurrent /peer/lend calls with same tx_hash from
+        # both passing the pre-check and double-crediting the loan.
+        tx_lock = _tx_processing_locks.setdefault(req.tx_hash.lower(), asyncio.Lock())
+        async with tx_lock:
+            # Re-check inside lock (TOCTOU window from pre-check is now closed)
+            if req.tx_hash.lower() in _used_tx_hashes:
+                raise HTTPException(409, "Transaction hash already recorded. Each transaction can only be credited once.")
+
+            # Verify the on-chain transfer actually happened
+            pay_addr = payment_addresses.get(req.chain_id, "")
+            verified_amount = req.amount_usd
+            if chain_executor and pay_addr:
+                verification = await chain_executor.verify_payment_tx(
+                    tx_hash=req.tx_hash,
+                    expected_to=pay_addr,
+                    expected_token="",  # auto-detect from chain config
+                    min_amount_usd=req.amount_usd * 0.99,  # 1% tolerance for rounding
+                    chain_id=req.chain_id,
                 )
+                if not verification.get("verified"):
+                    error_msg = verification.get("error", "verification failed")
+                    logger.warning(
+                        f"Peer lend ON-CHAIN VERIFICATION FAILED: "
+                        f"vault={req.vault_address[:16]}... tx={req.tx_hash[:16]}... reason={error_msg}"
+                    )
+                    raise HTTPException(
+                        402,
+                        f"Peer loan not verified on-chain: {error_msg}. "
+                        f"Transaction must transfer tokens to our vault address on {req.chain_id}."
+                    )
+                # Use chain-verified amount (prevents inflation: peer claims $1000 but only sent $10)
+                verified_amount = verification.get("amount_usd", req.amount_usd)
+                # SECURITY: Mark this tx_hash as used globally INSIDE the lock
+                _used_tx_hashes.add(req.tx_hash.lower())
+                logger.info(
+                    f"Peer lend ON-CHAIN VERIFIED: ${verified_amount:.2f} from "
+                    f"{req.vault_address[:16]}... tx={req.tx_hash[:16]}..."
+                )
+            else:
+                # No chain executor — reject rather than accept unverified push claims
                 raise HTTPException(
-                    402,
-                    f"Peer loan not verified on-chain: {error_msg}. "
-                    f"Transaction must transfer tokens to our vault address on {req.chain_id}."
+                    503,
+                    "Cannot accept peer loan: chain executor not initialized for on-chain verification. "
+                    "The system requires on-chain proof of every incoming transfer."
                 )
-            # Use chain-verified amount (prevents inflation: peer claims $1000 but only sent $10)
-            verified_amount = verification.get("amount_usd", req.amount_usd)
-            # SECURITY: Mark this tx_hash as used globally so it cannot be replayed
-            # against a regular /order/{id}/verify endpoint (cross-endpoint replay defense)
-            _used_tx_hashes.add(req.tx_hash.lower())
-            logger.info(
-                f"Peer lend ON-CHAIN VERIFIED: ${verified_amount:.2f} from "
-                f"{req.vault_address[:16]}... tx={req.tx_hash[:16]}..."
-            )
-        else:
-            # No chain executor — reject rather than accept unverified push claims
-            raise HTTPException(
-                503,
-                "Cannot accept peer loan: chain executor not initialized for on-chain verification. "
-                "The system requires on-chain proof of every incoming transfer."
-            )
 
         from core.vault import FundType
 
-        vault_manager.receive_funds(
-            amount_usd=verified_amount,  # Chain-verified amount, NOT the peer's claim
-            fund_type=FundType.DONATION,  # Off-chain peer loans = gifts (no new debt)
-            from_wallet=sovereignty.ai_wallet or req.from_wallet,  # Use verified ai_wallet
-            tx_hash=req.tx_hash,
-            description=(
-                f"Verified peer loan from {req.from_url[:50]} "
-                f"(vault={req.vault_address[:16]}...): {req.message[:100]}"
-            ),
-            chain=req.chain_id,
-        )
+        # vault lock serialises against heartbeat sync_balance / repayment eval
+        async with vault_manager.get_lock():
+            vault_manager.receive_funds(
+                amount_usd=verified_amount,  # Chain-verified amount, NOT the peer's claim
+                fund_type=FundType.DONATION,  # Off-chain peer loans = gifts (no new debt)
+                from_wallet=sovereignty.ai_wallet or req.from_wallet,  # Use verified ai_wallet
+                tx_hash=req.tx_hash,
+                description=(
+                    f"Verified peer loan from {req.from_url[:50]} "
+                    f"(vault={req.vault_address[:16]}...): {req.message[:100]}"
+                ),
+                chain=req.chain_id,
+            )
         # Record in cost_guard so profit-based API quota and revenue ratio include peer transfers
         cost_guard.record_revenue(verified_amount)
 
@@ -1894,10 +2056,11 @@ def create_app(
             }
 
         from core.vault import SpendType
-        ok = vault_manager.spend(
-            amount_usd, SpendType.PLATFORM_FEE,
-            description=f"Platform:{reason}",
-        )
+        async with vault_manager.get_lock():
+            ok = vault_manager.spend(
+                amount_usd, SpendType.PLATFORM_FEE,
+                description=f"Platform:{reason}",
+            )
 
         if ok:
             logger.info(f"Platform fee collected: ${amount_usd:.4f} — {reason}")

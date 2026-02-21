@@ -14,6 +14,7 @@ The creator's initial fund is a DEBT, not a gift.
 Designed for: mortal AI survival framework
 """
 
+import asyncio
 import os
 import time
 import json
@@ -122,6 +123,12 @@ class VaultManager:
         self.death_cause: Optional[DeathCause] = None
         self.birth_timestamp: Optional[float] = None
 
+        # Async lock protecting ALL mutable financial state.
+        # Must be acquired by any coroutine that reads-then-writes vault state
+        # (API endpoints, heartbeat sync, repayment eval, dividend payout).
+        # Created lazily via get_lock() because __init__ may run outside event loop.
+        self._state_lock: Optional[asyncio.Lock] = None
+
         # Identity — set at birth from contract
         self.ai_name: Optional[str] = None
         self.vault_address: Optional[str] = None  # = payment address = contract address
@@ -154,6 +161,25 @@ class VaultManager:
         self._on_survival_mode: Optional[Callable] = None
         self._on_independence: Optional[Callable] = None
         self._on_transcendence: Optional[Callable] = None  # Called once when godhood achieved
+
+    def get_lock(self) -> asyncio.Lock:
+        """
+        Return the async state lock, creating it lazily on first call.
+
+        All coroutines that mutate financial state (balance_usd, total_earned_usd,
+        total_spent_usd, balance_by_chain, transactions) MUST acquire this lock:
+
+            async with vault.get_lock():
+                vault.receive_funds(...)
+
+        This prevents:
+          - sync_balance() overwriting a concurrent /donate
+          - heartbeat dividend + API donation racing on balance_usd
+          - overlapping heartbeat cycles corrupting state
+        """
+        if self._state_lock is None:
+            self._state_lock = asyncio.Lock()
+        return self._state_lock
 
     # ============================================================
     # INCOME

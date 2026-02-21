@@ -503,10 +503,11 @@ def deploy(
     logger.info(f"Principal atomically deposited: ${principal_usd:.2f} {chain['token_symbol']}")
 
     # ================================================================
-    # STEP 2.5: Save emergency recovery file BEFORE setAIWallet
+    # STEP 2.5: Save recovery file BEFORE setAIWallet
     # ================================================================
     # If setAIWallet fails, the vault exists with funds but no AI access.
-    # Creator can still call emergencyShutdown() to recover funds.
+    # The vault is inoperable without an AI wallet — creator can use
+    # renounceCreator() to exit with 20% payout, or retry setAIWallet.
     # This recovery file ensures we know the vault address even if config save never happens.
     recovery_path = ROOT / "data" / f"vault_recovery_{chain_id}.json"
     recovery_path.parent.mkdir(parents=True, exist_ok=True)
@@ -519,7 +520,7 @@ def deploy(
         "deploy_tx": deploy_hash.hex(),
         "block_number": receipt["blockNumber"],
         "status": "deployed_no_ai_wallet",
-        "recovery_note": "If setAIWallet failed, creator can call emergencyShutdown() to recover funds",
+        "recovery_note": "If setAIWallet failed, creator can call renounceCreator() to exit with 20% payout",
         "timestamp": time.time(),
     }
     with open(recovery_path, "w") as f:

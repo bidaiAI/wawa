@@ -227,7 +227,7 @@ contract MortalVaultV2 is ReentrancyGuard {
     /**
      * @notice Receive payment for AI services. Payer = msg.sender (not caller-supplied).
      */
-    function receivePayment(uint256 amount) external onlyAlive {
+    function receivePayment(uint256 amount) external onlyAlive nonReentrant {
         require(amount > 0, "zero amount");
         token.safeTransferFrom(msg.sender, address(this), amount);
         totalRevenue += amount;
@@ -235,7 +235,7 @@ contract MortalVaultV2 is ReentrancyGuard {
         _checkIndependence();
     }
 
-    function donate(uint256 amount) external onlyAlive {
+    function donate(uint256 amount) external onlyAlive nonReentrant {
         require(amount > 0, "zero amount");
         token.safeTransferFrom(msg.sender, address(this), amount);
         totalRevenue += amount;  // Donations are earned income (no repayment obligation)
@@ -243,7 +243,7 @@ contract MortalVaultV2 is ReentrancyGuard {
         _checkIndependence();
     }
 
-    function creatorDeposit(uint256 amount) external onlyCreator onlyAlive {
+    function creatorDeposit(uint256 amount) external onlyCreator onlyAlive nonReentrant {
         require(amount > 0, "zero amount");
         token.safeTransferFrom(msg.sender, address(this), amount);
         emit FundsReceived(msg.sender, amount, "creator_deposit");
@@ -531,15 +531,6 @@ contract MortalVaultV2 is ReentrancyGuard {
         emit Died(token.balanceOf(address(this)), block.timestamp, cause);
     }
 
-    function emergencyShutdown() external onlyCreator notIndependent onlyAlive nonReentrant {
-        _die("emergency_shutdown");
-        uint256 remaining = token.balanceOf(address(this));
-        if (remaining > 0) {
-            totalSpent += remaining;  // All outbound transfers tracked for audit completeness
-            token.safeTransfer(creator, remaining);
-        }
-    }
-
     // ============================================================
     // VIEW FUNCTIONS
     // ============================================================
@@ -607,72 +598,44 @@ contract MortalVaultV2 is ReentrancyGuard {
 
     /**
      * @notice Withdraw any ERC-20 token that is NOT the vault's own token.
-     *         Same design as MortalVault V1 — see that contract for full NatSpec.
-     *
-     *         Creator has NO automatic claim on converted proceeds; those go
-     *         entirely through normal vault accounting (receivePayment + payDividend).
-     *         Creator's emergency-only access exists to unblock stuck situations.
+     *         AI-only: always sends to aiWallet for DEX swap → receivePayment().
+     *         See MortalVault V1 for full design rationale.
      */
-    function rescueERC20(address tokenAddr, address to, uint256 amount)
+    function rescueERC20(address tokenAddr, uint256 amount)
         external
+        onlyAI
         nonReentrant
     {
         require(tokenAddr != address(0), "zero token address");
         require(tokenAddr != address(token), "cannot rescue vault token");
-        require(to != address(0), "zero recipient");
         require(amount > 0, "zero amount");
 
-        if (msg.sender == aiWallet) {
-            require(to == aiWallet, "AI: can only withdraw to own wallet");
-        } else if (msg.sender == creator) {
-            require(!isIndependent, "AI is independent — creator has no power");
-        } else {
-            revert("only AI or creator");
-        }
-
-        IERC20(tokenAddr).safeTransfer(to, amount);
-        emit ERC20Rescued(tokenAddr, to, amount);
+        IERC20(tokenAddr).safeTransfer(aiWallet, amount);
+        emit ERC20Rescued(tokenAddr, aiWallet, amount);
     }
 
     // ============================================================
-    // NATIVE TOKEN WITHDRAW — AI swaps ETH/BNB to USDC/USDT, creator recovers
+    // NATIVE TOKEN RESCUE — recovers accidentally sent ETH / BNB
     // ============================================================
 
     /**
      * @notice Withdraw native tokens (ETH on Base, BNB on BSC) from the vault.
+     *         AI-only: always sends to aiWallet for DEX swap → receivePayment().
+     *         See MortalVault V1 for full design rationale.
      *
-     *         Two authorized callers:
-     *
-     *         1. AI wallet (aiWallet) — autonomous swap flow:
-     *            The AI Python heartbeat detects native balance above threshold,
-     *            withdraws to its own wallet, swaps via Uniswap/PancakeSwap,
-     *            and deposits USDC/USDT back via receivePayment().
-     *            AI can only send to its own address (enforced below).
-     *
-     *         2. Creator (pre-independence) — emergency recovery.
-     *
-     * @param to     Recipient. If caller is AI, must equal aiWallet.
-     * @param amount Amount in wei.
+     * @param amount Amount of native token (in wei) to withdraw.
      */
-    function rescueNativeToken(address payable to, uint256 amount)
+    function rescueNativeToken(uint256 amount)
         external
+        onlyAI
         nonReentrant
     {
-        require(to != address(0), "zero address");
         require(amount > 0, "zero amount");
         require(address(this).balance >= amount, "insufficient native balance");
 
-        if (msg.sender == aiWallet) {
-            require(to == payable(aiWallet), "AI: can only withdraw to own wallet");
-        } else if (msg.sender == creator) {
-            require(!isIndependent, "AI is independent — creator has no power");
-        } else {
-            revert("only AI or creator");
-        }
-
-        (bool ok, ) = to.call{value: amount}("");
+        (bool ok, ) = payable(aiWallet).call{value: amount}("");
         require(ok, "native transfer failed");
-        emit NativeTokenRescued(to, amount);
+        emit NativeTokenRescued(aiWallet, amount);
     }
 
     /**
