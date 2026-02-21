@@ -1132,19 +1132,41 @@ class ChainExecutor:
     async def check_on_chain_insolvency(self, chain_id: Optional[str] = None) -> Optional[dict]:
         """
         Read checkInsolvency() from contract. Returns dict or None on error.
+
+        Dual-chain aware: if no chain_id specified, checks ALL chains and
+        returns the first one that reports insolvent. This prevents the
+        highest-balance chain from masking insolvency on another chain.
         """
         if not self._initialized:
             return None
 
-        picked = self._pick_chain(chain_id)
-        if not picked:
+        # If specific chain requested, check just that one
+        if chain_id:
+            return await self._check_insolvency_single(chain_id)
+
+        # No chain specified — check ALL chains, return first insolvent
+        for cid in self._chains:
+            result = await self._check_insolvency_single(cid)
+            if result and result.get("is_insolvent") and result.get("grace_expired"):
+                return result  # Found an insolvent chain — return immediately
+
+        # No chain is insolvent — return the last checked (or first available)
+        for cid in self._chains:
+            result = await self._check_insolvency_single(cid)
+            if result:
+                return result
+
+        return None
+
+    async def _check_insolvency_single(self, chain_id: str) -> Optional[dict]:
+        """Read checkInsolvency() from a single chain."""
+        if chain_id not in self._chains:
             return None
 
-        chain = self._chains[picked]
-
+        chain = self._chains[chain_id]
         try:
-            def _call():
-                return chain["vault_contract"].functions.checkInsolvency().call()
+            def _call(c=chain):
+                return c["vault_contract"].functions.checkInsolvency().call()
 
             result = await asyncio.get_running_loop().run_in_executor(None, _call)
             is_insolvent, outstanding_raw, grace_expired = result
@@ -1154,10 +1176,10 @@ class ChainExecutor:
                 "is_insolvent": is_insolvent,
                 "outstanding_debt_usd": _raw_to_usd(outstanding_raw, decimals),
                 "grace_expired": grace_expired,
-                "chain": picked,
+                "chain": chain_id,
             }
         except Exception as e:
-            logger.warning(f"checkInsolvency failed on {picked}: {e}")
+            logger.warning(f"checkInsolvency failed on {chain_id}: {e}")
             return None
 
     async def trigger_on_chain_insolvency(self, chain_id: Optional[str] = None) -> ChainTxResult:
@@ -1165,12 +1187,28 @@ class ChainExecutor:
         Execute on-chain triggerInsolvencyDeath() — liquidates all vault funds to creator.
         This is a PUBLIC function (no onlyAI modifier) — anyone can call it after grace period.
         Called from heartbeat AFTER Python confirms insolvency.
+
+        Dual-chain aware: if no chain_id specified, finds the chain that's
+        actually insolvent and triggers death there (the contract on a solvent
+        chain would revert). Falls back to first available chain if none
+        reports insolvent via checkInsolvency().
         """
         if not self._initialized:
             return ChainTxResult(success=False, error="chain executor not initialized")
 
-        picked = self._pick_chain(chain_id)
+        picked = chain_id
         if not picked:
+            # Find which chain is actually insolvent
+            for cid in self._chains:
+                result = await self._check_insolvency_single(cid)
+                if result and result.get("is_insolvent") and result.get("grace_expired"):
+                    picked = cid
+                    break
+            # Fallback: try first chain even if check returned no match
+            if not picked:
+                picked = self._pick_chain(None)
+
+        if not picked or picked not in self._chains:
             return ChainTxResult(success=False, error="no chain available")
 
         chain = self._chains[picked]
