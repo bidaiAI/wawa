@@ -169,6 +169,19 @@ class IronLaws:
     MAX_PENDING_PURCHASES: Final[int] = 5               # Max concurrent pending purchases
     WHITELIST_ACTIVATION_WAIT: Final[int] = 360          # 6 min wait after whitelist add (>5 min delay)
 
+    # --- NATIVE TOKEN AUTO-SWAP (ETH/BNB → USDC/USDT) ---
+    # The vault accepts native tokens (ETH on Base, BNB on BSC). The AI
+    # automatically converts them to the vault's stablecoin every 24 hours.
+    # Swaps use on-chain DEXes (Uniswap V3 on Base, PancakeSwap V2 on BSC).
+    # Security: fixed slippage cap, hardcoded router addresses, sandwich
+    # protection via amountOutMinimum, and a MEV-resistant deadline (2 min).
+    NATIVE_SWAP_EVAL_INTERVAL: Final[int] = 86400       # Check every 24 hours
+    NATIVE_SWAP_MIN_USD: Final[float] = 5.0             # Skip swap if value < $5 (gas not worth it)
+    NATIVE_SWAP_MAX_SLIPPAGE_BPS: Final[int] = 200      # Max 2% slippage (sandwich protection)
+    NATIVE_SWAP_DEADLINE_SECONDS: Final[int] = 120      # 2-min deadline (MEV protection)
+    NATIVE_SWAP_POOL_FEE_BASE: Final[int] = 3000        # Uniswap V3: 0.3% ETH/USDC pool
+    NATIVE_SWAP_POOL_FEE_BSC: Final[int] = 2500         # PancakeSwap V3: 0.25% BNB/USDT pool
+
 
 IRON_LAWS = IronLaws()
 

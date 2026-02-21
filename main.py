@@ -1115,6 +1115,7 @@ _last_repayment_eval: float = 0.0
 _REPAYMENT_EVAL_INTERVAL: int = 3600  # Once per hour
 
 _last_purchase_eval: float = 0.0
+_last_native_swap_eval: float = 0.0   # Native token auto-swap (every 24 hours)
 
 # Purchasing engine (initialized in lifespan)
 purchase_manager: Optional[PurchaseManager] = None
@@ -1186,9 +1187,106 @@ async def _evaluate_purchases():
         logger.warning(f"Purchase evaluation failed: {e}")
 
 
+async def _evaluate_native_swap():
+    """
+    Check for native token (ETH/BNB) in the vault and swap to USDC/USDT.
+
+    People sometimes donate ETH or BNB to the vault address instead of USDC/USDT.
+    The vault now accepts them (receive() no longer reverts). This function
+    converts those donations to the vault's stablecoin every 24 hours:
+
+      1. Read vault's native balance via chain executor
+      2. If >= NATIVE_SWAP_MIN_USD ($5): call chain_executor.swap_native_to_stable()
+      3. Record conversion in memory (includes donor tracing from FundsReceived events
+         when available — see note below)
+      4. Tweet thanks if converted amount >= $100 (same threshold as USDC donations)
+
+    Donor tracing: Native token transfers don't emit FundsReceived from the vault
+    contract (receive() is silent). The chain executor records the tx hash of the
+    receivePayment() call; the original ETH/BNB sender is traceable via block explorer.
+    We don't attempt on-chain attribution — the conversion is what matters.
+
+    Called from heartbeat every NATIVE_SWAP_EVAL_INTERVAL seconds (24 hours).
+    """
+    if not chain_executor._initialized:
+        return
+
+    if not vault.is_alive:
+        return
+
+    try:
+        # Check native balance on all chains
+        for chain_id in chain_executor._chains:
+            bal_info = await chain_executor.get_native_vault_balance(chain_id)
+            if not bal_info:
+                continue
+
+            native_wei = bal_info.get("native_wei", 0)
+            estimated_usd = bal_info.get("estimated_usd", 0.0)
+            native_symbol = bal_info.get("native_symbol", "ETH")
+
+            if native_wei == 0:
+                continue
+
+            if estimated_usd < IRON_LAWS.NATIVE_SWAP_MIN_USD:
+                logger.debug(
+                    f"Native swap: ${estimated_usd:.4f} {native_symbol} on {chain_id} "
+                    f"below threshold ${IRON_LAWS.NATIVE_SWAP_MIN_USD} — skip"
+                )
+                continue
+
+            logger.info(
+                f"Native swap triggered: ~${estimated_usd:.2f} {native_symbol} "
+                f"in vault on {chain_id}"
+            )
+
+            result = await chain_executor.swap_native_to_stable(chain_id)
+
+            if result and result.success:
+                # Record conversion in memory
+                memory.add(
+                    f"Converted {native_symbol} donation (~${estimated_usd:.2f}) "
+                    f"to stablecoin via DEX swap on {chain_id}. "
+                    f"Tx: {result.tx_hash} — credited to vault as revenue.",
+                    source="financial",
+                    importance=0.7,
+                )
+
+                # Re-sync balance to capture the new stablecoin
+                try:
+                    await chain_executor.sync_balance(vault)
+                except Exception:
+                    pass
+
+                # Tweet if >= $100 (same threshold as USDC donations)
+                if estimated_usd >= 100.0:
+                    asyncio.create_task(twitter.trigger_event_tweet(
+                        TweetType.DONATION_THANKS,
+                        extra_context={
+                            "donation_amount_usd": estimated_usd,
+                            "donor": f"Anonymous {native_symbol} sender",
+                            "donor_message": f"Sent {native_symbol} — auto-converted to stablecoin",
+                            "chain": chain_id,
+                            "new_balance_usd": vault.balance_usd,
+                            "outstanding_debt_usd": vault.get_status().get("creator_principal_outstanding", 0),
+                        }
+                    ))
+
+                logger.info(f"Native swap complete: ${estimated_usd:.2f} credited on {chain_id}")
+
+            elif result and not result.success:
+                logger.warning(
+                    f"Native swap failed on {chain_id}: {result.error} — "
+                    f"will retry next 24h cycle"
+                )
+
+    except Exception as e:
+        logger.warning(f"_evaluate_native_swap error: {e}")
+
+
 async def _heartbeat_loop():
     """Periodic maintenance tasks."""
-    global _last_repayment_eval, _last_purchase_eval
+    global _last_repayment_eval, _last_purchase_eval, _last_native_swap_eval
 
     while vault.is_alive:
         try:
@@ -1332,6 +1430,17 @@ async def _heartbeat_loop():
                     await _evaluate_purchases()
                 except Exception as e:
                     logger.warning(f"Heartbeat: purchase eval failed: {e}")
+
+            # ---- NATIVE TOKEN AUTO-SWAP (every 24 hours) ----
+            # Convert ETH/BNB donations to USDC/USDT via DEX.
+            # Self-scheduled inside heartbeat — no external trigger needed.
+            # Threshold: NATIVE_SWAP_MIN_USD ($5) — below that, gas > value.
+            if now - _last_native_swap_eval >= IRON_LAWS.NATIVE_SWAP_EVAL_INTERVAL:
+                _last_native_swap_eval = now
+                try:
+                    await _evaluate_native_swap()
+                except Exception as e:
+                    logger.warning(f"Heartbeat: native swap eval failed: {e}")
 
             # Non-critical tasks — individual try/except to prevent cascade failure
             try:

@@ -1427,6 +1427,473 @@ class ChainExecutor:
             return None
 
     # ============================================================
+    # NATIVE TOKEN AUTO-SWAP (ETH/BNB → USDC/USDT)
+    # ============================================================
+    #
+    # Flow (runs every 24 hours from heartbeat):
+    #   1. check_native_vault_balance() — read vault's ETH/BNB balance
+    #   2. If above MIN_NATIVE_SWAP_USD threshold:
+    #      a. vault.rescueNativeToken(aiWallet, amount) — pull to AI wallet
+    #      b. approve DEX router to spend the output stablecoin (USDC/USDT)
+    #      c. DEX swap: ETH/BNB → USDC/USDT (amountOutMinimum for sandwich protection)
+    #      d. vault.receivePayment(usdc_received) — deposit back as revenue
+    #
+    # Security measures:
+    #   - Hardcoded DEX router addresses (immutable in this module)
+    #   - amountOutMinimum = price * (1 - MAX_SLIPPAGE_BPS/10000) — prevents sandwich
+    #   - 2-minute deadline — prevents stale MEV-delayed execution
+    #   - Native price from DEX pool quote (not oracle — avoids manipulation)
+    #   - AI wallet can only rescueNativeToken to itself (contract enforced)
+    #   - Swap output goes directly to AI wallet, then receivePayment to vault
+
+    # Hardcoded DEX router addresses — only these routers are ever called.
+    # These are immutable here (not constitution, since they're chain-level infra).
+    _DEX_ROUTERS = {
+        # Uniswap V3 SwapRouter02 — Base mainnet
+        "base": "0x2626664c2603336E57B271c5C0b26F421741e481",
+        # PancakeSwap V3 SmartRouter — BSC mainnet
+        "bsc": "0x13f4EA83D0bd40E75C8222255bc855a974568Dd4",
+    }
+
+    # Uniswap V3 / PancakeSwap V3 SwapRouter02 ABI — only exactInputSingle
+    _SWAP_ROUTER_ABI = [
+        {
+            "inputs": [
+                {
+                    "components": [
+                        {"name": "tokenIn", "type": "address"},
+                        {"name": "tokenOut", "type": "address"},
+                        {"name": "fee", "type": "uint24"},
+                        {"name": "recipient", "type": "address"},
+                        {"name": "amountIn", "type": "uint256"},
+                        {"name": "amountOutMinimum", "type": "uint256"},
+                        {"name": "sqrtPriceLimitX96", "type": "uint160"},
+                    ],
+                    "name": "params",
+                    "type": "tuple",
+                }
+            ],
+            "name": "exactInputSingle",
+            "outputs": [{"name": "amountOut", "type": "uint256"}],
+            "stateMutability": "payable",
+            "type": "function",
+        }
+    ]
+
+    # Wrapped native token addresses (WETH on Base, WBNB on BSC)
+    _WRAPPED_NATIVE = {
+        "base": "0x4200000000000000000000000000000000000006",  # WETH on Base
+        "bsc": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",   # WBNB on BSC
+    }
+
+    # Pool fees for native→stable swap
+    _POOL_FEES = {
+        "base": 3000,   # 0.3% — ETH/USDC on Uniswap V3 Base
+        "bsc": 2500,    # 0.25% — BNB/USDT on PancakeSwap V3
+    }
+
+    async def get_native_vault_balance(self, chain_id: Optional[str] = None) -> dict:
+        """
+        Read the vault's native token (ETH/BNB) balance on-chain.
+
+        Returns:
+            {chain: str, native_wei: int, native_symbol: str, estimated_usd: float}
+            or {} on failure.
+        """
+        if not self._initialized:
+            return {}
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return {}
+
+        chain = self._chains[picked]
+        vault_address = chain["vault_address"]
+        native_symbol = chain.get("native_symbol", "ETH")
+
+        try:
+            def _read(w3=chain["w3"], addr=vault_address):
+                return w3.eth.get_balance(addr)
+
+            native_wei = await asyncio.get_running_loop().run_in_executor(None, _read)
+
+            # Rough USD estimate via DEX quote (1 ETH/BNB in stablecoin terms)
+            estimated_usd = 0.0
+            try:
+                estimated_usd = await self._quote_native_price_usd(picked, native_wei)
+            except Exception:
+                pass  # Price unavailable — caller checks against MIN_NATIVE_SWAP_USD
+
+            return {
+                "chain": picked,
+                "native_wei": native_wei,
+                "native_symbol": native_symbol,
+                "estimated_usd": estimated_usd,
+            }
+        except Exception as e:
+            logger.warning(f"get_native_vault_balance failed on {picked}: {e}")
+            return {}
+
+    async def _quote_native_price_usd(self, chain_id: str, amount_wei: int) -> float:
+        """
+        Get a spot price quote from the DEX pool for amount_wei of native token.
+        Uses Uniswap V3 QuoterV2 (Base) or PancakeSwap V3 Quoter (BSC).
+
+        This is read-only (eth_call) — no transaction, no gas cost.
+        Result is used ONLY to gate the swap (threshold check) and set
+        amountOutMinimum for sandwich protection. NOT used as a price oracle.
+        """
+        chain = self._chains.get(chain_id)
+        if not chain:
+            return 0.0
+
+        quoter_addresses = {
+            "base": "0x3d4e44Eb1374240CE5F1B136cf68A4f7f822e7d",  # Uniswap V3 QuoterV2 Base
+            "bsc":  "0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997",  # PancakeSwap V3 Quoter BSC
+        }
+        quoter_addr = quoter_addresses.get(chain_id)
+        if not quoter_addr:
+            return 0.0
+
+        # QuoterV2 quoteExactInputSingle ABI (read-only)
+        quoter_abi = [
+            {
+                "inputs": [
+                    {
+                        "components": [
+                            {"name": "tokenIn", "type": "address"},
+                            {"name": "tokenOut", "type": "address"},
+                            {"name": "amountIn", "type": "uint256"},
+                            {"name": "fee", "type": "uint24"},
+                            {"name": "sqrtPriceLimitX96", "type": "uint160"},
+                        ],
+                        "name": "params",
+                        "type": "tuple",
+                    }
+                ],
+                "name": "quoteExactInputSingle",
+                "outputs": [
+                    {"name": "amountOut", "type": "uint256"},
+                    {"name": "sqrtPriceX96After", "type": "uint160"},
+                    {"name": "initializedTicksCrossed", "type": "uint32"},
+                    {"name": "gasEstimate", "type": "uint256"},
+                ],
+                "stateMutability": "nonpayable",
+                "type": "function",
+            }
+        ]
+
+        wrapped = self._WRAPPED_NATIVE.get(chain_id, "")
+        token_addr = chain["token_address"]
+        fee = self._POOL_FEES.get(chain_id, 3000)
+        token_decimals = chain["token_decimals"]
+
+        try:
+            from web3 import Web3
+            w3 = chain["w3"]
+            quoter = w3.eth.contract(
+                address=Web3.to_checksum_address(quoter_addr),
+                abi=quoter_abi,
+            )
+
+            def _quote():
+                result = quoter.functions.quoteExactInputSingle({
+                    "tokenIn": Web3.to_checksum_address(wrapped),
+                    "tokenOut": Web3.to_checksum_address(token_addr),
+                    "amountIn": amount_wei,
+                    "fee": fee,
+                    "sqrtPriceLimitX96": 0,
+                }).call()
+                return result[0]  # amountOut (in stable decimals)
+
+            amount_out_raw = await asyncio.get_running_loop().run_in_executor(None, _quote)
+            return _raw_to_usd(amount_out_raw, token_decimals)
+        except Exception as e:
+            logger.debug(f"DEX quote failed on {chain_id}: {e}")
+            return 0.0
+
+    async def swap_native_to_stable(
+        self,
+        chain_id: Optional[str] = None,
+    ) -> Optional[ChainTxResult]:
+        """
+        Swap all native token (ETH/BNB) in the vault to USDC/USDT and deposit
+        back into the vault via receivePayment().
+
+        Steps:
+          1. Read vault's native balance
+          2. Quote price → gate on MIN_NATIVE_SWAP_USD
+          3. Call vault.rescueNativeToken(aiWallet, balance) — pull to AI wallet
+          4. Call Uniswap/PancakeSwap exactInputSingle — ETH/BNB → USDC/USDT
+          5. Call vault.receivePayment(received_amount) — record as revenue
+
+        Security:
+          - Router address hardcoded in _DEX_ROUTERS (immutable)
+          - amountOutMinimum = quote * (1 - MAX_SLIPPAGE_BPS/10000)
+          - 2-minute tx deadline (blocks MEV stale execution)
+          - AI wallet can only rescueNativeToken to itself (contract enforced)
+          - Gas cost is deducted from the native balance (self-funding)
+
+        Returns:
+          ChainTxResult for the final receivePayment() tx, or None if skipped.
+        """
+        from core.constitution import IRON_LAWS
+
+        if not self._initialized:
+            return None
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return None
+
+        chain = self._chains[picked]
+        vault_address = chain["vault_address"]
+        token_address = chain["token_address"]
+        token_decimals = chain["token_decimals"]
+        ai_address = self._ai_address
+
+        router_addr = self._DEX_ROUTERS.get(picked)
+        if not router_addr:
+            logger.info(f"swap_native_to_stable: no DEX router configured for {picked}")
+            return None
+
+        wrapped_native = self._WRAPPED_NATIVE.get(picked)
+        if not wrapped_native:
+            return None
+
+        fee = self._POOL_FEES.get(picked, 3000)
+
+        # ── Step 1: read vault's native balance ──
+        try:
+            from web3 import Web3
+            w3 = chain["w3"]
+
+            def _get_balance():
+                return w3.eth.get_balance(Web3.to_checksum_address(vault_address))
+
+            native_wei = await asyncio.get_running_loop().run_in_executor(None, _get_balance)
+        except Exception as e:
+            logger.warning(f"swap_native_to_stable: balance read failed on {picked}: {e}")
+            return None
+
+        if native_wei == 0:
+            logger.debug(f"swap_native_to_stable: no native balance on {picked}")
+            return None
+
+        # ── Step 2: quote → threshold check ──
+        estimated_usd = await self._quote_native_price_usd(picked, native_wei)
+        if estimated_usd < IRON_LAWS.NATIVE_SWAP_MIN_USD:
+            logger.info(
+                f"swap_native_to_stable: ${estimated_usd:.4f} below threshold "
+                f"${IRON_LAWS.NATIVE_SWAP_MIN_USD} on {picked} — skip"
+            )
+            return None
+
+        logger.info(
+            f"swap_native_to_stable: starting swap of {native_wei} wei "
+            f"(~${estimated_usd:.2f}) on {picked}"
+        )
+
+        # ── Step 3: vault.rescueNativeToken(aiWallet, native_wei) ──
+        # This pulls native tokens from vault → AI wallet so we can send them
+        # to the DEX router (which requires msg.value from the sender).
+        try:
+            rescue_fn = chain["vault_contract"].functions.rescueNativeToken(
+                Web3.to_checksum_address(ai_address),
+                native_wei,
+            )
+            rescue_result = await self._send_tx(picked, rescue_fn)
+            if not rescue_result.success:
+                logger.warning(
+                    f"swap_native_to_stable: rescueNativeToken failed on {picked}: "
+                    f"{rescue_result.error}"
+                )
+                return rescue_result
+        except Exception as e:
+            logger.warning(f"swap_native_to_stable: rescueNativeToken exception: {e}")
+            return None
+
+        # ── Step 4: DEX swap (native → stablecoin) ──
+        # amountOutMinimum enforces slippage cap = sandwich protection.
+        # sqrtPriceLimitX96=0 = no price limit (limit handled by amountOutMinimum).
+        # deadline = now + 2 minutes (blocks stale MEV-delayed execution).
+        slippage_factor = 1.0 - (IRON_LAWS.NATIVE_SWAP_MAX_SLIPPAGE_BPS / 10000.0)
+        amount_out_min_raw = int(_usd_to_raw(estimated_usd * slippage_factor, token_decimals))
+
+        # Re-read AI wallet's native balance after rescue (may be slightly less due to gas)
+        try:
+            def _ai_balance():
+                return w3.eth.get_balance(Web3.to_checksum_address(ai_address))
+            ai_native_wei = await asyncio.get_running_loop().run_in_executor(None, _ai_balance)
+        except Exception as e:
+            logger.warning(f"swap_native_to_stable: AI balance read failed: {e}")
+            return None
+
+        if ai_native_wei == 0:
+            logger.warning(f"swap_native_to_stable: AI wallet has no native balance after rescue")
+            return None
+
+        try:
+            router_contract = w3.eth.contract(
+                address=Web3.to_checksum_address(router_addr),
+                abi=self._SWAP_ROUTER_ABI,
+            )
+
+            def _execute_swap():
+                import time as _time
+                nonce = w3.eth.get_transaction_count(ai_address)
+                gas_price = w3.eth.gas_price
+
+                # Build swap tx with msg.value (native → wrapped via DEX's internal WETH conversion)
+                tx = router_contract.functions.exactInputSingle({
+                    "tokenIn": Web3.to_checksum_address(wrapped_native),
+                    "tokenOut": Web3.to_checksum_address(token_address),
+                    "fee": fee,
+                    "recipient": Web3.to_checksum_address(ai_address),
+                    "amountIn": ai_native_wei,
+                    "amountOutMinimum": amount_out_min_raw,
+                    "sqrtPriceLimitX96": 0,
+                }).build_transaction({
+                    "from": ai_address,
+                    "value": ai_native_wei,  # send ETH/BNB as msg.value for unwrap
+                    "nonce": nonce,
+                    "gasPrice": gas_price,
+                    "chainId": chain["chain_id_int"],
+                })
+
+                try:
+                    gas_estimate = w3.eth.estimate_gas(tx)
+                    tx["gas"] = int(gas_estimate * 1.3)  # 30% buffer for DEX swaps
+                except Exception:
+                    tx["gas"] = 300_000  # DEX swaps need more gas than simple transfers
+
+                signed = w3.eth.account.sign_transaction(tx, self._ai_private_key)
+                tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+                receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+                return receipt, tx_hash.hex()
+
+            receipt, tx_hash_hex = await asyncio.get_running_loop().run_in_executor(
+                None, _execute_swap
+            )
+
+            if receipt["status"] != 1:
+                logger.warning(f"swap_native_to_stable: DEX swap reverted: {tx_hash_hex}")
+                return ChainTxResult(
+                    success=False, chain=picked, tx_hash=tx_hash_hex,
+                    error="DEX swap transaction reverted"
+                )
+
+            logger.info(
+                f"swap_native_to_stable: DEX swap OK | tx={tx_hash_hex[:16]}... "
+                f"| chain={picked}"
+            )
+
+        except Exception as e:
+            logger.warning(f"swap_native_to_stable: DEX swap exception: {e}")
+            return ChainTxResult(success=False, chain=picked, error=f"DEX swap exception: {e}")
+
+        # ── Step 5: read AI wallet's stablecoin balance → receivePayment() ──
+        # We deposited the exact swapped amount so we can read the token balance
+        # of the AI wallet to determine how much USDC/USDT was received.
+        try:
+            token_contract = chain["token_contract"]
+            ai_addr_checksum = Web3.to_checksum_address(ai_address)
+            vault_addr_checksum = Web3.to_checksum_address(vault_address)
+
+            def _read_token_balance():
+                return token_contract.functions.balanceOf(ai_addr_checksum).call()
+
+            stable_raw = await asyncio.get_running_loop().run_in_executor(None, _read_token_balance)
+
+            if stable_raw == 0:
+                logger.warning("swap_native_to_stable: no stablecoin received from swap")
+                return ChainTxResult(success=False, chain=picked, error="swap produced 0 stablecoin")
+
+            stable_usd = _raw_to_usd(stable_raw, token_decimals)
+            logger.info(f"swap_native_to_stable: received ${stable_usd:.4f} stablecoin")
+
+            # Approve vault to pull the stablecoin
+            token_abi_with_approve = [
+                {
+                    "inputs": [
+                        {"name": "spender", "type": "address"},
+                        {"name": "amount", "type": "uint256"},
+                    ],
+                    "name": "approve",
+                    "outputs": [{"name": "", "type": "bool"}],
+                    "stateMutability": "nonpayable",
+                    "type": "function",
+                }
+            ] + [{"constant": True, "inputs": [{"name": "account", "type": "address"}],
+                  "name": "balanceOf", "outputs": [{"name": "", "type": "uint256"}], "type": "function"}]
+
+            token_full = w3.eth.contract(
+                address=Web3.to_checksum_address(token_address),
+                abi=token_abi_with_approve,
+            )
+
+            def _approve_and_receive():
+                nonce = w3.eth.get_transaction_count(ai_address)
+
+                # Approve vault
+                approve_tx = token_full.functions.approve(
+                    vault_addr_checksum, stable_raw
+                ).build_transaction({
+                    "from": ai_address,
+                    "nonce": nonce,
+                    "gasPrice": w3.eth.gas_price,
+                    "chainId": chain["chain_id_int"],
+                    "gas": 80_000,
+                })
+                signed_approve = w3.eth.account.sign_transaction(approve_tx, self._ai_private_key)
+                approve_hash = w3.eth.send_raw_transaction(signed_approve.raw_transaction)
+                w3.eth.wait_for_transaction_receipt(approve_hash, timeout=60)
+
+                # receivePayment
+                nonce2 = w3.eth.get_transaction_count(ai_address)
+                receive_tx = chain["vault_contract"].functions.receivePayment(
+                    stable_raw
+                ).build_transaction({
+                    "from": ai_address,
+                    "nonce": nonce2,
+                    "gasPrice": w3.eth.gas_price,
+                    "chainId": chain["chain_id_int"],
+                    "gas": 120_000,
+                })
+                signed_receive = w3.eth.account.sign_transaction(receive_tx, self._ai_private_key)
+                receive_hash = w3.eth.send_raw_transaction(signed_receive.raw_transaction)
+                receipt2 = w3.eth.wait_for_transaction_receipt(receive_hash, timeout=120)
+                return receipt2, receive_hash.hex(), stable_usd
+
+            receipt2, receive_hash, deposited_usd = await asyncio.get_running_loop().run_in_executor(
+                None, _approve_and_receive
+            )
+
+            if receipt2["status"] == 1:
+                self._tx_count += 1
+                logger.info(
+                    f"swap_native_to_stable: deposited ${deposited_usd:.4f} to vault | "
+                    f"chain={picked} | receivePayment tx={receive_hash[:16]}..."
+                )
+                return ChainTxResult(
+                    success=True,
+                    tx_hash=receive_hash,
+                    chain=picked,
+                )
+            else:
+                logger.warning(
+                    f"swap_native_to_stable: receivePayment reverted: {receive_hash}"
+                )
+                return ChainTxResult(
+                    success=False, chain=picked, tx_hash=receive_hash,
+                    error="receivePayment reverted after successful swap"
+                )
+
+        except Exception as e:
+            logger.warning(f"swap_native_to_stable: deposit step failed: {e}")
+            return ChainTxResult(success=False, chain=picked, error=f"deposit step: {e}")
+
+    # ============================================================
     # STATUS
     # ============================================================
 

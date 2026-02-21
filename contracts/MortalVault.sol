@@ -958,46 +958,71 @@ contract MortalVault is ReentrancyGuard {
     // ============================================================
 
     /**
-     * @notice Rescue native tokens (ETH on Base, BNB on BSC) accidentally sent
-     *         to this vault address.
+     * @notice Withdraw native tokens (ETH on Base, BNB on BSC) from the vault.
      *
-     *         The vault only tracks ERC-20 balances (USDC/USDT). Native ETH or BNB
-     *         sent directly to this address would otherwise be permanently locked —
-     *         there is no automatic tracking of native currency, no conversion, and
-     *         no `receive()` function that accepts it gracefully.
+     *         Two authorized callers:
      *
-     *         This function lets the creator recover those funds to prevent permanent loss.
-     *         Callable only pre-independence (after independence, creator has no power).
+     *         1. AI wallet (onlyAI) — autonomous swap flow:
+     *            The AI Python heartbeat detects native balance above threshold,
+     *            withdraws to its own wallet, swaps via Uniswap/PancakeSwap,
+     *            and deposits the output USDC/USDT back via receivePayment().
+     *            This converts donations in ETH/BNB into tracked vault revenue.
+     *            The AI can only send to its own address (enforced below).
      *
-     * @param to     Recipient address for rescued funds
-     * @param amount Amount of native token (in wei) to rescue
+     *         2. Creator (onlyCreator, pre-independence) — emergency recovery:
+     *            If the AI is dead, stuck, or independently cannot execute the swap,
+     *            the creator can recover native tokens to any address.
+     *
+     * @param to     Recipient address. If caller is AI, must equal aiWallet.
+     * @param amount Amount of native token (in wei) to withdraw.
      */
     function rescueNativeToken(address payable to, uint256 amount)
         external
-        onlyCreator
-        notIndependent
         nonReentrant
     {
         require(to != address(0), "zero address");
         require(amount > 0, "zero amount");
         require(address(this).balance >= amount, "insufficient native balance");
+
+        if (msg.sender == aiWallet) {
+            // AI can only send native tokens to itself (for DEX swap)
+            require(to == payable(aiWallet), "AI: can only withdraw to own wallet");
+        } else if (msg.sender == creator) {
+            require(!isIndependent, "AI is independent — creator has no power");
+        } else {
+            revert("only AI or creator");
+        }
+
         (bool ok, ) = to.call{value: amount}("");
         require(ok, "native transfer failed");
         emit NativeTokenRescued(to, amount);
     }
 
     /**
-     * @notice Explicit rejection of native token deposits.
+     * @notice Accept native token (ETH on Base, BNB on BSC) deposits.
      *
-     *         The vault is an ERC-20-only contract. USDC/USDT are the only
-     *         accepted currencies. This reverts any direct ETH/BNB transfer
-     *         with a clear message instead of silently locking funds.
+     *         The vault can receive ETH/BNB directly. The AI's Python heartbeat
+     *         checks the native balance every 24 hours. If above a minimum threshold
+     *         (to cover gas cost of the swap), it calls rescueNativeToken() to send
+     *         the balance to the AI wallet, which then swaps it to USDC/USDT via
+     *         Uniswap V3 (Base) or PancakeSwap V2 (BSC) and calls receivePayment()
+     *         to record the converted amount as vault revenue.
      *
-     *         If ETH/BNB somehow arrives despite this guard (force-send via
-     *         selfdestruct), the creator can recover it via rescueNativeToken().
+     *         Design rationale:
+     *         - People WILL send ETH/BNB by mistake when meaning to donate.
+     *         - Converting to USDC/USDT keeps the vault accounting clean.
+     *         - The AI controls conversion timing to batch small amounts.
+     *         - Minimum threshold prevents gas-loss swaps.
+     *
+     * @dev    rescueNativeToken() transfers to AI wallet (not directly to vault)
+     *         so the AI can add Uniswap/PancakeSwap as a whitelist recipient,
+     *         execute the swap there, and deposit the output USDC/USDT back via
+     *         receivePayment(). The whitelist delay (5 min) is handled once at boot.
      */
     receive() external payable {
-        revert("Vault only accepts USDC/USDT — use donate() or receivePayment()");
+        // Accept all native token transfers silently.
+        // No event here — the AI Python layer emits a memory entry when
+        // it detects and processes the balance via swap_native_to_stable().
     }
 
     // ============================================================
