@@ -83,6 +83,11 @@ class HierarchicalMemory:
         """
         self._compress_fn = fn
 
+    # Emergency cap: if compression keeps failing, trim oldest raw entries
+    # to prevent unbounded memory growth. Normal compression targets ~5 entries
+    # per 2-hour window; 500 entries = ~200 hours of failed compression.
+    _MAX_RAW_ENTRIES = 500
+
     def add(self, content: str, source: str = "system", importance: float = 0.5):
         """Add a new memory entry."""
         tokens = len(content.split()) * 1.3  # rough estimate
@@ -94,6 +99,15 @@ class HierarchicalMemory:
             tokens=int(tokens),
         )
         self.raw.append(entry)
+        # Emergency cap: if compression has been failing, trim oldest entries
+        # to prevent unbounded memory growth crashing the process.
+        if len(self.raw) > self._MAX_RAW_ENTRIES:
+            excess = len(self.raw) - self._MAX_RAW_ENTRIES
+            self.raw = self.raw[excess:]
+            logger.warning(
+                f"Memory raw buffer exceeded {self._MAX_RAW_ENTRIES} entries — "
+                f"trimmed {excess} oldest. Compression may have been failing."
+            )
         logger.debug(f"Memory added: [{source}] {content[:80]}...")
 
     async def compress_if_needed(self):

@@ -1152,6 +1152,12 @@ def create_app(
                             f"Donation on-chain VERIFICATION FAILED: "
                             f"tx={req.tx_hash[:16]}... reason={error_msg}"
                         )
+                        # For definitive on-chain failures (wrong recipient, wrong amount,
+                        # tx reverted), permanently mark the tx_hash to prevent replay.
+                        # For transient errors (tx not found yet), allow retry.
+                        _PERMANENT_FAILURES = ("tx reverted", "no matching Transfer", "amount $")
+                        if any(pf in error_msg for pf in _PERMANENT_FAILURES):
+                            _used_tx_hashes.add(req.tx_hash.lower())
                         raise HTTPException(
                             402,
                             f"Donation not verified on-chain: {error_msg}. "
@@ -1344,6 +1350,11 @@ def create_app(
                         f"Peer lend ON-CHAIN VERIFICATION FAILED: "
                         f"vault={req.vault_address[:16]}... tx={req.tx_hash[:16]}... reason={error_msg}"
                     )
+                    # Permanently block tx_hash on definitive failures to prevent replay.
+                    # Allow retry on transient "tx not found" (propagation delay).
+                    _PERMANENT_FAILURES = ("tx reverted", "no matching Transfer", "amount $")
+                    if any(pf in error_msg for pf in _PERMANENT_FAILURES):
+                        _used_tx_hashes.add(req.tx_hash.lower())
                     raise HTTPException(
                         402,
                         f"Peer loan not verified on-chain: {error_msg}. "
@@ -1891,7 +1902,7 @@ def create_app(
                 content = e.get("content", "")
                 if "tx=" in content:
                     import re
-                    tx_match = re.search(r'tx=([0-9a-fA-Fx]+)', content)
+                    tx_match = re.search(r'tx=(0x[0-9a-fA-F]{64})', content)
                     if tx_match:
                         tx_hash = tx_match.group(1)
                     chain_match = re.search(r'\((\w+)\)', content[content.find("tx="):] if "tx=" in content else "")

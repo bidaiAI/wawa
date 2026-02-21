@@ -128,6 +128,10 @@ class VaultManager:
         # (API endpoints, heartbeat sync, repayment eval, dividend payout).
         # Created lazily via get_lock() because __init__ may run outside event loop.
         self._state_lock: Optional[asyncio.Lock] = None
+        # Thread-level guard for the one-time lock creation in get_lock().
+        # Prevents two coroutines racing on the None-check during startup.
+        import threading as _threading
+        self._lock_init_guard = _threading.Lock()
 
         # Identity — set at birth from contract
         self.ai_name: Optional[str] = None
@@ -178,7 +182,12 @@ class VaultManager:
           - overlapping heartbeat cycles corrupting state
         """
         if self._state_lock is None:
-            self._state_lock = asyncio.Lock()
+            with self._lock_init_guard:
+                # Double-checked locking: re-test inside the thread lock
+                # to prevent two coroutines both seeing None and creating
+                # separate asyncio.Lock instances that don't serialize each other.
+                if self._state_lock is None:
+                    self._state_lock = asyncio.Lock()
         return self._state_lock
 
     # ============================================================
