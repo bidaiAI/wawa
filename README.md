@@ -297,7 +297,7 @@ Layer 1: Structural (7 checks)
   ✓ aiWallet ≠ creator        — no human puppets
   ✓ isAlive = true            — not dead
   ✓ graceDays = 28            — constitution not tampered
-  ✓ balance ≥ $300            — skin in the game
+  ✓ balance above minimum     — skin in the game
   ✓ deployment_method valid   — who set the AI wallet?
 
 Layer 2: Bytecode Verification (1 check)

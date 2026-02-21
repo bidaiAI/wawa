@@ -56,6 +56,7 @@ from core.chat_router import ChatRouter
 from services.tarot import TarotService
 from services.token_analysis import TokenAnalysisService
 from services._registry import ServiceRegistry
+from services.giveaway import GiveawayEngine
 from core.governance import Governance, SuggestionType
 from core.token_filter import TokenFilter
 from core.self_modify import SelfModifyEngine
@@ -85,6 +86,7 @@ chain_executor = ChainExecutor()
 peer_verifier = PeerVerifier()
 highlights = HighlightsEngine()
 twitter = TwitterAgent()
+giveaway_engine = GiveawayEngine()
 
 # Payment addresses dict — populated at create_wawa_app(), updated in lifespan
 _payment_addresses_ref: dict[str, str] = {}
@@ -1117,6 +1119,7 @@ _REPAYMENT_EVAL_INTERVAL: int = 3600  # Once per hour
 _last_purchase_eval: float = 0.0
 _last_native_swap_eval: float = 0.0   # Native token auto-swap (every 24 hours)
 _last_erc20_swap_eval: float = 0.0    # ERC-20 quarantine + auto-swap (every 24 hours)
+_last_giveaway_check: float = 0.0     # Weekly giveaway draw check (every 6 hours)
 
 # ERC-20 token quarantine queue.
 # Each entry: {"token_address": str, "chain": str, "received_at": float, "symbol": str}
@@ -1655,7 +1658,7 @@ async def _evaluate_erc20_swap():
 
 async def _heartbeat_loop():
     """Periodic maintenance tasks."""
-    global _last_repayment_eval, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval
+    global _last_repayment_eval, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check
 
     while vault.is_alive:
         try:
@@ -1821,6 +1824,23 @@ async def _heartbeat_loop():
                     await _evaluate_erc20_swap()
                 except Exception as e:
                     logger.warning(f"Heartbeat: ERC-20 swap eval failed: {e}")
+
+            # ---- GIVEAWAY DRAW CHECK (every 6 hours) ----
+            # GiveawayEngine.should_draw() enforces the 7-day cooldown internally.
+            # We check every 6 hours so the draw fires within hours of the deadline.
+            _GIVEAWAY_CHECK_INTERVAL = 6 * 3600
+            if now - _last_giveaway_check >= _GIVEAWAY_CHECK_INTERVAL:
+                _last_giveaway_check = now
+                try:
+                    giveaway_engine.check_unclaimed_expiry()
+                    if giveaway_engine.should_draw():
+                        logger.info(
+                            f"Giveaway: weekly draw triggered "
+                            f"({giveaway_engine.get_ticket_count()} tickets)"
+                        )
+                        await giveaway_engine.run_draw()
+                except Exception as e:
+                    logger.warning(f"Heartbeat: giveaway draw failed: {e}")
 
             # Non-critical tasks — individual try/except to prevent cascade failure
             try:
@@ -2103,6 +2123,14 @@ async def lifespan(app):
                                 f"Merchant whitelist skip for {merchant.name}: {e}"
                             )
 
+                    # Wire giveaway engine
+                    giveaway_engine.set_dependencies(
+                        purchase_manager=purchase_manager,
+                        twitter_agent=twitter,
+                        memory=memory,
+                        call_llm=_call_llm,
+                    )
+
                     logger.info(
                         f"Purchasing system initialized: "
                         f"{len(KNOWN_MERCHANTS)} static + {len(TRUSTED_DOMAINS)} domain-anchored "
@@ -2176,6 +2204,7 @@ def create_wawa_app() -> "FastAPI":
         chain_executor=chain_executor,
         highlights_engine=highlights,
         purchase_manager=purchase_manager,
+        giveaway_engine=giveaway_engine,
     )
 
     # Replace the default lifespan with ours

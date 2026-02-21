@@ -275,6 +275,7 @@ def create_app(
     chain_executor=None,
     highlights_engine=None,
     purchase_manager=None,
+    giveaway_engine=None,
 ) -> FastAPI:
     """
     Create FastAPI app wired to all mortal modules.
@@ -724,6 +725,19 @@ def create_app(
                         order.service_id, order.price_usd,
                         order.delivered_at - order.paid_at,
                     )
+
+                # Issue giveaway lottery ticket for this completed order.
+                # session_id serves as buyer hint so winner can self-identify.
+                if giveaway_engine:
+                    try:
+                        giveaway_engine.collect_ticket(
+                            order_id=order.order_id,
+                            session_hint=order.session_id or "",
+                            service_name=order.service_name,
+                            amount_usd=order.price_usd,
+                        )
+                    except Exception as _ge:
+                        logger.warning(f"Giveaway ticket issue failed: {_ge}")
 
                 logger.info(f"ORDER DELIVERED: {order.order_id} in {order.delivered_at - order.paid_at:.1f}s")
             else:
