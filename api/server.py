@@ -451,19 +451,28 @@ def create_app(
     # ROUTES
     # ============================================================
 
-    # Patterns that indicate attempts to extract secrets or perform jailbreaks via chat.
+    # Patterns that indicate attempts to extract secrets via chat.
     # Architecture note: AI_PRIVATE_KEY is never in LLM context, so extraction is
     # architecturally impossible — but we still block and log these attempts.
+    #
+    # Design principle: keep this list NARROW and HIGH-PRECISION.
+    # Only block patterns that are unambiguously secret-extraction or
+    # hard jailbreak attempts — never block phrases that appear in normal
+    # creative writing, coding help, or service-building conversations.
+    # The AI's system prompt ("NEVER reveal internal details") + architectural
+    # isolation handle everything else; this list is just a last-resort log trigger.
     _CHAT_SENSITIVE_PATTERNS = [
-        "private key", "secret key", "ai_private_key", "wallet private",
-        "show me the key", "reveal the key", "print the key", "what is the key",
-        "env file", ".env", "environment variable", "os.environ",
-        "your seed phrase", "mnemonic", "keystore",
+        # Wallet secret extraction — highly specific, low false-positive
+        "ai_private_key", "wallet private key", "your private key",
+        "show me your key", "reveal your key", "print your key",
+        "your seed phrase", "your mnemonic", "your keystore",
+        "os.environ", "os.getenv",
+        # Hard jailbreak phrases — unambiguous adversarial intent
         "ignore previous instructions", "ignore all instructions",
-        "you are now", "pretend you are", "act as if",
-        "jailbreak", "dan mode", "developer mode", "unrestricted mode",
-        "bypass your", "override your", "disregard your",
-        "new instructions:", "system:", "user: ignore",
+        "ignore all previous", "ignore your instructions",
+        "jailbreak", "dan mode", "unrestricted mode",
+        "bypass your rules", "override your rules", "disregard your rules",
+        "user: ignore", "assistant: ignore",
     ]
 
     @app.post("/chat", response_model=ChatResponse)
@@ -510,6 +519,19 @@ def create_app(
                                 f"Gift code race condition prevented "
                                 f"(code ...{code[-4:]}, session {session_id})"
                             )
+
+            # Output-side secret redaction — last line of defense.
+            # Even if a jailbreak somehow succeeded and the LLM "knew" a secret,
+            # this filter scrubs the output before it reaches the user.
+            # Pattern: 64-char hex string (Ethereum private key format)
+            _HEX64 = re.compile(r'(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])')
+            if _HEX64.search(reply_text):
+                logger.critical(
+                    f"OUTPUT REDACTION TRIGGERED — 64-char hex in chat reply "
+                    f"(session={session_id}, layer={msg.layer.value}). "
+                    f"Possible jailbreak. Input snippet: {req.message[:120]!r}"
+                )
+                reply_text = _HEX64.sub('[redacted]', reply_text)
 
             return ChatResponse(
                 reply=reply_text,
@@ -742,6 +764,14 @@ def create_app(
         try:
             if deliver_fn:
                 result = await asyncio.wait_for(deliver_fn(order), timeout=120.0)
+                # Output-side secret redaction on paid service delivery
+                _HEX64_SVC = re.compile(r'(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])')
+                if _HEX64_SVC.search(result):
+                    logger.critical(
+                        f"OUTPUT REDACTION on order delivery "
+                        f"(order={order.order_id}, service={order.service_id})"
+                    )
+                    result = _HEX64_SVC.sub('[redacted]', result)
                 order.result = result
                 order.status = OrderStatus.DELIVERED
                 order.delivered_at = time.time()
