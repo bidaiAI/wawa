@@ -496,7 +496,7 @@ class ChainExecutor:
             account = Account.from_key(ai_private_key)
             self._ai_address = account.address
         except Exception as e:
-            logger.error(f"Invalid AI_PRIVATE_KEY: {e}")
+            logger.error(f"Invalid AI_PRIVATE_KEY format: {type(e).__name__}")
             return False
 
         # Connect to each chain

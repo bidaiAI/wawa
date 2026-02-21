@@ -37,6 +37,31 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+
+class _SecretMaskingFilter(logging.Filter):
+    """Redact 64-char hex strings (private keys) from all log output."""
+    import re as _re
+    _PATTERN = _re.compile(r'(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])')
+
+    def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+        if isinstance(record.msg, str):
+            record.msg = self._PATTERN.sub('[REDACTED]', record.msg)
+        if record.args:
+            try:
+                formatted = record.getMessage()
+                if self._PATTERN.search(formatted):
+                    record.msg = self._PATTERN.sub('[REDACTED]', formatted)
+                    record.args = None
+            except Exception:
+                pass
+        return True
+
+
+_mask_filter = _SecretMaskingFilter()
+for _h in logging.root.handlers:
+    _h.addFilter(_mask_filter)
+
 logger = logging.getLogger("mortal.main")
 
 # Ensure data dirs exist
