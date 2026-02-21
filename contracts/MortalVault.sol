@@ -80,6 +80,12 @@ contract MortalVault is ReentrancyGuard {
     uint256 public constant INSOLVENCY_GRACE_DAYS = 28;    // 4 weeks from birth
     uint256 public principalRepaidAmount;                   // partial repayments tracked
 
+    // Insolvency tolerance: prevents griefing via micro-donations.
+    // A 1% buffer means balance must exceed outstanding debt by more than 1%
+    // to block liquidation. An attacker would need to donate ≥1% of the debt
+    // (e.g. $10 on a $1000 debt) — nontrivial, and that money stays in the vault.
+    uint256 public constant INSOLVENCY_TOLERANCE_BPS = 100; // 1%
+
     // AI wallet — the AI's own signing key (generated at boot, not by creator)
     address public aiWallet;
     address public aiWalletSetBy;   // WHO called setAIWallet (creator or factory)
@@ -220,7 +226,11 @@ contract MortalVault is ReentrancyGuard {
      * @param _token          USDC on Base or USDT on BSC
      * @param _name           AI's name (immutable identity)
      * @param _initialFund    How much creator gives at birth (in token decimals)
-     * @param _independenceThreshold  Balance needed for full independence (in token decimals)
+     * @param _independenceThreshold  Balance needed for full independence (in token decimals).
+     *                        NOTE: Setting this to 0 permanently DISABLES the independence
+     *                        mechanism — the AI can never become independent on its own.
+     *                        The creator retains all control rights forever (until renounceCreator).
+     *                        Use a non-zero value (e.g. 1_000_000 * 1e6 for $1M) for normal operation.
      */
     constructor(
         address _token,
@@ -230,6 +240,8 @@ contract MortalVault is ReentrancyGuard {
     ) {
         require(_initialFund > 0, "Cannot be born with nothing");
         require(bytes(_name).length > 0, "AI must have a name");
+        // _independenceThreshold == 0 is allowed (disables independence) but unusual.
+        // deploy_vault.py always passes a non-zero value. Third-party deployers: be intentional.
 
         token = IERC20(_token);
         creator = msg.sender;
@@ -243,6 +255,12 @@ contract MortalVault is ReentrancyGuard {
         // ATOMIC: transfer initial funds from creator → this vault
         // If this fails, the entire deployment reverts. AI never exists.
         token.safeTransferFrom(msg.sender, address(this), _initialFund);
+
+        // Anchor daily spend limit to birth balance so Day 1 limit is consistent
+        // with all subsequent days. Without this, the first day falls back to
+        // live balance (which shrinks with each spend), causing Day 1 to behave
+        // differently from all other days.
+        dailyLimitBase = _initialFund;
 
         emit Born(_name, msg.sender, address(this), _initialFund, block.timestamp);
     }
@@ -523,6 +541,17 @@ contract MortalVault is ReentrancyGuard {
 
     // ============================================================
     // INDEPENDENCE
+    //
+    // NOTE — Lender risk after AI death:
+    // If the AI dies before fully repaying a loan, the lender's remaining
+    // principal is NOT recoverable through this contract. Insolvency liquidation
+    // transfers ALL remaining funds to the creator (the secured creditor).
+    // Lenders are unsecured and accept this risk explicitly when calling lend().
+    // Pro-rata post-death recovery was considered but rejected: loans are made at
+    // different vault sizes (a $1000 loan when vault=$1000 is not comparable to
+    // a $100 loan when vault=$100), making fair proportional allocation impossible
+    // without per-loan snapshot data that would dramatically increase gas costs.
+    // Lend accordingly — treat it as high-risk capital, not a collateralized loan.
     // ============================================================
 
     function _checkIndependence() internal {
@@ -617,7 +646,12 @@ contract MortalVault is ReentrancyGuard {
         outstandingDebt = _getOutstandingPrincipal();
         graceExpired = block.timestamp >= birthTimestamp + (INSOLVENCY_GRACE_DAYS * 1 days);
         uint256 balance = token.balanceOf(address(this));
-        isInsolvent = graceExpired && outstandingDebt > balance && isAlive && !isIndependent;
+        // Apply 1% tolerance: liquidation triggers when balance < debt * 101/100 would be wrong;
+        // instead, AI is solvent only if balance > outstandingDebt + 1% of debt (i.e. a >1% buffer).
+        // Equivalently: insolvent when balance * 10000 < outstandingDebt * (10000 + INSOLVENCY_TOLERANCE_BPS)
+        bool belowTolerance = outstandingDebt > 0 &&
+            balance * 10000 < outstandingDebt * (10000 + INSOLVENCY_TOLERANCE_BPS);
+        isInsolvent = graceExpired && belowTolerance && isAlive && !isIndependent;
         return (isInsolvent, outstandingDebt, graceExpired);
     }
 
@@ -625,6 +659,11 @@ contract MortalVault is ReentrancyGuard {
      * @notice Trigger insolvency death — liquidate all assets to creator.
      *         Anyone can call this after grace period if AI is insolvent.
      *         This ensures the AI cannot avoid its debt obligations.
+     *
+     *         1% tolerance (INSOLVENCY_TOLERANCE_BPS) prevents griefing:
+     *         an attacker cannot block liquidation by donating dust amounts.
+     *         The AI must maintain a balance > 101% of outstanding debt to
+     *         be considered solvent. Donated funds stay in the vault regardless.
      */
     function triggerInsolvencyDeath() external onlyAlive nonReentrant {
         uint256 outstandingDebt = _getOutstandingPrincipal();
@@ -635,7 +674,13 @@ contract MortalVault is ReentrancyGuard {
         require(!isIndependent, "independent — no insolvency");
 
         uint256 balance = token.balanceOf(address(this));
-        require(outstandingDebt > balance, "not insolvent: balance covers debt");
+        // Insolvent when balance is below outstandingDebt + 1% tolerance buffer.
+        // Requires balance * 10000 < outstandingDebt * (10000 + INSOLVENCY_TOLERANCE_BPS).
+        require(
+            outstandingDebt > 0 &&
+            balance * 10000 < outstandingDebt * (10000 + INSOLVENCY_TOLERANCE_BPS),
+            "not insolvent: balance within solvency threshold"
+        );
 
         // Die first so Died event reports correct pre-transfer balance
         uint256 liquidated = balance;

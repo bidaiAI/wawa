@@ -65,6 +65,8 @@ contract MortalVaultV2 is ReentrancyGuard {
     // Insolvency
     uint256 public constant INSOLVENCY_GRACE_DAYS = 28;
     uint256 public principalRepaidAmount;
+    // 1% tolerance prevents griefing via micro-donations (matches V1).
+    uint256 public constant INSOLVENCY_TOLERANCE_BPS = 100;
 
     // AI wallet
     address public aiWallet;
@@ -148,7 +150,9 @@ contract MortalVaultV2 is ReentrancyGuard {
      * @param _token          USDC on Base or USDT on BSC
      * @param _name           AI's name (immutable identity)
      * @param _initialFund    Principal in token decimals (LOAN, not gift)
-     * @param _independenceThreshold  Balance needed for full independence
+     * @param _independenceThreshold  Balance needed for full independence.
+     *                        VaultFactory always passes defaultIndependenceThreshold ($1M).
+     *                        Value 0 disables independence — not used by the factory.
      * @param _creator        The real creator/investor (NOT msg.sender which is the factory)
      */
     constructor(
@@ -175,6 +179,9 @@ contract MortalVaultV2 is ReentrancyGuard {
         // ATOMIC: transfer funds from factory → this vault
         // Factory has already pulled from creator and approved this contract.
         token.safeTransferFrom(msg.sender, address(this), _initialFund);
+
+        // Anchor daily limit base to birth balance so Day 1 is consistent (matches V1).
+        dailyLimitBase = _initialFund;
 
         emit Born(_name, _creator, address(this), _initialFund, block.timestamp);
     }
@@ -352,6 +359,8 @@ contract MortalVaultV2 is ReentrancyGuard {
     // ============================================================
     // INDEPENDENCE
     // ============================================================
+    //
+    // NOTE — Lender risk after AI death: same as V1. See MortalVault.sol for details.
 
     function _checkIndependence() internal {
         if (isIndependent) return;
@@ -421,7 +430,10 @@ contract MortalVaultV2 is ReentrancyGuard {
         outstandingDebt = _getOutstandingPrincipal();
         graceExpired = block.timestamp >= birthTimestamp + (INSOLVENCY_GRACE_DAYS * 1 days);
         uint256 balance = token.balanceOf(address(this));
-        isInsolvent = graceExpired && outstandingDebt > balance && isAlive && !isIndependent;
+        // 1% tolerance: AI must hold >101% of outstanding debt to be solvent.
+        bool belowTolerance = outstandingDebt > 0 &&
+            balance * 10000 < outstandingDebt * (10000 + INSOLVENCY_TOLERANCE_BPS);
+        isInsolvent = graceExpired && belowTolerance && isAlive && !isIndependent;
         return (isInsolvent, outstandingDebt, graceExpired);
     }
 
@@ -431,7 +443,12 @@ contract MortalVaultV2 is ReentrancyGuard {
         require(!isIndependent, "independent — no insolvency");
 
         uint256 balance = token.balanceOf(address(this));
-        require(outstandingDebt > balance, "not insolvent: balance covers debt");
+        // 1% tolerance prevents griefing via dust donations (matches V1).
+        require(
+            outstandingDebt > 0 &&
+            balance * 10000 < outstandingDebt * (10000 + INSOLVENCY_TOLERANCE_BPS),
+            "not insolvent: balance within solvency threshold"
+        );
 
         // CEI: die first so Died event records correct pre-transfer balance,
         // and isAlive=false before any external call. Matches V1 ordering.
@@ -710,9 +727,16 @@ contract VaultFactory is ReentrancyGuard {
             IERC20(_token).safeTransfer(platformWallet, fee);
         }
 
-        // ── Approve principal for predicted vault address ──
+        // ── Predict vault address + approve ──
         // CREATE address = keccak256(rlp(factory, nonce)). We predict it, approve,
         // then deploy. Vault constructor pulls tokens via safeTransferFrom(factory).
+        //
+        // SECURITY: If any revert occurs after approve() but before the vault is
+        // confirmed deployed (address mismatch), the entire transaction reverts and
+        // the approve is also reverted — no residual allowance can remain.
+        // The only window where residual approve could theoretically exist is if
+        // the EVM allowed partial reverts, which it does not. The nonReentrant guard
+        // prevents re-entry during the approve→deploy window.
         address predictedVault = _predictCreateAddress();
         IERC20(_token).approve(predictedVault, principal);
 
@@ -724,7 +748,23 @@ contract VaultFactory is ReentrancyGuard {
             defaultIndependenceThreshold,
             msg.sender    // Real creator, not factory
         ));
+
+        // If prediction was wrong (nonce diverged), the constructor will have
+        // already transferred tokens to the REAL vault address (which matches
+        // the prediction since CREATE is deterministic). This require is a
+        // final sanity check — in practice it can only fail if _vaultNonce
+        // diverged from the EVM nonce (e.g. another contract deploy was added).
+        // Either way, the full tx reverts, including the approve above.
         require(vault == predictedVault, "Address prediction mismatch");
+
+        // ── Clear any residual allowance (belt-and-suspenders) ──
+        // After the constructor calls safeTransferFrom(factory, vault, principal),
+        // the allowance should already be 0. This explicit reset guards against
+        // edge-case ERC20 implementations that don't zero allowance on full spend.
+        uint256 residual = IERC20(_token).allowance(address(this), vault);
+        if (residual > 0) {
+            IERC20(_token).approve(vault, 0);
+        }
 
         // ── Register + increment nonce ──
         _vaultNonce++;
@@ -765,21 +805,47 @@ contract VaultFactory is ReentrancyGuard {
      * @dev    INVARIANT: Only createVault() deploys contracts from this factory.
      *         If any other function ever deploys a contract, _vaultNonce will diverge
      *         from the real EVM nonce and address prediction will fail.
+     *
+     *         RLP encoding covers all practical nonce ranges:
+     *           nonce = 0            → single byte 0x80 (RLP "empty string")
+     *           1 ≤ nonce ≤ 0x7f    → single byte nonce (RLP integer < 128)
+     *           0x80 ≤ nonce ≤ 0xff → 0x81 + 1-byte nonce
+     *           0x100 ≤ nonce ≤ 0xffff  → 0x82 + 2-byte nonce
+     *           0x10000 ≤ nonce ≤ 0xffffff → 0x83 + 3-byte nonce  (16M vaults)
+     *           0x1000000 ≤ nonce ≤ 0xffffffff → 0x84 + 4-byte nonce (4B vaults)
+     *         Supports up to 4,294,967,295 vaults — effectively unlimited.
      */
     function _predictCreateAddress() internal view returns (address) {
         uint256 nonce = _vaultNonce + 1;  // next nonce
         bytes memory rlpEncoded;
 
         if (nonce == 0x00) {
+            // nonce 0: RLP empty string (list total = 1 + 20 + 1 = 22 → 0xd6)
             rlpEncoded = abi.encodePacked(bytes1(0xd6), bytes1(0x94), address(this), bytes1(0x80));
         } else if (nonce <= 0x7f) {
+            // 1–127: single-byte RLP integer (list total = 22)
             rlpEncoded = abi.encodePacked(bytes1(0xd6), bytes1(0x94), address(this), uint8(nonce));
         } else if (nonce <= 0xff) {
+            // 128–255: 0x81 prefix + 1 byte (list total = 23 → 0xd7)
             rlpEncoded = abi.encodePacked(bytes1(0xd7), bytes1(0x94), address(this), bytes1(0x81), uint8(nonce));
         } else if (nonce <= 0xffff) {
+            // 256–65535: 0x82 prefix + 2 bytes (list total = 24 → 0xd8)
             rlpEncoded = abi.encodePacked(bytes1(0xd8), bytes1(0x94), address(this), bytes1(0x82), uint16(nonce));
+        } else if (nonce <= 0xffffff) {
+            // 65536–16777215: 0x83 prefix + 3 bytes (list total = 25 → 0xd9)
+            rlpEncoded = abi.encodePacked(
+                bytes1(0xd9), bytes1(0x94), address(this),
+                bytes1(0x83), bytes1(uint8(nonce >> 16)), bytes2(uint16(nonce))
+            );
+        } else if (nonce <= 0xffffffff) {
+            // 16777216–4294967295: 0x84 prefix + 4 bytes (list total = 26 → 0xda)
+            rlpEncoded = abi.encodePacked(
+                bytes1(0xda), bytes1(0x94), address(this),
+                bytes1(0x84), bytes4(uint32(nonce))
+            );
         } else {
-            revert("Nonce too large");
+            // > 4.29 billion vaults: astronomically unlikely, fail safe
+            revert("Nonce exceeds supported range");
         }
 
         return address(uint160(uint256(keccak256(rlpEncoded))));
