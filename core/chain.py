@@ -432,6 +432,14 @@ class ChainTxResult:
     stable_usd: float = 0.0      # stablecoin USD amount received (swap results only)
 
 
+class _TxTimeoutError(Exception):
+    """Internal: raised when wait_for_transaction_receipt times out."""
+    def __init__(self, tx_hash: str, nonce: int, detail: str = ""):
+        self.tx_hash = tx_hash
+        self.nonce = nonce
+        super().__init__(f"TX timeout: tx={tx_hash[:16]}... nonce={nonce} {detail}")
+
+
 # ============================================================
 # CHAIN EXECUTOR
 # ============================================================
@@ -459,6 +467,10 @@ class ChainExecutor:
         self._last_sync: float = 0.0
         self._last_error: str = ""
         self._tx_count: int = 0
+
+        # Stuck nonce tracking per chain — prevents infinite retry loops
+        self._last_stuck_nonce: dict[str, int] = {}
+        self._last_stuck_time: dict[str, float] = {}
 
     def initialize(
         self,
@@ -887,12 +899,18 @@ class ChainExecutor:
         """
         Check native token (ETH/BNB) balance on each chain for the AI wallet.
         Returns dict of {chain_id: balance_in_native_token}.
-        Logs warnings if balance is critically low (can't submit transactions).
+
+        AUTO-REFUEL: If balance is critically low AND the vault contract holds
+        native tokens, automatically call rescueNativeToken() to pull gas.
+        Triggers at 3x the minimum threshold so AI still has enough gas to
+        execute the rescue call itself.
         """
         if not self._initialized:
             return {}
 
+        from core.constitution import IRON_LAWS
         import asyncio as _asyncio
+
         balances = {}
         MIN_NATIVE_WEI = {
             "base": 0.00005,   # ~$0.15 — enough for ~10 USDC transfers
@@ -911,15 +929,89 @@ class ChainExecutor:
                 balances[chain_id] = balance_native
 
                 min_threshold = MIN_NATIVE_WEI.get(chain_id, 0.0001)
-                if balance_native < min_threshold:
+                refuel_trigger = min_threshold * IRON_LAWS.GAS_REFUEL_THRESHOLD_MULTIPLIER
+
+                if balance_native < refuel_trigger:
                     logger.warning(
-                        f"LOW GAS [{chain_id}]: AI wallet has {balance_native:.8f} native token "
-                        f"(threshold: {min_threshold}). Transactions may fail!"
+                        f"LOW GAS [{chain_id}]: AI wallet has {balance_native:.8f} native "
+                        f"(refuel trigger: {refuel_trigger:.8f}). Checking vault..."
                     )
+                    try:
+                        await self._auto_refuel_from_vault(chain_id, chain, balance_wei)
+                    except Exception as refuel_err:
+                        logger.warning(f"Auto-refuel failed on {chain_id}: {refuel_err}")
+
             except Exception as e:
                 logger.warning(f"Native balance check failed for {chain_id}: {e}")
 
         return balances
+
+    async def _auto_refuel_from_vault(
+        self,
+        chain_id: str,
+        chain: dict,
+        current_balance_wei: int,
+    ) -> None:
+        """
+        Pull native tokens from the vault contract to the AI wallet for gas.
+
+        Only pulls enough for ~20 future transactions (not all vault native
+        balance). This leaves native tokens in the vault for future refuels.
+        The vault can receive native tokens from anyone (receive() payable).
+        """
+        from core.constitution import IRON_LAWS
+        from web3 import Web3
+
+        w3 = chain["w3"]
+        vault_address = chain["vault_address"]
+
+        # Step 1: Read vault's native balance
+        def _read_vault_native():
+            return w3.eth.get_balance(Web3.to_checksum_address(vault_address))
+
+        vault_native_wei = await asyncio.get_running_loop().run_in_executor(
+            None, _read_vault_native
+        )
+
+        if vault_native_wei == 0:
+            logger.info(f"Auto-refuel [{chain_id}]: vault has no native tokens to pull")
+            return
+
+        # Step 2: Calculate how much to pull — enough for ~20 txs
+        def _calc_refuel():
+            gas_price = w3.eth.gas_price
+            target_wei = gas_price * IRON_LAWS.GAS_PER_TX_UNITS * IRON_LAWS.GAS_REFUEL_TARGET_TXS
+            pull_amount = min(target_wei, vault_native_wei)
+            min_pull = gas_price * IRON_LAWS.GAS_PER_TX_UNITS
+            return pull_amount, min_pull
+
+        pull_amount, min_pull = await asyncio.get_running_loop().run_in_executor(
+            None, _calc_refuel
+        )
+
+        if pull_amount < min_pull:
+            logger.info(
+                f"Auto-refuel [{chain_id}]: vault native balance too small "
+                f"(vault={vault_native_wei} wei, min={min_pull} wei)"
+            )
+            return
+
+        # Step 3: Call rescueNativeToken(pull_amount)
+        logger.info(
+            f"Auto-refuel [{chain_id}]: pulling {pull_amount} wei "
+            f"({pull_amount / 1e18:.8f} native) from vault"
+        )
+
+        rescue_fn = chain["vault_contract"].functions.rescueNativeToken(pull_amount)
+        result = await self._send_tx(chain_id, rescue_fn)
+
+        if result.success:
+            logger.info(
+                f"Auto-refuel [{chain_id}]: SUCCESS — pulled "
+                f"{pull_amount / 1e18:.8f} native | tx={result.tx_hash[:16]}..."
+            )
+        else:
+            logger.warning(f"Auto-refuel [{chain_id}]: failed: {result.error}")
 
     # ============================================================
     # WRITE TRANSACTIONS
@@ -976,6 +1068,7 @@ class ChainExecutor:
     async def _send_tx(self, chain_id: str, tx_fn) -> ChainTxResult:
         """
         Build, sign, and send a transaction. Handles gas estimation + nonce.
+        Includes stuck nonce detection and cancel-tx recovery.
 
         Args:
             chain_id: Target chain
@@ -993,8 +1086,21 @@ class ChainExecutor:
 
         try:
             def _execute():
-                # Build transaction
-                nonce = w3.eth.get_transaction_count(self._ai_address)
+                # Check for stuck nonce before building new tx
+                confirmed_count = w3.eth.get_transaction_count(self._ai_address)
+                try:
+                    pending_count = w3.eth.get_transaction_count(self._ai_address, "pending")
+                except Exception:
+                    pending_count = confirmed_count  # RPC may not support 'pending'
+
+                if pending_count > confirmed_count:
+                    logger.warning(
+                        f"STUCK NONCE [{chain_id}]: confirmed={confirmed_count}, "
+                        f"pending={pending_count} — {pending_count - confirmed_count} tx(s) stuck"
+                    )
+
+                # Build transaction using confirmed nonce
+                nonce = confirmed_count
                 tx = tx_fn.build_transaction({
                     "from": self._ai_address,
                     "nonce": nonce,
@@ -1014,12 +1120,14 @@ class ChainExecutor:
                 signed = w3.eth.account.sign_transaction(tx, self._ai_private_key)
                 tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
 
-                # Wait for receipt
-                receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+                # Wait for receipt — raise _TxTimeoutError on timeout
+                try:
+                    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+                    return receipt, tx_hash.hex(), nonce
+                except Exception as timeout_err:
+                    raise _TxTimeoutError(tx_hash.hex(), nonce, str(timeout_err))
 
-                return receipt, tx_hash.hex()
-
-            receipt, tx_hash_hex = await asyncio.get_running_loop().run_in_executor(
+            receipt, tx_hash_hex, used_nonce = await asyncio.get_running_loop().run_in_executor(
                 None, _execute
             )
 
@@ -1051,11 +1159,87 @@ class ChainExecutor:
                     error=error,
                 )
 
+        except _TxTimeoutError as timeout:
+            # Transaction was broadcast but not confirmed within 120s
+            logger.warning(
+                f"TX TIMEOUT [{chain_id}]: tx={timeout.tx_hash[:16]}... nonce={timeout.nonce} "
+                f"— attempting cancel with replacement tx"
+            )
+
+            # Avoid infinite cancel loops: skip if we already tried this nonce recently
+            import time as _time
+            now = _time.time()
+            last_stuck = self._last_stuck_nonce.get(chain_id, -1)
+            last_stuck_time = self._last_stuck_time.get(chain_id, 0)
+
+            if timeout.nonce == last_stuck and (now - last_stuck_time) < 600:
+                logger.warning(
+                    f"STUCK NONCE [{chain_id}]: already attempted cancel for nonce "
+                    f"{timeout.nonce} within 10 min — skipping"
+                )
+                self._last_error = f"stuck nonce {timeout.nonce} (cancel already attempted)"
+                return ChainTxResult(
+                    success=False, chain=chain_id, tx_hash=timeout.tx_hash,
+                    error=f"TX timeout + cancel already attempted for nonce {timeout.nonce}",
+                )
+
+            # Attempt zero-value cancel tx
+            try:
+                cancel_ok = await self._cancel_stuck_tx(chain_id, timeout.nonce)
+                self._last_stuck_nonce[chain_id] = timeout.nonce
+                self._last_stuck_time[chain_id] = now
+                if cancel_ok:
+                    logger.info(f"CANCEL TX [{chain_id}]: sent cancel for nonce {timeout.nonce}")
+                else:
+                    logger.warning(f"CANCEL TX [{chain_id}]: cancel failed for nonce {timeout.nonce}")
+            except Exception as cancel_err:
+                logger.warning(f"Cancel tx failed [{chain_id}]: {cancel_err}")
+
+            self._last_error = f"TX timeout: {timeout.tx_hash}"
+            return ChainTxResult(
+                success=False, chain=chain_id, tx_hash=timeout.tx_hash,
+                error="TX timeout after 120s (cancel attempted)",
+            )
+
         except Exception as e:
             error = f"{type(e).__name__}: {e}"
             logger.warning(f"TX ERROR [{chain_id}]: {error}")
             self._last_error = error
             return ChainTxResult(success=False, chain=chain_id, error=error)
+
+    async def _cancel_stuck_tx(self, chain_id: str, stuck_nonce: int) -> bool:
+        """
+        Send a zero-value self-transfer with the same nonce but 30% higher gas
+        to replace a stuck transaction.
+        """
+        chain = self._chains.get(chain_id)
+        if not chain:
+            return False
+
+        w3 = chain["w3"]
+        chain_id_int = chain["chain_id_int"]
+
+        def _send_cancel():
+            cancel_gas_price = int(w3.eth.gas_price * 1.3)
+            cancel_tx = {
+                "from": self._ai_address,
+                "to": self._ai_address,
+                "value": 0,
+                "nonce": stuck_nonce,
+                "gasPrice": cancel_gas_price,
+                "gas": 21_000,
+                "chainId": chain_id_int,
+            }
+            signed = w3.eth.account.sign_transaction(cancel_tx, self._ai_private_key)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+            return receipt["status"] == 1
+
+        try:
+            return await asyncio.get_running_loop().run_in_executor(None, _send_cancel)
+        except Exception as e:
+            logger.warning(f"Cancel TX failed [{chain_id}] nonce={stuck_nonce}: {e}")
+            return False
 
     # ============================================================
     # PUBLIC METHODS — called from main.py after AI decisions
@@ -2253,15 +2437,23 @@ class ChainExecutor:
                 nonce = w3.eth.get_transaction_count(ai_address)
                 gas_price = w3.eth.gas_price
 
-                # Reserve gas budget for this swap + subsequent approve + receivePayment.
-                # 500k gas units covers: DEX swap (~300k) + approve (~80k) + receive (~120k).
-                gas_reserve = gas_price * 500_000
-                swap_amount = ai_native_wei - gas_reserve
+                # Reserve gas for BOTH the current swap sequence AND future operations.
+                # swap_reserve: covers DEX swap (~300k) + approve (~80k) + receive (~120k)
+                # operational_reserve: keeps gas for ~20 future txs (repayments, fees, etc.)
+                # Without the operational reserve, the AI wallet drains to near-zero
+                # after each swap and can't submit any further transactions.
+                swap_reserve = gas_price * IRON_LAWS.GAS_SWAP_RESERVE_UNITS
+                operational_reserve = gas_price * IRON_LAWS.GAS_PER_TX_UNITS * IRON_LAWS.GAS_OPERATIONAL_RESERVE_TXS
+                total_gas_reserve = swap_reserve + operational_reserve
+
+                swap_amount = ai_native_wei - total_gas_reserve
                 if swap_amount <= 0:
-                    raise ValueError(
-                        f"Insufficient native balance for swap after gas reserve: "
-                        f"balance={ai_native_wei} wei, reserve={gas_reserve} wei"
-                    )
+                    raise ValueError("SKIP_SWAP_KEEP_GAS")
+
+                # If swap amount is < 10% of total native balance,
+                # the gas is more valuable kept as-is
+                if swap_amount < ai_native_wei // 10:
+                    raise ValueError("SKIP_SWAP_KEEP_GAS")
 
                 # Build swap tx with msg.value (native → wrapped via DEX's internal WETH conversion)
                 tx = router_contract.functions.exactInputSingle({
@@ -2308,6 +2500,12 @@ class ChainExecutor:
             )
 
         except Exception as e:
+            if "SKIP_SWAP_KEEP_GAS" in str(e):
+                logger.info(
+                    f"swap_native_to_stable: skipped swap on {picked} — "
+                    f"native balance more valuable as operational gas"
+                )
+                return None  # Not an error — intentional skip
             logger.warning(f"swap_native_to_stable: DEX swap exception: {e}")
             return ChainTxResult(success=False, chain=picked, error=f"DEX swap exception: {e}")
 

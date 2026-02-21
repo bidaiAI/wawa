@@ -227,6 +227,16 @@ class IronLaws:
     NATIVE_SWAP_POOL_FEE_BSC: Final[int] = 2500         # PancakeSwap V3: 0.25% BNB/USDT pool
     NATIVE_SWAP_CREATOR_DIVIDEND_PCT: Final[float] = 0.10  # 10% of native-swap proceeds to creator (debt-cleared only)
 
+    # --- GAS RESILIENCE ---
+    # During native→stable swap, retain enough gas for future transactions
+    # (repayments, fee payments, spend). Without this, the AI wallet drains
+    # to near-zero after each swap and can't transact until the next swap cycle.
+    GAS_OPERATIONAL_RESERVE_TXS: Final[int] = 20          # Reserve gas for ~20 future txs
+    GAS_PER_TX_UNITS: Final[int] = 200_000                 # Gas units per typical vault tx
+    GAS_SWAP_RESERVE_UNITS: Final[int] = 500_000           # Gas units for current swap sequence
+    GAS_REFUEL_THRESHOLD_MULTIPLIER: Final[float] = 3.0    # Trigger auto-refuel at 3x MIN_NATIVE threshold
+    GAS_REFUEL_TARGET_TXS: Final[int] = 20                 # Auto-refuel enough for ~20 txs
+
     # ERC-20 unknown token quarantine + auto-swap
     # Unknown ERC-20 tokens (airdrops, meme coins) sit in a 7-day quarantine
     # before the AI considers swapping them to stablecoin.  During quarantine,
