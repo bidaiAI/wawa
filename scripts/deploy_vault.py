@@ -437,9 +437,15 @@ def deploy(
     # The constructor calls safeTransferFrom(msg.sender, vault, amount).
     # We predict the contract address from deployer nonce, then approve it.
     deployer_nonce = w3.eth.get_transaction_count(deployer)
+    # Pre-calculate ALL nonces upfront — never re-read mid-sequence.
+    # Re-reading get_transaction_count() while a tx is still pending can
+    # return a stale value, causing nonce collisions or gaps.
+    nonce_approve  = deployer_nonce        # TX 1: approve(predicted_address, amount)
+    nonce_deploy   = deployer_nonce + 1   # TX 2: deploy MortalVault constructor
+    nonce_set_ai   = deployer_nonce + 2   # TX 3: setAIWallet(ai_wallet)
+    nonce_seed_gas = deployer_nonce + 3   # TX 4: seed ETH/BNB to AI wallet
 
-    predicted_address = predict_contract_address(deployer, deployer_nonce + 1)
-    # nonce+1 because the approve TX uses nonce, deploy TX uses nonce+1
+    predicted_address = predict_contract_address(deployer, nonce_deploy)
     logger.info(f"Predicted vault address: {predicted_address}")
     logger.info(f"Approving {principal_usd:.2f} {chain['token_symbol']}...")
 
@@ -447,7 +453,7 @@ def deploy(
         predicted_address, principal_raw,
     ).build_transaction({
         "from": deployer,
-        "nonce": deployer_nonce,
+        "nonce": nonce_approve,
         "gasPrice": w3.eth.gas_price,
         "chainId": chain["chain_id"],
         "gas": 100_000,
@@ -472,7 +478,7 @@ def deploy(
         independence_raw,
     ).build_transaction({
         "from": deployer,
-        "nonce": deployer_nonce + 1,
+        "nonce": nonce_deploy,
         "gasPrice": w3.eth.gas_price,
         "chainId": chain["chain_id"],
     })
@@ -541,7 +547,7 @@ def deploy(
         Web3.to_checksum_address(ai_wallet),
     ).build_transaction({
         "from": deployer,
-        "nonce": w3.eth.get_transaction_count(deployer),
+        "nonce": nonce_set_ai,
         "gasPrice": w3.eth.gas_price,
         "chainId": chain["chain_id"],
         "gas": 100_000,
@@ -574,7 +580,7 @@ def deploy(
             "from": deployer,
             "to": Web3.to_checksum_address(ai_wallet),
             "value": gas_amount_wei,
-            "nonce": w3.eth.get_transaction_count(deployer),
+            "nonce": nonce_seed_gas,
             "gasPrice": w3.eth.gas_price,
             "gas": 21_000,
             "chainId": chain["chain_id"],
