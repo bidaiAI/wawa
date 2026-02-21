@@ -859,13 +859,20 @@ class ChainExecutor:
                     # Transfer event topic: keccak256("Transfer(address,address,uint256)")
                     transfer_topic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
+                    # Aggregate ALL Transfer logs to expected_to in this tx.
+                    # Some payment paths (aggregators, routers) split a single payment
+                    # into multiple Transfer events. Summing them gives the true total.
+                    total_raw = 0
+                    first_from_addr = ""
+
                     for log_entry in receipt.get("logs", []):
                         if log_entry["address"].lower() != ta:
                             continue
                         topics = log_entry.get("topics", [])
                         if len(topics) < 3:
                             continue
-                        if topics[0].hex() if hasattr(topics[0], 'hex') else topics[0] != transfer_topic:
+                        topic0 = topics[0].hex() if hasattr(topics[0], 'hex') else topics[0]
+                        if topic0 != transfer_topic:
                             continue
 
                         # Decode: topics[1]=from, topics[2]=to, data=value
@@ -874,15 +881,20 @@ class ChainExecutor:
                         value_raw = int(log_entry["data"].hex() if hasattr(log_entry["data"], 'hex') else log_entry["data"], 16)
 
                         if to_addr.lower() == expected_to.lower():
-                            amount_usd = _raw_to_usd(value_raw, d)
-                            return {
-                                "verified": amount_usd >= min_amount_usd,
-                                "amount_usd": amount_usd,
-                                "from_address": w.to_checksum_address(from_addr),
-                                "error": "" if amount_usd >= min_amount_usd else f"amount ${amount_usd:.2f} < ${min_amount_usd:.2f}",
-                            }
+                            total_raw += value_raw
+                            if not first_from_addr:
+                                first_from_addr = from_addr
 
-                    return {"verified": False, "error": "no matching Transfer event to vault"}
+                    if total_raw == 0:
+                        return {"verified": False, "error": "no matching Transfer event to vault"}
+
+                    amount_usd = _raw_to_usd(total_raw, d)
+                    return {
+                        "verified": amount_usd >= min_amount_usd,
+                        "amount_usd": amount_usd,
+                        "from_address": w.to_checksum_address(first_from_addr) if first_from_addr else "",
+                        "error": "" if amount_usd >= min_amount_usd else f"amount ${amount_usd:.2f} < ${min_amount_usd:.2f}",
+                    }
 
                 result = await asyncio.get_running_loop().run_in_executor(None, _verify)
                 if result.get("verified") or result.get("error") != "tx not found":
@@ -1129,12 +1141,24 @@ class ChainExecutor:
                 signed = w3.eth.account.sign_transaction(tx, self._ai_private_key)
                 tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
 
-                # Wait for receipt — raise _TxTimeoutError on timeout
+                # Wait for receipt.
+                # web3 raises TimeExhausted (a Web3Exception subclass, NOT TimeoutError)
+                # when the 120s poll window expires — this is the only case where
+                # _TxTimeoutError should be raised (triggers the cancel-tx logic).
+                # Other exceptions (RPC error, connection reset, etc.) are re-raised
+                # directly so the outer except-Exception handler returns a clean
+                # ChainTxResult(success=False) without wasting gas on a spurious cancel.
                 try:
+                    from web3.exceptions import TimeExhausted as _TimeExhausted
                     receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
                     return receipt, tx_hash.hex(), nonce
-                except Exception as timeout_err:
+                except _TimeExhausted as timeout_err:
                     raise _TxTimeoutError(tx_hash.hex(), nonce, str(timeout_err))
+                except Exception:
+                    # RPC / network error after tx was broadcast.
+                    # Do NOT cancel: we don't know the confirmed/pending state.
+                    # Re-raise for the outer handler.
+                    raise
 
             receipt, tx_hash_hex, used_nonce = await asyncio.get_running_loop().run_in_executor(
                 None, _execute

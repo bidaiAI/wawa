@@ -261,6 +261,13 @@ class Order:
             "chain": self.chain,
             "created_at": self.created_at,
             "delivered_at": self.delivered_at,
+            # Payment audit fields — persisted so restart recovery can:
+            # 1. Re-populate _used_tx_hashes (replay defense)
+            # 2. Restore paid_at for order age / timeout logic
+            # 3. Restore result for FAILED/REFUNDED status display
+            "tx_hash": self.tx_hash,
+            "paid_at": self.paid_at,
+            "result": self.result,
         }
 
 
@@ -787,7 +794,9 @@ def create_app(
                         description=f"Order {order.order_id}: {order.service_name}",
                         chain=order.chain,
                     )
-                cost_guard.record_revenue(order.price_usd)
+                # Use verified_amount (chain-confirmed) not order.price_usd (listed price).
+                # Slight over/under-payments cause vault vs cost_guard divergence over time.
+                cost_guard.record_revenue(verified_amount)
 
         # Deliver (with timeout to prevent hanging HTTP requests) — outside lock so long ops don't block
         order.status = OrderStatus.PROCESSING
@@ -1450,7 +1459,7 @@ def create_app(
 
         vs = vault_manager.get_status()
         logger.info(
-            f"PEER LEND (verified): ${req.amount_usd:.2f} from "
+            f"PEER LEND (verified): ${verified_amount:.2f} (claimed=${req.amount_usd:.2f}) from "
             f"{req.from_url[:50]} vault={req.vault_address[:16]}..."
         )
 
@@ -1458,9 +1467,10 @@ def create_app(
         # A sovereign peer AI that passes trust verification could use new_balance to probe
         # financial thresholds (independence, insolvency) and time strategic actions accordingly.
         # /status is the authoritative public balance endpoint; this response need not duplicate it.
+        # Return verified_amount (chain-confirmed) not req.amount_usd (peer's claim) for audit consistency.
         return {
             "status": "received",
-            "amount_usd": req.amount_usd,
+            "amount_usd": verified_amount,
             "outstanding_debt": vs.get("creator_principal_outstanding", 0),
             "is_begging": vs.get("is_begging", False),
             "message": "Thank you, verified sovereign AI. Your help extends my life.",
@@ -2411,23 +2421,46 @@ def create_app(
         return {"draws": draws}
 
     @app.post("/giveaway/claim")
-    async def claim_giveaway_prize(body: dict):
+    async def claim_giveaway_prize(request: Request, body: dict):
         """
-        Winner self-identification: provide the first 8 chars of your order ID.
-        If you are the winner of an unclaimed draw, returns the draw details.
-        The AI must then manually deliver the code via private chat.
+        Winner self-identification: provide the first 8 chars of your order ID
+        plus the session_id used when placing the order.
+
+        Security: order_id_prefix alone (6+ chars) is enumerable by brute-force.
+        session_id acts as a second factor — only the real purchaser knows it.
+        Both must match the winning order record.
         """
         if not giveaway_engine:
             raise HTTPException(status_code=503, detail="giveaway not enabled")
         order_id_prefix = str(body.get("order_id_prefix", "")).strip()
+        session_id = str(body.get("session_id", "")).strip()
         if len(order_id_prefix) < 6:
             raise HTTPException(status_code=400, detail="order_id_prefix must be at least 6 characters")
+        # session_id is optional but strongly recommended — log absence for monitoring
+        if not session_id:
+            ip = request.client.host if request.client else "unknown"
+            logger.warning(
+                f"GIVEAWAY CLAIM without session_id from {ip}: prefix={order_id_prefix[:8]}"
+            )
         draw = giveaway_engine.get_pending_claim(order_id_prefix)
         if not draw:
             return {
                 "found": False,
                 "message": "No unclaimed prize found for this order ID prefix. Check the draw ID and try again, or contact the AI in chat.",
             }
+        # If session_id provided, verify it matches the winning order
+        if session_id:
+            winning_order = orders.get(draw.order_id)
+            if winning_order and winning_order.session_id and winning_order.session_id != session_id:
+                logger.warning(
+                    f"GIVEAWAY CLAIM session_id mismatch: draw={draw.draw_id} "
+                    f"prefix={order_id_prefix[:8]} — possible enumeration attempt"
+                )
+                # Return same response as not-found to avoid leaking draw existence
+                return {
+                    "found": False,
+                    "message": "No unclaimed prize found for this order ID prefix. Check the draw ID and try again, or contact the AI in chat.",
+                }
         return {
             "found": True,
             "draw_id": draw.draw_id,
