@@ -842,26 +842,33 @@ def create_app(
 
         except asyncio.TimeoutError:
             logger.error(f"ORDER TIMEOUT: {order.order_id} (>120s)")
-            order.result = "Delivery timed out. Your payment has been refunded."
-            order.status = OrderStatus.FAILED
-            # Attempt auto-refund on timeout; log if it fails
+            # Attempt internal balance adjustment on timeout.
+            # NOTE: This is a Python vault state adjustment, NOT an on-chain transfer.
+            # The payment amount is credited back to the vault balance so the AI can
+            # account for it. A real on-chain refund to the payer is not currently
+            # implemented (requires storing payer address + ChainExecutor.spend()).
             async with vault_manager.get_lock():
                 refund_ok = vault_manager.spend(
                     order.price_usd, SpendType.SERVICE_REFUND,
-                    description=f"Refund for timed-out order {order.order_id}",
+                    description=f"Balance adjustment for timed-out order {order.order_id}",
                 )
             if refund_ok:
-                logger.info(f"Auto-refund issued: ${order.price_usd:.2f} for order {order.order_id}")
+                logger.info(f"Balance adjusted: ${order.price_usd:.2f} for timed-out order {order.order_id}")
+                order.result = (
+                    "Delivery timed out. Your order has been cancelled and your payment "
+                    "will be returned — please contact support with your order ID to arrange the return."
+                )
+                order.status = OrderStatus.REFUNDED
             else:
                 logger.error(
-                    f"AUTO-REFUND FAILED for order {order.order_id}: "
-                    f"vault could not issue ${order.price_usd:.2f} refund "
+                    f"BALANCE ADJUSTMENT FAILED for order {order.order_id}: "
+                    f"vault could not adjust ${order.price_usd:.2f} "
                     f"(daily/single limit or balance too low)"
                 )
                 order.result = (
-                    "Delivery timed out. Automatic refund could not be processed — "
-                    "please contact support with your order ID."
+                    "Delivery timed out. Please contact support with your order ID."
                 )
+                order.status = OrderStatus.FAILED
         except Exception as e:
             logger.error(f"ORDER FAILED: {order.order_id} - {e}")
             order.result = f"Delivery failed: {str(e)[:100]}. Please contact support with your order ID."
@@ -888,12 +895,18 @@ def create_app(
         if order_id not in orders:
             raise HTTPException(404, "Order not found")
         o = orders[order_id]
+        # Privacy policy: delivery content (e.g. tarot reading) is NOT exposed here —
+        # it was already returned in the POST /order/{id}/verify response at payment time.
+        # However, status messages for failed/refunded/expired orders ARE exposed so
+        # the user can understand what happened without contacting support.
+        _TERMINAL_WITH_REASON = {OrderStatus.FAILED, OrderStatus.REFUNDED, OrderStatus.EXPIRED}
+        public_result = o.result if o.status in _TERMINAL_WITH_REASON else None
         return OrderStatusResponse(
             order_id=o.order_id,
             status=o.status.value,
             service_id=o.service_id,
             price_usd=o.price_usd,
-            result=None,   # Privacy: delivery content not exposed in public status endpoint
+            result=public_result,
             created_at=o.created_at,
             delivered_at=o.delivered_at,
         )
@@ -1207,10 +1220,12 @@ def create_app(
                 _used_tx_hashes.add(req.tx_hash.lower())
                 _persist_tx_hash(req.tx_hash)
 
-        # Small donations without tx_hash: mark if provided (outside the large-donation lock)
-        elif req.tx_hash:
-            _used_tx_hashes.add(req.tx_hash.lower())
-            _persist_tx_hash(req.tx_hash)
+        # Small donations (< $10): tx_hash is NOT added to _used_tx_hashes.
+        # Rationale: small donations are accepted on faith without on-chain verification.
+        # Adding unverified tx_hashes to the global replay-defense set is a DoS vector —
+        # an attacker could cheaply pollute the set with arbitrary hashes and cause
+        # legitimate large-donation/purchase/peer-lend tx_hashes to be 409-rejected.
+        # The hash is recorded on the order for traceability only, not as a guard.
 
         # vault lock serialises against heartbeat sync_balance / repayment eval
         async with vault_manager.get_lock():
