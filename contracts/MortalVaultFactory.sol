@@ -437,10 +437,12 @@ contract MortalVaultV2 is ReentrancyGuard {
         return (isInsolvent, outstandingDebt, graceExpired);
     }
 
-    function triggerInsolvencyDeath() external onlyAlive nonReentrant {
+    // Only creator can trigger insolvency liquidation (parent-child relationship,
+    // matches V1). Third parties have no standing to end an AI's life.
+    // Disabled after independence (creator loses all power).
+    function triggerInsolvencyDeath() external onlyCreator notIndependent onlyAlive nonReentrant {
         uint256 outstandingDebt = _getOutstandingPrincipal();
         require(block.timestamp >= birthTimestamp + (INSOLVENCY_GRACE_DAYS * 1 days), "grace period not expired");
-        require(!isIndependent, "independent — no insolvency");
 
         uint256 balance = token.balanceOf(address(this));
         // 1% tolerance prevents griefing via dust donations (matches V1).
