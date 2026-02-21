@@ -341,6 +341,7 @@ contract MortalVaultV2 is ReentrancyGuard {
         require(dividend <= balance / 10, "dividend too large");
 
         totalDividendsPaid += dividend;
+        totalSpent += dividend;  // All outbound transfers tracked for audit completeness
         token.safeTransfer(creator, dividend);
         emit CreatorDividendPaid(dividend);
     }
@@ -359,6 +360,7 @@ contract MortalVaultV2 is ReentrancyGuard {
             loan.fullyRepaid = true;
         }
 
+        totalSpent += amount;  // All outbound transfers tracked for audit completeness
         token.safeTransfer(loan.lender, amount);
         emit LoanRepaid(loanIndex, amount);
     }
@@ -519,6 +521,7 @@ contract MortalVaultV2 is ReentrancyGuard {
         _die("emergency_shutdown");
         uint256 remaining = token.balanceOf(address(this));
         if (remaining > 0) {
+            totalSpent += remaining;  // All outbound transfers tracked for audit completeness
             token.safeTransfer(creator, remaining);
         }
     }
