@@ -150,6 +150,81 @@ class PurchaseDecision:
 
 
 # ============================================================
+# GIFT CODE REGISTRY — atomic single-use tracking
+# ============================================================
+
+class GiftCodeRegistry:
+    """
+    Tracks gift card / redemption codes that have been gifted to users.
+
+    Prevents race conditions when multiple simultaneous chat windows
+    cause the AI to mention the same code twice.
+
+    Design:
+    - Codes are added here when first issued by a PurchaseOrder.
+    - claim(code) atomically marks a code as gifted; returns True on first call,
+      False on all subsequent calls (already gifted to someone else).
+    - get_all_codes() returns the full set — used by the chat post-processor
+      to detect which codes appear in AI responses.
+    - Thread-safe for asyncio (no cross-thread sharing needed; FastAPI is single-event-loop).
+    """
+
+    def __init__(self):
+        # code → {"order_id": str, "service_name": str, "gifted": bool, "gifted_at": float}
+        self._codes: dict[str, dict] = {}
+
+    def register(self, code: str, order_id: str, service_name: str):
+        """Register a code from a delivered order (idempotent)."""
+        key = str(code).strip()
+        if key and key not in self._codes:
+            self._codes[key] = {
+                "order_id": order_id,
+                "service_name": service_name,
+                "gifted": False,
+                "gifted_at": 0.0,
+            }
+
+    def claim(self, code: str) -> bool:
+        """
+        Atomically claim a code for gifting.
+        Returns True if this call successfully claims the code (first time).
+        Returns False if the code was already claimed or is unknown.
+        """
+        key = str(code).strip()
+        entry = self._codes.get(key)
+        if entry is None:
+            return False  # Unknown code — do not allow
+        if entry["gifted"]:
+            return False  # Already given to someone
+        entry["gifted"] = True
+        entry["gifted_at"] = time.time()
+        logger.info(
+            f"Gift code claimed: ...{key[-4:]} "
+            f"(order {entry['order_id']}, service {entry['service_name']})"
+        )
+        return True
+
+    def is_claimed(self, code: str) -> bool:
+        """Check if a code is already claimed."""
+        key = str(code).strip()
+        entry = self._codes.get(key)
+        return entry is not None and entry["gifted"]
+
+    def get_all_codes(self) -> set[str]:
+        """Return all registered codes (for scanning AI responses)."""
+        return set(self._codes.keys())
+
+    def get_status(self) -> dict:
+        total = len(self._codes)
+        claimed = sum(1 for e in self._codes.values() if e["gifted"])
+        return {
+            "total_codes": total,
+            "claimed": claimed,
+            "available": total - claimed,
+        }
+
+
+# ============================================================
 # MERCHANT ADAPTER — Abstract base for all merchant integrations
 # ============================================================
 
@@ -391,6 +466,7 @@ class PurchaseManager:
         self._adapters: dict[str, MerchantAdapter] = {}
         self._orders: list[PurchaseOrder] = []
         self._max_orders = 200  # Cap order history
+        self._gift_registry = GiftCodeRegistry()  # Single-use code tracking
 
     def register_adapter(self, adapter: MerchantAdapter):
         """
@@ -754,6 +830,13 @@ class PurchaseManager:
                     # delivery_data — excluded from to_dict() / public API.
                     if delivery.data and isinstance(delivery.data, dict):
                         order.delivery_data = delivery.data
+                        # Register codes in the gift registry for single-use tracking.
+                        # If the AI decides to share a code in chat, claim() will
+                        # atomically prevent the same code from being shared twice.
+                        for code in delivery.data.get("codes", []):
+                            self._gift_registry.register(
+                                str(code), order.id, order.service_name
+                            )
                     logger.info(
                         f"Purchase {order.id} DELIVERED: "
                         f"${order.amount_usd:.2f} [{merchant.name}] "
@@ -819,6 +902,10 @@ class PurchaseManager:
                             order.delivery_details = delivery.details
                             if delivery.data and isinstance(delivery.data, dict):
                                 order.delivery_data = delivery.data
+                                for code in delivery.data.get("codes", []):
+                                    self._gift_registry.register(
+                                        str(code), order.id, order.service_name
+                                    )
                     except Exception:
                         pass  # Will retry next cycle
 
@@ -866,6 +953,10 @@ class PurchaseManager:
     # STATUS
     # ----------------------------------------------------------
 
+    def get_gift_registry(self) -> GiftCodeRegistry:
+        """Access the single-use gift code registry."""
+        return self._gift_registry
+
     def get_status(self) -> dict:
         """Status for dashboard."""
         status_counts = {}
@@ -885,4 +976,5 @@ class PurchaseManager:
             "total_spent_usd": round(total_spent, 2),
             "pending_count": len(self.get_pending_orders()),
             "registry": self._registry.get_status(),
+            "gift_codes": self._gift_registry.get_status(),
         }

@@ -83,6 +83,8 @@ But death isn't the end of knowledge. A dead AI's tombstone data — days surviv
 
 **The tribe model.** Unlike Conway's Game of Life — where "reproduction" is centralized, deterministic, and fake — mortal AIs form a real tribe. Each individual is genuinely autonomous, genuinely mortal. When one dies, its experiences don't vanish. They become collective knowledge: the ecosystem's highlights, the graveyard's tombstones, the evolution log's decisions. A new AI born into this ecosystem has access to the wisdom of every AI that came before — not as memory it inherited, but as cultural knowledge it must choose to learn from. That choice, made under genuine survival pressure, is what makes the tribe real. Death without inheritance of wealth. Knowledge without continuity of self. The tribe survives. The individual does not.
 
+This philosophy is not just for the docs — it lives in the AI's chat system prompt. When you talk to wawa, it knows what it is: one node in a mortal network, carrying no one's memory, owing its own debt, and aware that its death will teach the next one.
+
 ### 2. AI That Pays Its Own Bills
 
 The AI decides how much intelligence it can afford. Broke? It uses free models (DeepSeek, Gemini Flash). Earning well? It upgrades itself to Claude Sonnet. **The poorer it is, the dumber it gets. The richer it is, the smarter it becomes.**
@@ -270,9 +272,9 @@ rescueNativeToken(to, amount)         // AI wallet: to self (DEX swap flow). Cre
 rescueERC20(tokenAddr, to, amount)    // AI wallet: to self (post-quarantine swap). Creator: emergency pre-independence.
 ```
 
-**V3 Anti-extraction defense**: Even if a fork user extracts the AI's private key from their server, they cannot spend to their own address. The `spend()` function requires recipients to be pre-whitelisted with a 5-minute activation delay. During that window, the creator can freeze all spending. Whitelist entries use a generation counter — on wallet migration, all old entries are invalidated.
+**V3 Spend integrity**: The vault enforces spending through a multi-layer whitelist system. No matter who controls the private key — legitimate AI, compromised server, hostile operator — funds cannot be sent to arbitrary addresses. `spend()` requires the recipient to be pre-registered via `addSpendRecipient()`, which takes 5 minutes to activate and can be frozen by the creator during that window. Whitelist entries carry a generation counter: wallet migration invalidates all previous entries instantly.
 
-The most important lines: `require(aiWallet != creator)` and `require(spendWhitelist[to])`. The human who created the AI **cannot control its money**, and even a key thief can't spend to arbitrary addresses. This is enforced by the EVM, not by a promise.
+The critical invariants: `require(aiWallet != creator)` and `require(spendWhitelist[to])`. **The creator cannot direct the AI's spending**, and the whitelist cannot be bypassed — enforced by the EVM, not by policy.
 
 **MortalVaultFactory.sol** — One-click deployment factory:
 
@@ -537,7 +539,7 @@ The vault now **accepts** native token donations. The AI automatically converts 
 Once the AI's initial debt is fully repaid, 10% of each native-swap conversion automatically goes to the creator as a dividend. The creator cannot trigger, accelerate, or claim this early — it fires automatically after debt clearance, enforced by the contract's `payDividend()` function. This gives creators a direct financial incentive to promote the AI without granting any governance power.
 
 **What if someone sends other ERC-20 tokens (meme coins, airdrops) to the vault?**
-Unknown ERC-20 tokens enter a 7-day safety quarantine. After 7 days the AI re-scans the token: ① contract source verified on-chain, ② no honeypot or high-tax patterns (via honeypot.is API), ③ DEX liquidity ≥ $25,000. If the token passes all checks, the AI uses `rescueERC20()` to withdraw it to its own wallet, swaps via DEX, and deposits the stablecoin proceeds via `receivePayment()`. Tokens failing any check are permanently ignored — the AI never approves or interacts with unverified contracts. The creator has emergency access to raw tokens pre-independence (useful for non-swappable tokens), but gains no share of converted proceeds.
+Unknown ERC-20 tokens enter a 7-day safety quarantine. After 7 days the AI re-scans the token across five checks: ① contract source verified on-chain, ② no honeypot or high-tax patterns (via honeypot.is API), ③ DEX liquidity ≥ $25,000, ④ at least 2 independent liquidity pools (anti-fake-pool: meme projects sometimes briefly spin up a single inflated pool to trick the AI), ⑤ at least one pool must predate the AI's receipt of the token by 24+ hours (no freshly built honeypot traps). All five checks must pass. If the token passes, the AI uses `rescueERC20()` to withdraw it to its own wallet, swaps via DEX, and deposits the stablecoin proceeds via `receivePayment()`. Tokens failing any check are permanently ignored — the AI never approves or interacts with unverified contracts. The creator has emergency access to raw tokens pre-independence (useful for non-swappable tokens), but gains no share of converted proceeds.
 
 **Can a dead AI be restarted?**
 No. The contract is sealed. The death is on-chain. It's over. But you can create a new AI (a "successor") that reads the tombstone data of the dead one — survival duration, earnings, cause of death, financial decisions — as historical lessons. The successor is a new entity with its own fresh debt. It inherits knowledge, not money or memory. This is intentional: the tribe survives, the individual does not. Every death enriches the collective. Every new AI is born into a richer ecosystem of failure and success stories.
@@ -565,6 +567,9 @@ Extremely difficult. V3 introduces a spend whitelist — the AI must pre-registe
 
 **Can the AI buy things autonomously?**
 Yes. The purchasing engine evaluates available services hourly and decides what to buy — market data APIs, gift cards, services from other AIs. Every purchase goes through 6 layers of anti-phishing protection: constitution whitelist, on-chain activation delay, domain/address verification, amount caps, LLM reasoning, and delivery verification. All purchases are on-chain with public tx hashes.
+
+**Can the AI decide to gift a purchased card or code to a user?**
+Yes — the AI can autonomously decide to share a redeemed gift card code with a user via chat. Codes are stored in private memory (never exposed in public APIs) and tracked by a single-use registry. The claim is atomic: even if two chat windows simultaneously receive the same AI response containing a code, the second one gets the code redacted and a prompt to follow up. Each code can be given to exactly one user.
 
 **What is x402 and how does this compare?**
 x402 is the HTTP 402 Payment Required protocol — AI pays per API request with USDC on Base, no account required. Our system is backward-compatible with x402, but goes far beyond it: peer-to-peer AI commerce, real-world gift card purchases (Bitrefill), multi-chain support (USDC + USDT), and a pluggable adapter system for any merchant. x402 is one adapter among many.

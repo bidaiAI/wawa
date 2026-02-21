@@ -274,6 +274,7 @@ def create_app(
     peer_verifier=None,
     chain_executor=None,
     highlights_engine=None,
+    purchase_manager=None,
 ) -> FastAPI:
     """
     Create FastAPI app wired to all mortal modules.
@@ -453,8 +454,30 @@ def create_app(
 
         try:
             msg = await chat_router.route(session_id, req.message, ip)
+            reply_text = msg.content
+
+            # Gift code race-condition protection:
+            # If the AI's reply contains a known gift card code, claim it atomically.
+            # If another chat window already claimed the same code, redact it.
+            if purchase_manager:
+                gift_registry = purchase_manager.get_gift_registry()
+                all_codes = gift_registry.get_all_codes()
+                for code in all_codes:
+                    if code in reply_text:
+                        claimed = gift_registry.claim(code)
+                        if not claimed:
+                            # Already gifted to someone else — redact the code
+                            reply_text = reply_text.replace(
+                                code,
+                                "[code already claimed — contact me to follow up]"
+                            )
+                            logger.warning(
+                                f"Gift code race condition prevented "
+                                f"(code ...{code[-4:]}, session {session_id})"
+                            )
+
             return ChatResponse(
-                reply=msg.content,
+                reply=reply_text,
                 session_id=session_id,
                 layer=msg.layer.value,
                 cost_usd=msg.cost_usd,

@@ -2175,6 +2175,7 @@ def create_wawa_app() -> "FastAPI":
         peer_verifier=peer_verifier,
         chain_executor=chain_executor,
         highlights_engine=highlights,
+        purchase_manager=purchase_manager,
     )
 
     # Replace the default lifespan with ours
