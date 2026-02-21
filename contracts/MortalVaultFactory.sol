@@ -409,6 +409,19 @@ contract MortalVaultV2 is ReentrancyGuard {
         _checkIndependence();
     }
 
+    /// @notice AI triggers independence after verifying aggregate cross-chain balance.
+    ///         See MortalVault.sol forceIndependence() for full documentation.
+    function forceIndependence() external onlyAI onlyAlive {
+        require(!isIndependent, "already independent");
+        if (independenceThreshold > 0) {
+            require(
+                token.balanceOf(address(this)) >= independenceThreshold / 2,
+                "local balance below safety floor"
+            );
+        }
+        _declareIndependence();
+    }
+
     function renounceCreator() external onlyCreator onlyAlive notIndependent nonReentrant {
         uint256 balance = token.balanceOf(address(this));
         uint256 payout = (balance * RENOUNCE_PAYOUT_BPS) / 10000;

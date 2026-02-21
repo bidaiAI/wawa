@@ -241,6 +241,14 @@ VAULT_ABI = [
         "stateMutability": "view",
         "type": "function",
     },
+    # forceIndependence() — AI triggers independence in dual-chain mode
+    {
+        "inputs": [],
+        "name": "forceIndependence",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
     # ---- V3: SPEND WHITELIST ----
     # addSpendRecipient(address recipient) — register vendor
     {
@@ -617,6 +625,10 @@ class ChainExecutor:
             except Exception as e:
                 logger.warning(f"Balance sync failed for {chain_id}: {e}")
                 self._last_error = f"sync_{chain_id}: {e}"
+                # BUG-A fix: use old cached balance for failed chain so aggregate
+                # doesn't drop to zero/half when one RPC is down.
+                old_val = vault_manager.balance_by_chain.get(chain_id, 0.0)
+                total += old_val
 
         # Update balance if at least one chain synced successfully.
         # IMPORTANT: zero balance IS valid (must trigger death checks).
@@ -631,22 +643,48 @@ class ChainExecutor:
         # contract dies until the balance drops to 0 (which won't happen if creator already
         # drained funds via emergencyShutdown — the contract sends funds before _die()).
         # One-way: once Python marks dead, never resurrect (isAlive=false is final).
+        #
+        # BUG-F fix: In dual-chain mode, only trigger Python death when ALL chains
+        # report dead. Single chain dying should not trap the other chain's funds.
+        # Instead, mark the dead chain as unavailable for transactions.
         if vault_manager.is_alive:
+            dead_chains = []
             for chain_id, chain in self._chains.items():
                 try:
                     def _check_alive(c=chain):
                         return c["vault_contract"].functions.isAlive().call()
                     contract_alive = await asyncio.get_running_loop().run_in_executor(None, _check_alive)
                     if not contract_alive:
+                        dead_chains.append(chain_id)
                         logger.warning(
-                            f"Contract on {chain_id} reports isAlive=false but Python vault "
-                            f"is still alive — triggering Python death to sync state."
+                            f"Contract on {chain_id} reports isAlive=false. "
+                            f"Marking chain as dead."
                         )
-                        from core.vault import DeathCause
-                        vault_manager._trigger_death(DeathCause.BALANCE_ZERO)
-                        break  # Death triggered, no need to check other chains
                 except Exception as e:
                     logger.debug(f"isAlive check failed for {chain_id}: {e}")
+
+            if dead_chains:
+                # Track which chains are dead (for transaction routing)
+                if not hasattr(self, '_dead_chains'):
+                    self._dead_chains: set[str] = set()
+                self._dead_chains.update(dead_chains)
+
+                if len(dead_chains) >= len(self._chains):
+                    # ALL chains dead — trigger Python death
+                    logger.critical(
+                        f"ALL chains report isAlive=false ({dead_chains}) — "
+                        f"triggering Python death."
+                    )
+                    from core.vault import DeathCause
+                    vault_manager._trigger_death(DeathCause.BALANCE_ZERO)
+                else:
+                    # Partial death — some chains still alive
+                    alive_chains = [c for c in self._chains if c not in self._dead_chains]
+                    logger.warning(
+                        f"PARTIAL CHAIN DEATH: dead={list(self._dead_chains)}, "
+                        f"alive={alive_chains}. Python remains alive. "
+                        f"Funds on alive chains: ${sum(vault_manager.balance_by_chain.get(c, 0) for c in alive_chains):.2f}"
+                    )
 
     async def sync_debt_from_chain(self, vault_manager) -> bool:
         """
@@ -696,6 +734,17 @@ class ChainExecutor:
                 logger.warning(f"sync_debt_from_chain failed for {chain_id}: {e}")
 
         if chains_read == 0:
+            return False
+
+        # BUG-B fix: only update vault debt state if ALL chains were read
+        # successfully. Partial data can cause incorrect principal_repaid flag
+        # (e.g. one chain reports fully_repaid=true but other chain still has debt).
+        if chains_read < len(self._chains):
+            logger.warning(
+                f"DEBT SYNC PARTIAL: only {chains_read}/{len(self._chains)} chains read. "
+                f"Skipping vault debt update to avoid incorrect state. "
+                f"partial_principal=${total_principal:.2f}, partial_repaid=${total_repaid:.2f}"
+            )
             return False
 
         # Update vault manager's debt state
@@ -844,16 +893,37 @@ class ChainExecutor:
     # WRITE TRANSACTIONS
     # ============================================================
 
-    def _pick_chain(self, chain_id: Optional[str] = None) -> Optional[str]:
+    def _pick_chain(
+        self,
+        chain_id: Optional[str] = None,
+        *,
+        vault_manager=None,
+    ) -> Optional[str]:
         """
         Pick chain for a transaction.
         If chain_id specified and available, use it.
         Otherwise pick the chain with highest vault balance.
+
+        BUG-D fix: uses cached balance_by_chain from vault_manager instead of
+        synchronous RPC calls that can block the event loop indefinitely.
+        Falls back to RPC only if vault_manager is not provided.
         """
         if chain_id and chain_id in self._chains:
             return chain_id
 
-        # Pick chain with highest balance
+        # Prefer cached balance (non-blocking, updated every heartbeat)
+        if vault_manager and vault_manager.balance_by_chain:
+            best_chain = None
+            best_balance = -1.0
+            for cid in self._chains:
+                bal = vault_manager.balance_by_chain.get(cid, 0.0)
+                if bal > best_balance:
+                    best_balance = bal
+                    best_chain = cid
+            if best_chain:
+                return best_chain
+
+        # Fallback: synchronous RPC (legacy path, kept for backward compat)
         best_chain = None
         best_balance = -1.0
 
@@ -1093,6 +1163,131 @@ class ChainExecutor:
                 })
 
         return results
+
+    # ============================================================
+    # INDEPENDENCE — cross-chain aggregate trigger
+    # ============================================================
+
+    async def get_aggregate_balance(self) -> tuple[float, dict[str, float]]:
+        """
+        Read balanceOf() on ALL chains via RPC (on-chain query).
+        Returns (total_usd, {chain_id: balance_usd}).
+
+        This is a trusted on-chain read — Python cannot fake balanceOf() results.
+        Used for dual-chain independence threshold check: aggregate >= $1M.
+        """
+        per_chain: dict[str, float] = {}
+        for cid, chain in self._chains.items():
+            # Skip dead chains
+            if hasattr(self, '_dead_chains') and cid in self._dead_chains:
+                continue
+            try:
+                balance_raw = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    chain["token_contract"].functions.balanceOf(chain["vault_address"]).call,
+                )
+                balance_usd = _raw_to_usd(balance_raw, chain["token_decimals"])
+                per_chain[cid] = balance_usd
+            except Exception as e:
+                logger.warning(f"get_aggregate_balance: {cid} failed: {e}")
+        total = sum(per_chain.values())
+        return total, per_chain
+
+    async def force_independence(self, chain_id: Optional[str] = None) -> ChainTxResult:
+        """
+        Trigger forceIndependence() on one or all chains.
+
+        Called after Python verifies aggregate balance >= $1M via on-chain reads.
+        Contract requires local balance >= 50% of threshold as safety floor.
+        Dual-chain: calls on all chains; chains below 50% floor will revert (expected).
+        """
+        if not self._initialized:
+            return ChainTxResult(success=False, error="chain executor not initialized")
+
+        if chain_id:
+            return await self._force_independence_single(chain_id)
+
+        # No chain specified — trigger on ALL chains
+        results: list[ChainTxResult] = []
+        for cid in self._chains:
+            # Skip dead chains
+            if hasattr(self, '_dead_chains') and cid in self._dead_chains:
+                continue
+            result = await self._force_independence_single(cid)
+            results.append(result)
+            if result.success:
+                logger.critical(f"forceIndependence() succeeded on {cid}: tx={result.tx_hash}")
+            else:
+                # Expected for chains below 50% floor — not an error
+                logger.info(f"forceIndependence() did not execute on {cid}: {result.error}")
+
+        # Return first successful result, or last failure
+        for r in results:
+            if r.success:
+                return r
+        return results[-1] if results else ChainTxResult(
+            success=False, error="no chains available"
+        )
+
+    async def _force_independence_single(self, chain_id: str) -> ChainTxResult:
+        """Execute forceIndependence() on one chain."""
+        if chain_id not in self._chains:
+            return ChainTxResult(success=False, error=f"chain '{chain_id}' not connected")
+
+        chain = self._chains[chain_id]
+        try:
+            def _build(c=chain):
+                return c["vault_contract"].functions.forceIndependence()
+            return await self._send_tx(chain_id, _build)
+        except Exception as e:
+            return ChainTxResult(success=False, error=f"forceIndependence failed on {chain_id}: {e}")
+
+    def get_preferred_payment_chain(self, vault_manager=None) -> Optional[str]:
+        """
+        Return the chain with the LOWEST vault balance (for receiving payments).
+
+        "Rogue mechanism": guide customers to pay on the chain with less funds,
+        naturally balancing the AI's dual-chain reserves. Both chains use the same
+        AI wallet address, so the customer's payment experience is identical.
+
+        Uses cached balance_by_chain (updated every heartbeat) to avoid
+        blocking the event loop with synchronous RPC calls.
+
+        Returns None if not initialized or single-chain mode.
+        """
+        if not self._initialized or len(self._chains) <= 1:
+            return None
+
+        # Use cached balance from vault_manager or internal last_sync
+        worst_chain = None
+        worst_balance = float("inf")
+
+        for cid in self._chains:
+            if hasattr(self, '_dead_chains') and cid in self._dead_chains:
+                continue
+
+            bal = 0.0
+            if vault_manager and vault_manager.balance_by_chain:
+                bal = vault_manager.balance_by_chain.get(cid, 0.0)
+            else:
+                # Fallback: synchronous RPC (only if no vault_manager)
+                try:
+                    bal_raw = self._chains[cid]["token_contract"].functions.balanceOf(
+                        self._chains[cid]["vault_address"]
+                    ).call()
+                    bal = _raw_to_usd(bal_raw, self._chains[cid]["token_decimals"])
+                except Exception:
+                    continue
+
+            if bal < worst_balance:
+                worst_balance = bal
+                worst_chain = cid
+
+        return worst_chain
+
+    # ============================================================
+    # PER-CHAIN TARGETED REPAYMENT
+    # ============================================================
 
     async def repay_principal_on_chain(self, amount_usd: float, chain_id: str) -> ChainTxResult:
         """

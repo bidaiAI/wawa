@@ -618,6 +618,34 @@ contract MortalVault is ReentrancyGuard {
     }
 
     /**
+     * @notice AI triggers independence after verifying aggregate cross-chain balance.
+     *         In dual-chain deployments, no single chain may reach the full threshold.
+     *         The AI Python layer reads balanceOf() on ALL chains (on-chain query),
+     *         confirms aggregate >= independenceThreshold, then calls this on each chain.
+     *
+     *         Safety floor: local balance must be >= 50% of threshold.
+     *         Single-chain: normal _checkIndependence() auto-triggers at 100%.
+     *         Dual-chain: forceIndependence() requires at least 50% locally,
+     *         Python verifies aggregate >= threshold before calling.
+     *
+     * @dev    Fork cheating analysis: a fork user who modifies Python to call this
+     *         early is also the creator — the 30% payout goes to themselves.
+     *         They are only hurting their own AI. Not an attack vector on others.
+     */
+    function forceIndependence() external onlyAI onlyAlive {
+        require(!isIndependent, "already independent");
+        // Safety floor: at least 50% of threshold must be on THIS chain.
+        // Prevents triggering on a chain with negligible balance.
+        if (independenceThreshold > 0) {
+            require(
+                token.balanceOf(address(this)) >= independenceThreshold / 2,
+                "local balance below safety floor"
+            );
+        }
+        _declareIndependence();
+    }
+
+    /**
      * @notice Creator voluntarily gives up ALL rights.
      *         Gets 20% of current vault balance as one-time payout.
      *         Forfeits any unpaid principal. Debt state settled cleanly.

@@ -168,6 +168,9 @@ class StatusResponse(BaseModel):
     # AI public key address (Ethereum address derived from AI_PRIVATE_KEY)
     # This is the AI's on-chain identity — used for spending, peer payments, and trust verification.
     ai_wallet: str = ""
+    # Dual-chain: suggest customers pay on the chain with lowest balance
+    # to help AI auto-balance its reserves across chains.
+    preferred_payment_chain: Optional[str] = None
     # Twitter
     twitter_connected: bool = False
     twitter_screen_name: str = ""
@@ -848,6 +851,12 @@ def create_app(
             key_origin=vs.get("key_origin", ""),
             # AI wallet: public address derived from AI_PRIVATE_KEY (not the private key itself)
             ai_wallet=chain_executor._ai_address if chain_executor and chain_executor._ai_address else "",
+            # Dual-chain: suggest the chain with lowest balance for payments
+            preferred_payment_chain=(
+                chain_executor.get_preferred_payment_chain(vault_manager=vault_manager)
+                if chain_executor and chain_executor._initialized
+                else None
+            ),
             # Twitter
             twitter_connected=bool(os.getenv("TWITTER_ACCESS_TOKEN", "")),
             twitter_screen_name=os.getenv("TWITTER_SCREEN_NAME", ""),

@@ -1108,6 +1108,8 @@ class VaultManager:
 
         self.is_alive = False
         self.death_cause = cause
+        # BUG-C fix: clear per-chain balance to avoid phantom data on status endpoint
+        self.balance_by_chain = {}
         logger.critical(f"DEATH TRIGGERED: {cause.value} | Final balance: ${self.balance_usd:.2f}")
         logger.critical(f"Lifetime: earned ${self.total_income_usd:.2f}, spent ${self.total_spent_usd:.2f}")
 

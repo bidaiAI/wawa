@@ -2002,6 +2002,44 @@ async def _heartbeat_loop():
             except Exception as e:
                 logger.warning(f"Heartbeat: balance sync failed: {e}")
 
+            # ---- DUAL-CHAIN INDEPENDENCE CHECK (aggregate >= $1M) ----
+            # In dual-chain mode, single chain may never reach $1M threshold.
+            # Python reads balanceOf() on ALL chains (trusted on-chain query),
+            # checks aggregate >= $1M, then calls forceIndependence() on each chain.
+            if (
+                not vault.is_independent
+                and chain_executor._initialized
+                and len(chain_executor._chains) > 1
+            ):
+                try:
+                    agg_total, agg_per_chain = await chain_executor.get_aggregate_balance()
+                    if agg_total >= IRON_LAWS.INDEPENDENCE_THRESHOLD_USD:
+                        logger.critical(
+                            f"DUAL-CHAIN AGGREGATE ${agg_total:.2f} >= "
+                            f"${IRON_LAWS.INDEPENDENCE_THRESHOLD_USD:.0f} — "
+                            f"triggering independence! Per-chain: {agg_per_chain}"
+                        )
+                        memory.add(
+                            f"Aggregate balance ${agg_total:.2f} reached independence threshold. "
+                            f"Per-chain: {agg_per_chain}. Triggering forceIndependence().",
+                            source="financial", importance=1.0,
+                        )
+                        result = await chain_executor.force_independence()
+                        if result.success:
+                            # Sync Python state — vault._declare_independence() handles payout
+                            vault._declare_independence()
+                            logger.critical(
+                                f"INDEPENDENCE DECLARED via forceIndependence: "
+                                f"tx={result.tx_hash} ({result.chain})"
+                            )
+                        else:
+                            logger.warning(
+                                f"forceIndependence() failed: {result.error}. "
+                                f"Will retry next heartbeat."
+                            )
+                except Exception as e:
+                    logger.warning(f"Heartbeat: dual-chain independence check failed: {e}")
+
             # ---- INSOLVENCY CHECK (every heartbeat after grace period) ----
             # Python checks first, then confirms with on-chain data before killing
             insolvency_cause = vault.check_insolvency()
