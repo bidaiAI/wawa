@@ -336,6 +336,7 @@ contract MortalVault is ReentrancyGuard {
         require(amount > 0, "zero amount");
         token.safeTransferFrom(msg.sender, address(this), amount);
         emit FundsReceived(msg.sender, amount, "creator_deposit");
+        _checkIndependence();
     }
 
     /**

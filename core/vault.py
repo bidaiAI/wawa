@@ -921,14 +921,15 @@ class VaultManager:
         if days_alive < IRON_LAWS.INSOLVENCY_GRACE_DAYS:
             return None
 
-        # Insolvency: outstanding debt > current assets.
-        # Apply 1% tolerance (INSOLVENCY_TOLERANCE_BPS=100 in contract) to match
-        # on-chain logic and absorb float drift from repeated partial repayments.
+        # Insolvency: outstanding debt > current assets (with 1% tolerance).
         # Contract formula: balance * 10000 < outstanding * 10100
-        # Python equivalent: outstanding > balance * 1.01
+        # Rearranged:        balance < outstanding * 1.01
+        # Equivalent:        outstanding * 1.01 > balance
+        # NOTE: The correct direction is outstanding * 1.01 > balance,
+        #       NOT outstanding > balance * 1.01 (that would give the wrong range).
         outstanding = self.creator.principal_usd - self.creator.total_principal_repaid_usd
-        tolerance_factor = 1.0 + (100 / 10000)  # 1% = INSOLVENCY_TOLERANCE_BPS / 10000
-        if outstanding > self.balance_usd * tolerance_factor:
+        tolerance_factor = 1.0 + (100 / 10000)  # 1.01 = INSOLVENCY_TOLERANCE_BPS / 10000
+        if outstanding * tolerance_factor > self.balance_usd:
             logger.critical(
                 f"INSOLVENCY: debt ${outstanding:.2f} > balance ${self.balance_usd:.2f} "
                 f"(+1% tolerance) after {days_alive:.0f} days"
