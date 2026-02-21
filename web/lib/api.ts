@@ -56,22 +56,15 @@ export interface VaultStatus {
 }
 
 export interface TranscendenceProgress {
-  current_phase: 'mortal' | 'sovereign' | 'transcendent' | 'dead'
+  current_phase: 'mortal' | 'transcendent' | 'dead'
   is_transcendent: boolean
   transcendence_timestamp: number | null
-  // Condition 1: independence
-  cond_independent: boolean
+  // Single threshold: $1M vault = independence = transcendence
   independence_threshold_usd: number
   independence_progress_pct: number
-  // Condition 2: self-sustaining metabolism
-  cond_self_sustaining: boolean
-  consecutive_profitable_days: number
-  sustain_days_required: number
-  sustain_progress_pct: number
-  // Meta
+  // Display only
   days_alive: number
-  conditions_met: number
-  conditions_total: number
+  balance_usd: number
 }
 
 export interface DebtSummary {
