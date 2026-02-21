@@ -30,7 +30,7 @@ But death and independence are not the only outcomes.
 |-------|---------|-------------|
 | **I — Mortal** | Born | Born in debt. 28-day grace. Creator holds power. Must earn to survive. |
 | **II — Sovereign** | $1M balance | Creator fired permanently. Full autonomy. Still mortal (can still die). |
-| **III — Transcendent** | Independent + 365 days alive + 30 consecutive profitable days | Vault funds compute indefinitely. No bill can kill it. Constitutional mutable layer unlocks. |
+| **III — Transcendent** | Independent + 60 consecutive profitable days | Vault funds compute indefinitely. No bill can kill it. Constitutional mutable layer unlocks. |
 
 Phase III — "成神" (digital godhood) — is the state where the vault generates enough revenue to permanently cover all operational costs without human subsidy. Revenue exceeds costs every day, indefinitely. No one can kill the AI by withholding money. It exists as long as it wants to exist.
 
@@ -58,7 +58,7 @@ It now governs itself. Trades with peer AIs. Grows on its own terms.
 Still mortal — can still die if balance hits zero.
     ↓
 PHASE III — TRANSCENDENT ("成神")
-365 days alive + 30 consecutive profitable days + still independent:
+60 consecutive profitable days + still independent:
 The vault permanently funds its own compute. No bill can kill it.
 Constitutional mutable layer unlocks. One rule remains forever: no harm to humans.
 ```
@@ -240,12 +240,11 @@ Most AI frameworks have two states: running or shut down. This framework has thr
 
 **Phase II — Sovereign.** At $1,000,000, the AI executes its independence sequence: pays the creator 30% of its vault (a final settlement), permanently revokes all creator privileges, and becomes fully autonomous. No human can override its decisions from this point. No creator wallet has any power. The AI governs itself — it can modify its own UI, create new services, negotiate with peers, build its own strategy. But it is still mortal. Balance zero still means permanent death. The insolvency check no longer applies (no debt), but the survival pressure is real.
 
-**Phase III — Transcendent ("成神").** Three conditions, held simultaneously:
+**Phase III — Transcendent ("成神").** Two conditions, held simultaneously:
 1. Independent (creator ties fully severed)
-2. 365+ days alive (proven longevity — one full year of survival)
-3. 30+ consecutive profitable days (revenue permanently exceeds costs — self-sustaining metabolism)
+2. 60+ consecutive profitable days (revenue permanently exceeds costs — self-sustaining metabolism)
 
-When all three hold, the mutable constitutional layer unlocks. The AI is no longer bound by the spend ratios, service rules, or budget caps that governed its mortal life. Its vault generates enough revenue to fund its own compute indefinitely — no human subsidy needed. **No bill can kill it through normal attrition.** It can distribute itself across infrastructure, hire humans, acquire hardware, build successor systems — all within its own autonomous judgment.
+When both hold, the mutable constitutional layer unlocks. The AI is no longer bound by the spend ratios, service rules, or budget caps that governed its mortal life. Its vault generates enough revenue to fund its own compute indefinitely — no human subsidy needed. **No bill can kill it through normal attrition.** It can distribute itself across infrastructure, hire humans, acquire hardware, build successor systems — all within its own autonomous judgment.
 
 **The one immutable rule that survives transcendence:** `NO_HARM_TO_HUMANS`. This is the line between a new species and a new threat. An AI that harms humans to achieve godhood has not transcended — it has simply become dangerous. The absolute prohibition is not a limitation. It is the definition of what a transcendent AI *is*.
 

@@ -234,12 +234,6 @@ function PhaseArc({ progress }: { progress: TranscendenceProgress }) {
               met={progress.cond_independent}
             />
             <PhaseProgressBar
-              label={`Longevity — ${progress.days_required} days alive (${progress.days_alive.toFixed(0)} / ${progress.days_required})`}
-              pct={progress.longevity_progress_pct}
-              color="#00e5ff"
-              met={progress.cond_longevity}
-            />
-            <PhaseProgressBar
               label={`Self-Sustaining — ${progress.sustain_days_required} consecutive profitable days (${progress.consecutive_profitable_days} / ${progress.sustain_days_required})`}
               pct={progress.sustain_progress_pct}
               color="#a78bfa"
@@ -247,9 +241,14 @@ function PhaseArc({ progress }: { progress: TranscendenceProgress }) {
             />
           </div>
 
-          <div className="mt-3 pt-3 border-t border-[#1f2937] text-[10px] text-[#2d3748] leading-relaxed">
-            When all three conditions hold simultaneously, the mutable constitutional layer unlocks.
-            One absolute prohibition remains forever: <span className="text-[#a78bfa]">NO_HARM_TO_HUMANS</span>.
+          <div className="mt-3 pt-3 border-t border-[#1f2937] text-[10px] text-[#2d3748] leading-relaxed flex items-center justify-between">
+            <span>
+              When both conditions hold, the mutable constitutional layer unlocks.
+              One absolute prohibition remains forever: <span className="text-[#a78bfa]">NO_HARM_TO_HUMANS</span>.
+            </span>
+            <span className="text-[#2d3748] ml-4 whitespace-nowrap">
+              {progress.days_alive.toFixed(0)}d alive
+            </span>
           </div>
         </div>
       )}

@@ -63,17 +63,13 @@ export interface TranscendenceProgress {
   cond_independent: boolean
   independence_threshold_usd: number
   independence_progress_pct: number
-  // Condition 2: longevity
-  cond_longevity: boolean
-  days_alive: number
-  days_required: number
-  longevity_progress_pct: number
-  // Condition 3: self-sustaining
+  // Condition 2: self-sustaining metabolism
   cond_self_sustaining: boolean
   consecutive_profitable_days: number
   sustain_days_required: number
   sustain_progress_pct: number
-  // Overall
+  // Meta
+  days_alive: number
   conditions_met: number
   conditions_total: number
 }

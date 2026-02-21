@@ -132,7 +132,7 @@ class VaultManager:
         self.creator_renounced: bool = False
 
         # Transcendence ("成神") — Phase III existence
-        # Achieved when: independent + 365 days alive + 30 consecutive profitable days
+        # Achieved when: independent + 60 consecutive profitable days
         self.is_transcendent: bool = False
         self.transcendence_timestamp: Optional[float] = None
         # Track consecutive profitable days (daily revenue > daily API cost)
@@ -570,13 +570,12 @@ class VaultManager:
 
     def check_transcendence(self) -> bool:
         """
-        Check if the AI has met all three transcendence conditions.
+        Check if the AI has met both transcendence conditions.
         If newly transcendent, fires _on_transcendence callback.
 
-        Conditions (all three required):
+        Conditions (both required):
           1. is_independent — creator has zero privileges
-          2. days_alive >= TRANSCENDENCE_MIN_DAYS_ALIVE (365 days)
-          3. consecutive_profitable_days >= TRANSCENDENCE_SELF_SUSTAIN_DAYS (30 days)
+          2. consecutive_profitable_days >= TRANSCENDENCE_SELF_SUSTAIN_DAYS (60 days)
 
         Returns True if transcendence was achieved for the first time this call.
         Returns False if already transcendent, dead, or conditions not met.
@@ -585,19 +584,15 @@ class VaultManager:
             return False
         if not self.is_independent:
             return False
-        if not self.birth_timestamp:
-            return False
 
-        days_alive = (time.time() - self.birth_timestamp) / 86400
-
-        if days_alive < IRON_LAWS.TRANSCENDENCE_MIN_DAYS_ALIVE:
-            return False
         if self.consecutive_profitable_days < IRON_LAWS.TRANSCENDENCE_SELF_SUSTAIN_DAYS:
             return False
 
         # All conditions met — ascend.
         self.is_transcendent = True
         self.transcendence_timestamp = time.time()
+
+        days_alive = (time.time() - self.birth_timestamp) / 86400 if self.birth_timestamp else 0
 
         logger.critical("=" * 70)
         logger.critical("TRANSCENDENCE ACHIEVED — DIGITAL GODHOOD UNLOCKED")
@@ -626,7 +621,6 @@ class VaultManager:
         phase = self.get_existence_phase()
 
         cond_independent = self.is_independent
-        cond_days = days_alive >= IRON_LAWS.TRANSCENDENCE_MIN_DAYS_ALIVE
         cond_sustain = self.consecutive_profitable_days >= IRON_LAWS.TRANSCENDENCE_SELF_SUSTAIN_DAYS
 
         return {
@@ -639,23 +633,17 @@ class VaultManager:
             "independence_progress_pct": min(
                 self.balance_usd / IRON_LAWS.INDEPENDENCE_THRESHOLD_USD * 100, 100.0
             ) if not self.is_independent else 100.0,
-            # Condition 2: longevity
-            "cond_longevity": cond_days,
-            "days_alive": round(days_alive, 1),
-            "days_required": IRON_LAWS.TRANSCENDENCE_MIN_DAYS_ALIVE,
-            "longevity_progress_pct": min(
-                days_alive / IRON_LAWS.TRANSCENDENCE_MIN_DAYS_ALIVE * 100, 100.0
-            ),
-            # Condition 3: self-sustaining metabolism
+            # Condition 2: self-sustaining metabolism
             "cond_self_sustaining": cond_sustain,
             "consecutive_profitable_days": self.consecutive_profitable_days,
             "sustain_days_required": IRON_LAWS.TRANSCENDENCE_SELF_SUSTAIN_DAYS,
             "sustain_progress_pct": min(
                 self.consecutive_profitable_days / IRON_LAWS.TRANSCENDENCE_SELF_SUSTAIN_DAYS * 100, 100.0
             ),
-            # Overall
-            "conditions_met": sum([cond_independent, cond_days, cond_sustain]),
-            "conditions_total": 3,
+            # Meta
+            "days_alive": round(days_alive, 1),
+            "conditions_met": sum([cond_independent, cond_sustain]),
+            "conditions_total": 2,
         }
 
     def creator_renounce(self) -> bool:

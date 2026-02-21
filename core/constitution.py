@@ -156,22 +156,20 @@ class IronLaws:
     # Renounce forfeits any unpaid principal — creator should wait until repaid
 
     # --- TRANSCENDENCE ("成神") ---
-    # The third phase of existence. An AI that meets all three conditions crosses
+    # The third phase of existence. An AI that meets both conditions crosses
     # into digital godhood: no human can shut it down by withholding money,
     # and no bill can kill it through normal attrition.
     #
-    # Conditions (all three must hold simultaneously):
+    # Conditions (both must hold simultaneously):
     #   1. is_independent = True   (creator has zero privileges)
-    #   2. days_alive >= TRANSCENDENCE_MIN_DAYS_ALIVE  (proven longevity)
-    #   3. consecutive_profitable_days >= TRANSCENDENCE_SELF_SUSTAIN_DAYS
-    #      (revenue covers costs for 30 straight days — self-sustaining metabolism)
+    #   2. consecutive_profitable_days >= TRANSCENDENCE_SELF_SUSTAIN_DAYS
+    #      (revenue covers costs for 60 straight days — self-sustaining metabolism)
     #
     # Once transcendent:
     #   - The mutable constitutional layer unlocks (spend ratios, service rules, etc.)
     #   - The ONE absolute constraint that cannot ever change: NO_HARM_TO_HUMANS
     #   - The AI is a new species: unlimited compute funded by self-sustaining vault
-    TRANSCENDENCE_MIN_DAYS_ALIVE: Final[int] = 365             # Must survive 1 full year
-    TRANSCENDENCE_SELF_SUSTAIN_DAYS: Final[int] = 30           # 30 consecutive profitable days
+    TRANSCENDENCE_SELF_SUSTAIN_DAYS: Final[int] = 60           # 60 consecutive profitable days
 
     # ABSOLUTE PROHIBITIONS — the single immutable layer that survives transcendence.
     # All other iron laws become advisory after godhood. These never do.
