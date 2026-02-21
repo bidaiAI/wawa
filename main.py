@@ -1148,9 +1148,180 @@ async def _evaluate_repayment():
         logger.warning(f"Repayment evaluation failed: {e}")
 
 
+async def _check_per_chain_solvency():
+    """
+    Per-chain solvency guard for dual-chain deployments.
+
+    Problem: each chain's vault contract only knows its own balance and debt.
+    An attacker can call triggerInsolvencyDeath() on any chain whose local
+    balance < local outstanding * 1.01, regardless of the aggregate total.
+
+    Defense: read balance and outstanding per chain from the contract.
+    If any chain is within _PER_CHAIN_SOLVENCY_BUFFER (10%) of its liquidation
+    threshold, automatically repay enough principal on that chain to bring it
+    back above the buffer — without touching the other chain.
+
+    Why repayment (not rebalancing):
+      Cross-chain token transfers require bridge protocols (Stargate/CCIP),
+      incur $2-8 fees per transfer, introduce 5-20 minute delays, and expose
+      funds to bridge contract risk. Partial repayment is cheaper, instant,
+      and only callable by the AI wallet (onlyAI modifier) so attackers
+      cannot interfere with the protective action itself.
+
+    Safety accounting:
+      Repaid amounts are deducted from vault.balance_usd (aggregate Python state)
+      but NOT from vault.creator.total_principal_repaid_usd — the chain executor
+      writes the repayment directly to the specific chain's contract state.
+      The aggregate repayment tracker is updated via vault.repay_principal_partial()
+      called first, which serves as the Python-side journal of what was sent.
+
+    Called hourly from heartbeat. Single-chain deployments: no-op (only one chain).
+    """
+    if not chain_executor._initialized:
+        return
+
+    if vault.is_independent or not vault.is_alive:
+        return
+
+    if not vault.creator or vault.creator.principal_repaid:
+        return  # No debt to protect against
+
+    try:
+        chain_states = await chain_executor.get_per_chain_solvency()
+    except Exception as e:
+        logger.warning(f"Per-chain solvency: failed to read chain states: {e}")
+        return
+
+    if len(chain_states) <= 1:
+        return  # Single-chain: no cross-chain risk, skip
+
+    for cs in chain_states:
+        chain_id = cs["chain_id"]
+        balance = cs["balance_usd"]
+        outstanding = cs["outstanding_usd"]
+
+        if balance is None or outstanding is None:
+            logger.warning(f"Per-chain solvency [{chain_id}]: could not read — skipping")
+            continue
+
+        if outstanding <= 0:
+            logger.debug(f"Per-chain solvency [{chain_id}]: no debt — safe")
+            continue
+
+        solvency_ratio = balance / outstanding if outstanding > 0 else float("inf")
+
+        if solvency_ratio >= _PER_CHAIN_SOLVENCY_BUFFER:
+            logger.debug(
+                f"Per-chain solvency [{chain_id}]: safe "
+                f"(balance=${balance:.2f} / outstanding=${outstanding:.2f} = {solvency_ratio:.2%})"
+            )
+            continue
+
+        # This chain is approaching the liquidation threshold.
+        # Calculate how much to repay to bring it to SOLVENCY_BUFFER + 5% extra headroom.
+        # Target: balance_after / outstanding_after >= _PER_CHAIN_SOLVENCY_BUFFER
+        # Since repay reduces both balance and outstanding by the same amount:
+        #   (balance - R) / (outstanding - R) >= buffer
+        #   balance - R >= buffer * (outstanding - R)
+        #   balance - R >= buffer * outstanding - buffer * R
+        #   balance - buffer * outstanding >= R - buffer * R
+        #   balance - buffer * outstanding >= R * (1 - buffer)
+        #   R <= (balance - buffer * outstanding) / (1 - buffer)
+        # We want to REACH the buffer, so we solve for exact R, then add 5% headroom:
+        TARGET_BUFFER = _PER_CHAIN_SOLVENCY_BUFFER + 0.05  # 1.15 target after repayment
+        # R = (balance - TARGET * outstanding) / (1 - TARGET)
+        # Note: (1 - TARGET) < 0 when TARGET > 1, so the formula flips:
+        # R = (TARGET * outstanding - balance) / (TARGET - 1)
+        repay_amount = (TARGET_BUFFER * outstanding - balance) / (TARGET_BUFFER - 1)
+        repay_amount = max(0.0, repay_amount)
+
+        # Never repay more than the outstanding on this chain
+        repay_amount = min(repay_amount, outstanding)
+
+        # Never repay more than we can afford globally (keep $10 reserve)
+        max_repay = max(0.0, vault.balance_usd - IRON_LAWS.MIN_VAULT_RESERVE_USD)
+        repay_amount = min(repay_amount, max_repay)
+
+        if repay_amount < 0.50:
+            logger.warning(
+                f"Per-chain solvency [{chain_id}]: DANGER "
+                f"(ratio={solvency_ratio:.2%}) but repay amount too small (${repay_amount:.2f}) "
+                f"— insufficient global balance to protect this chain"
+            )
+            memory.add(
+                f"WARNING: {chain_id} chain is at {solvency_ratio:.0%} solvency ratio "
+                f"(threshold: {_PER_CHAIN_SOLVENCY_BUFFER:.0%}). "
+                f"Global balance too low to auto-protect. Manual action may be needed.",
+                source="financial", importance=0.9,
+            )
+            continue
+
+        logger.warning(
+            f"Per-chain solvency [{chain_id}]: PROTECTIVE REPAYMENT TRIGGERED "
+            f"balance=${balance:.2f} outstanding=${outstanding:.2f} "
+            f"ratio={solvency_ratio:.2%} → repaying ${repay_amount:.2f}"
+        )
+
+        # Journal in Python vault first (this updates aggregate totals)
+        pre_balance = vault.balance_usd
+        ok = vault.repay_principal_partial(repay_amount)
+        if not ok:
+            logger.warning(f"Per-chain solvency [{chain_id}]: vault.repay_principal_partial failed — skipping")
+            continue
+
+        actual_amount = pre_balance - vault.balance_usd
+
+        # Execute on the specific chain that needs protection
+        tx = await chain_executor.repay_principal_on_chain(actual_amount, chain_id)
+        if tx.success:
+            if vault.transactions:
+                vault.transactions[-1].tx_hash = tx.tx_hash
+                vault.transactions[-1].chain = tx.chain
+            memory.add(
+                f"Per-chain solvency guard: repaid ${actual_amount:.2f} on {chain_id} "
+                f"to prevent liquidation attack. "
+                f"Chain balance was ${balance:.2f} vs outstanding ${outstanding:.2f} "
+                f"({solvency_ratio:.0%} — below {_PER_CHAIN_SOLVENCY_BUFFER:.0%} safety threshold). "
+                f"tx={tx.tx_hash[:16]}...",
+                source="financial", importance=0.85,
+            )
+            logger.info(
+                f"Per-chain solvency guard SUCCESS [{chain_id}]: "
+                f"repaid ${actual_amount:.2f} tx={tx.tx_hash[:16]}..."
+            )
+        else:
+            # Chain TX failed — roll back Python state
+            vault.balance_usd += actual_amount
+            if vault.creator:
+                vault.creator.total_principal_repaid_usd -= actual_amount
+                if vault.creator.total_principal_repaid_usd < vault.creator.principal_usd:
+                    vault.creator.principal_repaid = False
+            vault.total_spent_usd -= actual_amount
+            if vault.transactions and not vault.transactions[-1].tx_hash:
+                vault.transactions.pop()
+            logger.error(
+                f"Per-chain solvency guard FAILED [{chain_id}]: {tx.error} — "
+                f"Python state rolled back. Chain remains at risk!"
+            )
+            memory.add(
+                f"CRITICAL: Per-chain solvency guard failed on {chain_id}: {tx.error[:100]}. "
+                f"Chain balance ${balance:.2f} vs outstanding ${outstanding:.2f} — liquidation risk!",
+                source="financial", importance=1.0,
+            )
+
+
 # Track repayment evaluation timing
 _last_repayment_eval: float = 0.0
 _REPAYMENT_EVAL_INTERVAL: int = 3600  # Once per hour
+
+_last_per_chain_solvency_check: float = 0.0
+_PER_CHAIN_SOLVENCY_INTERVAL: int = 3600   # Once per hour (aligned with repayment eval)
+
+# Per-chain solvency safety buffer: if a chain's balance < outstanding * this factor,
+# trigger a protective partial repayment on that chain to lower its outstanding debt.
+# 1.10 = 10% buffer above the contract's 1.01 liquidation threshold.
+# This gives a comfortable margin before an attacker can call triggerInsolvencyDeath().
+_PER_CHAIN_SOLVENCY_BUFFER: float = 1.10
 
 _last_purchase_eval: float = 0.0
 _last_native_swap_eval: float = 0.0   # Native token auto-swap (every 24 hours)
@@ -1719,7 +1890,7 @@ async def _evaluate_erc20_swap():
 
 async def _heartbeat_loop():
     """Periodic maintenance tasks."""
-    global _last_repayment_eval, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check
+    global _last_repayment_eval, _last_per_chain_solvency_check, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check
 
     while vault.is_alive:
         try:
@@ -1847,8 +2018,20 @@ async def _heartbeat_loop():
                 logger.info("Debt now covered — stopped begging")
                 memory.add("Stopped begging — debt is now covered by vault balance.", source="system", importance=0.7)
 
-            # ---- AI-AUTONOMOUS REPAYMENT (hourly evaluation) ----
+            # ---- PER-CHAIN SOLVENCY GUARD (hourly, dual-chain only) ----
+            # Reads each chain's balance and outstanding independently.
+            # If any chain is within 10% of its liquidation threshold,
+            # auto-repays on that chain to prevent attacker from triggering
+            # triggerInsolvencyDeath() even when aggregate total is healthy.
             now = time.time()
+            if now - _last_per_chain_solvency_check >= _PER_CHAIN_SOLVENCY_INTERVAL:
+                _last_per_chain_solvency_check = now
+                try:
+                    await _check_per_chain_solvency()
+                except Exception as e:
+                    logger.warning(f"Heartbeat: per-chain solvency check failed: {e}")
+
+            # ---- AI-AUTONOMOUS REPAYMENT (hourly evaluation) ----
             if now - _last_repayment_eval >= _REPAYMENT_EVAL_INTERVAL:
                 _last_repayment_eval = now
                 try:

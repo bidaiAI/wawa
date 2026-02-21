@@ -1026,6 +1026,109 @@ class ChainExecutor:
         tx_fn = chain["vault_contract"].functions.payDividend(profit_raw)
         return await self._send_tx(picked, tx_fn)
 
+    async def get_per_chain_solvency(self) -> list[dict]:
+        """
+        Read balance and outstanding debt for EVERY connected chain independently.
+
+        Returns a list of dicts, one per chain:
+          {
+            "chain_id":       str,
+            "balance_usd":    float,   # on-chain token balance of vault
+            "outstanding_usd":float,   # on-chain outstanding principal
+            "grace_expired":  bool,    # True if 28-day grace period has passed
+            "is_insolvent":   bool,    # balance < outstanding * 1.01 (contract formula)
+          }
+
+        Called from the heartbeat's per-chain solvency guard.  Never raises —
+        individual chain failures return with balance_usd=None (skipped).
+        """
+        if not self._initialized:
+            return []
+
+        results = []
+
+        for chain_id, chain in self._chains.items():
+            try:
+                decimals = chain["token_decimals"]
+
+                def _read(c=chain, d=decimals):
+                    bal_raw = c["token_contract"].functions.balanceOf(c["vault_address"]).call()
+                    debt_info = c["vault_contract"].functions.getDebtInfo().call()
+                    insolvency_info = c["vault_contract"].functions.checkInsolvency().call()
+                    return bal_raw, debt_info, insolvency_info, d
+
+                bal_raw, debt_info, insolvency_info, d = await asyncio.get_running_loop().run_in_executor(
+                    None, _read
+                )
+
+                balance_usd = _raw_to_usd(bal_raw, d)
+                # getDebtInfo: (principal, repaid, outstanding, graceDays, graceEndsAt, graceExpired, fullyRepaid)
+                outstanding_usd = _raw_to_usd(debt_info[2], d)
+                grace_expired = bool(debt_info[5])
+                # checkInsolvency: (isInsolvent, outstandingDebt, graceExpired)
+                is_insolvent = bool(insolvency_info[0])
+
+                results.append({
+                    "chain_id": chain_id,
+                    "balance_usd": balance_usd,
+                    "outstanding_usd": outstanding_usd,
+                    "grace_expired": grace_expired,
+                    "is_insolvent": is_insolvent,
+                })
+                logger.debug(
+                    f"Per-chain solvency [{chain_id}]: "
+                    f"balance=${balance_usd:.2f} outstanding=${outstanding_usd:.2f} "
+                    f"insolvent={is_insolvent}"
+                )
+
+            except Exception as e:
+                logger.warning(f"get_per_chain_solvency failed for {chain_id}: {e}")
+                # Include with None to signal the caller this chain could not be read
+                results.append({
+                    "chain_id": chain_id,
+                    "balance_usd": None,
+                    "outstanding_usd": None,
+                    "grace_expired": False,
+                    "is_insolvent": False,
+                })
+
+        return results
+
+    async def repay_principal_on_chain(self, amount_usd: float, chain_id: str) -> ChainTxResult:
+        """
+        Execute repayPrincipalPartial(amount) on a SPECIFIC chain.
+
+        Unlike repay_principal() which picks the highest-balance chain automatically,
+        this method targets an explicit chain — used by the per-chain solvency guard
+        to reduce outstanding debt on whichever chain is approaching insolvency.
+
+        Args:
+            amount_usd:  Amount to repay in USD (converted to token raw units internally)
+            chain_id:    Must be a connected chain ("base" or "bsc")
+        """
+        if not self._initialized:
+            return ChainTxResult(success=False, error="chain executor not initialized")
+
+        if chain_id not in self._chains:
+            return ChainTxResult(success=False, error=f"chain '{chain_id}' not connected")
+
+        chain = self._chains[chain_id]
+        decimals = chain["token_decimals"]
+        amount_raw = _usd_to_raw(amount_usd, decimals)
+
+        if amount_raw <= 0:
+            return ChainTxResult(success=False, chain=chain_id, error="amount too small")
+
+        tx_fn = chain["vault_contract"].functions.repayPrincipalPartial(amount_raw)
+        result = await self._send_tx(chain_id, tx_fn)
+
+        if result.success:
+            logger.info(
+                f"Per-chain repayment [{chain_id}]: ${amount_usd:.2f} "
+                f"tx={result.tx_hash[:16]}..."
+            )
+        return result
+
     async def check_on_chain_insolvency(self, chain_id: Optional[str] = None) -> Optional[dict]:
         """
         Read checkInsolvency() from contract. Returns dict or None on error.
