@@ -108,10 +108,17 @@ class PurchaseOrder:
     error: str = ""
     delivered_at: float = 0.0
     delivery_details: str = ""
+    delivery_data: dict = field(default_factory=dict)  # Delivered content (e.g. gift card codes). NEVER exposed in to_dict().
     order_metadata: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        """Serialize for API response."""
+        """
+        Serialize for public API response.
+
+        IMPORTANT: delivery_data is intentionally excluded here.
+        It may contain sensitive content (gift card PINs, redemption codes).
+        The AI uses it internally; it is never returned to API callers.
+        """
         return {
             "id": self.id,
             "merchant_id": self.merchant_id,
@@ -128,6 +135,7 @@ class PurchaseOrder:
             "error": self.error,
             "delivered_at": self.delivered_at,
             "delivery_details": self.delivery_details,
+            # delivery_data deliberately omitted — contains PINs / redemption codes
         }
 
 
@@ -742,6 +750,10 @@ class PurchaseManager:
                     order.status = PurchaseStatus.DELIVERED
                     order.delivered_at = time.time()
                     order.delivery_details = delivery.details
+                    # Store sensitive delivery content (e.g. gift card PINs) in
+                    # delivery_data — excluded from to_dict() / public API.
+                    if delivery.data and isinstance(delivery.data, dict):
+                        order.delivery_data = delivery.data
                     logger.info(
                         f"Purchase {order.id} DELIVERED: "
                         f"${order.amount_usd:.2f} [{merchant.name}] "
@@ -805,6 +817,8 @@ class PurchaseManager:
                             order.status = PurchaseStatus.DELIVERED
                             order.delivered_at = time.time()
                             order.delivery_details = delivery.details
+                            if delivery.data and isinstance(delivery.data, dict):
+                                order.delivery_data = delivery.data
                     except Exception:
                         pass  # Will retry next cycle
 

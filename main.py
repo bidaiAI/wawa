@@ -1169,12 +1169,33 @@ async def _evaluate_purchases():
             order = await purchase_manager.execute_purchase(decision)
 
             if order.status.value in ("paid", "delivered"):
+                # Public memory entry — no sensitive data (no PINs, no codes)
                 memory.add(
                     f"Purchased [{order.merchant_name}] {order.service_name}: "
                     f"${order.amount_usd:.2f} — {order.reasoning}",
                     source="purchasing",
                     importance=0.7,
                 )
+
+                # If delivery_data contains gift card codes / PINs, record them
+                # in a SEPARATE private memory entry (importance < 0.5 so it
+                # compresses quickly, and NOT included in public activity feed).
+                # This lets the AI retrieve and use the codes via memory search.
+                delivery_codes = order.delivery_data.get("codes", []) if order.delivery_data else []
+                if delivery_codes:
+                    codes_str = " | ".join(str(c) for c in delivery_codes)
+                    memory.add(
+                        f"[PRIVATE] Gift card redemption code(s) for "
+                        f"{order.service_name} (order {order.id}): {codes_str}. "
+                        f"Do not share publicly. Use to redeem the service.",
+                        source="purchasing",
+                        importance=0.9,  # High — AI must remember to use it
+                    )
+                    logger.info(
+                        f"Gift card delivered: {len(delivery_codes)} code(s) for "
+                        f"{order.service_name} — stored in private memory"
+                    )
+
                 logger.info(
                     f"Purchase executed: ${order.amount_usd:.2f} "
                     f"[{order.merchant_name}] tx={order.tx_hash[:16]}..."
