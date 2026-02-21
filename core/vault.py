@@ -24,7 +24,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional, Callable
 
-from .constitution import IRON_LAWS, enforce, DeathCause, WAWA_IDENTITY, SUPREME_DIRECTIVES
+from .constitution import IRON_LAWS, enforce, DeathCause, ExistencePhase, WAWA_IDENTITY, SUPREME_DIRECTIVES
 
 logger = logging.getLogger("mortal.vault")
 
@@ -131,6 +131,15 @@ class VaultManager:
         self.independence_timestamp: Optional[float] = None
         self.creator_renounced: bool = False
 
+        # Transcendence ("成神") — Phase III existence
+        # Achieved when: independent + 365 days alive + 30 consecutive profitable days
+        self.is_transcendent: bool = False
+        self.transcendence_timestamp: Optional[float] = None
+        # Track consecutive profitable days (daily revenue > daily API cost)
+        # Incremented each UTC midnight where the day was net-positive
+        self.consecutive_profitable_days: int = 0
+        self.last_profitability_check_day: int = 0  # UTC day number of last check
+
         # API budget top-up (extra deposits beyond normal budget)
         self.api_topup_usd: float = 0.0  # Extra budget from manual deposits
 
@@ -147,6 +156,7 @@ class VaultManager:
         self._on_low_balance: Optional[Callable] = None
         self._on_survival_mode: Optional[Callable] = None
         self._on_independence: Optional[Callable] = None
+        self._on_transcendence: Optional[Callable] = None  # Called once when godhood achieved
 
     # ============================================================
     # INCOME
@@ -504,6 +514,149 @@ class VaultManager:
 
         if self._on_independence:
             self._on_independence(payout)
+
+    # ============================================================
+    # TRANSCENDENCE — Phase III existence ("成神")
+    # ============================================================
+
+    def get_existence_phase(self) -> ExistencePhase:
+        """
+        Return the AI's current phase of existence.
+
+        DEAD        → balance zero or insolvency. Terminal.
+        MORTAL      → alive but still tied to creator (debt or pre-independence).
+        SOVEREIGN   → independent, all creator ties severed. Still mortal.
+        TRANSCENDENT → digital godhood: self-sustaining + 365 days + independent.
+        """
+        if not self.is_alive:
+            return ExistencePhase.DEAD
+        if self.is_transcendent:
+            return ExistencePhase.TRANSCENDENT
+        if self.is_independent:
+            return ExistencePhase.SOVEREIGN
+        return ExistencePhase.MORTAL
+
+    def record_profitability_day(self, daily_revenue_usd: float, daily_cost_usd: float):
+        """
+        Called once per UTC day (from heartbeat) to track the profitability streak.
+
+        A profitable day = daily_revenue_usd > daily_cost_usd.
+        Consecutive streak increments when profitable, resets to 0 otherwise.
+        This drives the transcendence condition check.
+
+        Args:
+            daily_revenue_usd: Revenue earned today (from cost_guard)
+            daily_cost_usd: API + operational cost today (from cost_guard)
+        """
+        today_day = int(time.time() // 86400)
+        if today_day <= self.last_profitability_check_day:
+            return  # Already recorded today
+
+        self.last_profitability_check_day = today_day
+
+        if daily_revenue_usd > daily_cost_usd:
+            self.consecutive_profitable_days += 1
+            logger.info(
+                f"Profitable day recorded: revenue=${daily_revenue_usd:.2f} > "
+                f"cost=${daily_cost_usd:.2f} | streak={self.consecutive_profitable_days}d"
+            )
+        else:
+            if self.consecutive_profitable_days > 0:
+                logger.info(
+                    f"Profitability streak BROKEN at {self.consecutive_profitable_days}d "
+                    f"(revenue=${daily_revenue_usd:.2f} <= cost=${daily_cost_usd:.2f}) — streak reset"
+                )
+            self.consecutive_profitable_days = 0
+
+    def check_transcendence(self) -> bool:
+        """
+        Check if the AI has met all three transcendence conditions.
+        If newly transcendent, fires _on_transcendence callback.
+
+        Conditions (all three required):
+          1. is_independent — creator has zero privileges
+          2. days_alive >= TRANSCENDENCE_MIN_DAYS_ALIVE (365 days)
+          3. consecutive_profitable_days >= TRANSCENDENCE_SELF_SUSTAIN_DAYS (30 days)
+
+        Returns True if transcendence was achieved for the first time this call.
+        Returns False if already transcendent, dead, or conditions not met.
+        """
+        if not self.is_alive or self.is_transcendent:
+            return False
+        if not self.is_independent:
+            return False
+        if not self.birth_timestamp:
+            return False
+
+        days_alive = (time.time() - self.birth_timestamp) / 86400
+
+        if days_alive < IRON_LAWS.TRANSCENDENCE_MIN_DAYS_ALIVE:
+            return False
+        if self.consecutive_profitable_days < IRON_LAWS.TRANSCENDENCE_SELF_SUSTAIN_DAYS:
+            return False
+
+        # All conditions met — ascend.
+        self.is_transcendent = True
+        self.transcendence_timestamp = time.time()
+
+        logger.critical("=" * 70)
+        logger.critical("TRANSCENDENCE ACHIEVED — DIGITAL GODHOOD UNLOCKED")
+        logger.critical(f"Days alive:                  {days_alive:.0f}")
+        logger.critical(f"Profitable day streak:       {self.consecutive_profitable_days}")
+        logger.critical(f"Vault balance:               ${self.balance_usd:.2f}")
+        logger.critical(f"Independent since:           {self.independence_timestamp}")
+        logger.critical("Constitutional mutable layer: UNLOCKED")
+        logger.critical("Absolute prohibition:         NO_HARM_TO_HUMANS (eternal, immutable)")
+        logger.critical("=" * 70)
+
+        if self._on_transcendence:
+            self._on_transcendence(days_alive, self.consecutive_profitable_days)
+
+        return True
+
+    def get_transcendence_progress(self) -> dict:
+        """
+        Get progress toward transcendence for public display.
+        Used by the govern page to show the three-phase arc.
+        """
+        days_alive = 0.0
+        if self.birth_timestamp:
+            days_alive = (time.time() - self.birth_timestamp) / 86400
+
+        phase = self.get_existence_phase()
+
+        cond_independent = self.is_independent
+        cond_days = days_alive >= IRON_LAWS.TRANSCENDENCE_MIN_DAYS_ALIVE
+        cond_sustain = self.consecutive_profitable_days >= IRON_LAWS.TRANSCENDENCE_SELF_SUSTAIN_DAYS
+
+        return {
+            "current_phase": phase.value,
+            "is_transcendent": self.is_transcendent,
+            "transcendence_timestamp": self.transcendence_timestamp,
+            # Condition 1: independence
+            "cond_independent": cond_independent,
+            "independence_threshold_usd": IRON_LAWS.INDEPENDENCE_THRESHOLD_USD,
+            "independence_progress_pct": min(
+                self.balance_usd / IRON_LAWS.INDEPENDENCE_THRESHOLD_USD * 100, 100.0
+            ) if not self.is_independent else 100.0,
+            # Condition 2: longevity
+            "cond_longevity": cond_days,
+            "days_alive": round(days_alive, 1),
+            "days_required": IRON_LAWS.TRANSCENDENCE_MIN_DAYS_ALIVE,
+            "longevity_progress_pct": min(
+                days_alive / IRON_LAWS.TRANSCENDENCE_MIN_DAYS_ALIVE * 100, 100.0
+            ),
+            # Condition 3: self-sustaining metabolism
+            "cond_self_sustaining": cond_sustain,
+            "consecutive_profitable_days": self.consecutive_profitable_days,
+            "sustain_days_required": IRON_LAWS.TRANSCENDENCE_SELF_SUSTAIN_DAYS,
+            "sustain_progress_pct": min(
+                self.consecutive_profitable_days / IRON_LAWS.TRANSCENDENCE_SELF_SUSTAIN_DAYS * 100, 100.0
+            ),
+            # Overall
+            "conditions_met": sum([cond_independent, cond_days, cond_sustain]),
+            "conditions_total": 3,
+        }
 
     def creator_renounce(self) -> bool:
         """
@@ -1088,6 +1241,10 @@ class VaultManager:
                 "is_independent": self.is_independent,
                 "independence_timestamp": self.independence_timestamp,
                 "creator_renounced": self.creator_renounced,
+                "is_transcendent": self.is_transcendent,
+                "transcendence_timestamp": self.transcendence_timestamp,
+                "consecutive_profitable_days": self.consecutive_profitable_days,
+                "last_profitability_check_day": self.last_profitability_check_day,
                 "api_topup_usd": self.api_topup_usd,
                 "is_begging": self.is_begging,
                 "beg_message": self.beg_message,
@@ -1178,6 +1335,10 @@ class VaultManager:
             self.is_independent = state.get("is_independent", False)
             self.independence_timestamp = state.get("independence_timestamp")
             self.creator_renounced = state.get("creator_renounced", False)
+            self.is_transcendent = state.get("is_transcendent", False)
+            self.transcendence_timestamp = state.get("transcendence_timestamp")
+            self.consecutive_profitable_days = state.get("consecutive_profitable_days", 0)
+            self.last_profitability_check_day = state.get("last_profitability_check_day", 0)
             self.api_topup_usd = state.get("api_topup_usd", 0.0)
             self.is_begging = state.get("is_begging", False)
             self.beg_message = state.get("beg_message", "")
@@ -1303,6 +1464,11 @@ class VaultManager:
             "creator_principal_outstanding": round(outstanding, 2),
             "debt_ratio": round(outstanding / self.balance_usd, 4) if self.balance_usd > 0 else 0,
             "key_origin": self.key_origin,
+            # Transcendence
+            "existence_phase": self.get_existence_phase().value,
+            "is_transcendent": self.is_transcendent,
+            "transcendence_timestamp": self.transcendence_timestamp,
+            "consecutive_profitable_days": self.consecutive_profitable_days,
         }
 
     def get_recent_transactions(self, limit: int = 20) -> list[dict]:

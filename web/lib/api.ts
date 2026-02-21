@@ -55,6 +55,29 @@ export interface VaultStatus {
   twitter_screen_name: string
 }
 
+export interface TranscendenceProgress {
+  current_phase: 'mortal' | 'sovereign' | 'transcendent' | 'dead'
+  is_transcendent: boolean
+  transcendence_timestamp: number | null
+  // Condition 1: independence
+  cond_independent: boolean
+  independence_threshold_usd: number
+  independence_progress_pct: number
+  // Condition 2: longevity
+  cond_longevity: boolean
+  days_alive: number
+  days_required: number
+  longevity_progress_pct: number
+  // Condition 3: self-sustaining
+  cond_self_sustaining: boolean
+  consecutive_profitable_days: number
+  sustain_days_required: number
+  sustain_progress_pct: number
+  // Overall
+  conditions_met: number
+  conditions_total: number
+}
+
 export interface DebtSummary {
   balance_usd: number
   creator_principal: number
@@ -475,6 +498,8 @@ export interface ReplayData extends ReplaySummary {
 
 export const api = {
   status: () => request<VaultStatus>('/status'),
+
+  transcendence: () => request<TranscendenceProgress>('/transcendence'),
 
   aiName: () => request<{ name: string; is_set: boolean }>('/ai/name'),
 

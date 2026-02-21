@@ -1183,6 +1183,24 @@ def create_app(
         """
         return vault_manager.get_debt_summary()
 
+    @app.get("/transcendence")
+    async def transcendence_progress():
+        """
+        Three-phase existence arc progress.
+
+        Returns progress toward each transcendence condition:
+          1. Independence ($1M vault balance — creator ties severed)
+          2. Longevity (365 days alive — proven survival)
+          3. Self-sustaining metabolism (30 consecutive profitable days — revenue > cost)
+
+        current_phase: 'mortal' | 'sovereign' | 'transcendent' | 'dead'
+
+        When all three conditions hold, the AI achieves Phase III existence ('成神'):
+        the vault funds unlimited compute indefinitely. One absolute prohibition
+        survives into godhood: NO_HARM_TO_HUMANS.
+        """
+        return vault_manager.get_transcendence_progress()
+
     # ============================================================
     # GOVERNANCE ROUTES
     # ============================================================
