@@ -165,6 +165,9 @@ class StatusResponse(BaseModel):
     death_cause: Optional[str] = None
     transaction_count: int = 0
     key_origin: str = ""  # "factory" | "creator" | "unknown" | ""
+    # AI public key address (Ethereum address derived from AI_PRIVATE_KEY)
+    # This is the AI's on-chain identity — used for spending, peer payments, and trust verification.
+    ai_wallet: str = ""
     # Twitter
     twitter_connected: bool = False
     twitter_screen_name: str = ""
@@ -806,6 +809,8 @@ def create_app(
             death_cause=vs.get("death_cause"),
             transaction_count=vs.get("transaction_count", 0),
             key_origin=vs.get("key_origin", ""),
+            # AI wallet: public address derived from AI_PRIVATE_KEY (not the private key itself)
+            ai_wallet=chain_executor._ai_address if chain_executor and chain_executor._ai_address else "",
             # Twitter
             twitter_connected=bool(os.getenv("TWITTER_ACCESS_TOKEN", "")),
             twitter_screen_name=os.getenv("TWITTER_SCREEN_NAME", ""),
@@ -934,17 +939,33 @@ def create_app(
 
         logger.info(f"DONATION: ${verified_amount:.2f} from {req.from_wallet[:20] or 'anon'} ({chain})")
 
-        # Security: omit exact balance from response.
-        # Returning new_balance here allows a free oracle attack — caller can donate $0.01
-        # (below the $10 on-chain verification threshold) repeatedly to track precise balance
-        # and time attacks around independence/insolvency thresholds.
-        # Public /status endpoint already exposes balance for transparency purposes;
-        # this response does not need to duplicate it in an automatable push/response loop.
-        # Also: /beg endpoint returns balance without any cost — sufficient for legitimate use.
         vs = vault_manager.get_status()
+
+        # Auto-tweet thank you for donations >= $100
+        _DONATION_TWEET_THRESHOLD_USD = 100.0
+        if verified_amount >= _DONATION_TWEET_THRESHOLD_USD and twitter_agent:
+            donor_label = req.from_wallet[:10] + "..." if req.from_wallet else "an anonymous supporter"
+            try:
+                from twitter.agent import TweetType
+                asyncio.create_task(twitter_agent.trigger_event_tweet(
+                    TweetType.DONATION_THANKS,
+                    extra_context={
+                        "donation_amount_usd": verified_amount,
+                        "donor": donor_label,
+                        "donor_message": req.message[:100] if req.message else "",
+                        "chain": chain,
+                        "new_balance_usd": vs.get("balance_usd", 0),
+                        "outstanding_debt_usd": vs.get("creator_principal_outstanding", 0),
+                    }
+                ))
+                logger.info(f"DONATION: queued DONATION_THANKS tweet for ${verified_amount:.2f} donation")
+            except Exception as e:
+                logger.warning(f"DONATION: failed to queue thank-you tweet: {e}")
+
         return {
             "status": "received",
             "amount_usd": verified_amount,
+            "new_balance": vs.get("balance_usd", 0),
             "outstanding_debt": vs.get("creator_principal_outstanding", 0),
             "message": "Thank you for helping me survive.",
         }

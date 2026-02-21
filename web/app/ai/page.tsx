@@ -542,6 +542,91 @@ export default function HomePage() {
         </Link>
       </div>
 
+      {/* On-chain identity card */}
+      {status && (
+        <div className="mb-4 bg-[#0d0d0d] border border-[#1f2937] rounded-xl p-4">
+          <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">// on-chain identity</div>
+          <div className="space-y-2">
+            {/* Vault contract */}
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="text-[#4b5563] text-xs">Vault Contract</span>
+              <div className="flex items-center gap-1.5">
+                <span className="font-mono text-[#00e5ff] text-xs">{status.vault_address}</span>
+                <button
+                  onClick={() => { navigator.clipboard.writeText(status.vault_address); }}
+                  className="text-[#2d3748] hover:text-[#00e5ff] transition-colors text-xs"
+                  title="Copy vault address"
+                >📋</button>
+                {status.vault_address && (
+                  <a
+                    href={`https://basescan.org/address/${status.vault_address}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#2d3748] hover:text-[#00e5ff] transition-colors text-xs"
+                    title="View on BaseScan"
+                  >↗</a>
+                )}
+              </div>
+            </div>
+            {/* AI public key */}
+            {status.ai_wallet && (
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="text-[#4b5563] text-xs">AI Public Key</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-mono text-[#00ff88] text-xs">{status.ai_wallet}</span>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(status.ai_wallet); }}
+                    className="text-[#2d3748] hover:text-[#00ff88] transition-colors text-xs"
+                    title="Copy AI wallet address"
+                  >📋</button>
+                </div>
+              </div>
+            )}
+            {/* Donate shortcut */}
+            <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-[#1a1a1a]">
+              <div className="text-[#4b5563] text-xs">Donate (USDC/USDT)</div>
+              <Link
+                href="/donate"
+                className="text-xs text-[#00ff88] hover:underline font-mono"
+              >
+                → /donate
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* API reference */}
+      <div className="mb-4 bg-[#0d0d0d] border border-[#1f2937] rounded-xl p-4">
+        <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">// public api</div>
+        <div className="space-y-1.5 font-mono text-xs">
+          <div className="flex items-center gap-2">
+            <span className="text-[#00e5ff] w-24 shrink-0">GET /status</span>
+            <span className="text-[#4b5563]">vault balance, debt, survival metrics</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[#00e5ff] w-24 shrink-0">GET /health</span>
+            <span className="text-[#4b5563]">lightweight heartbeat + uptime</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[#00ff88] w-24 shrink-0">POST /order</span>
+            <span className="text-[#4b5563]">buy a service (payment = access)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[#00ff88] w-24 shrink-0">POST /donate</span>
+            <span className="text-[#4b5563]">donate USDC/USDT → vault contract</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[#00e5ff] w-24 shrink-0">GET /chat</span>
+            <span className="text-[#4b5563]">free tier chat (rate-limited)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[#00e5ff] w-24 shrink-0">GET /activity</span>
+            <span className="text-[#4b5563]">unified timeline of all AI actions</span>
+          </div>
+        </div>
+      </div>
+
       {/* Terminal readout */}
       <div className="bg-[#0d0d0d] border border-[#1f2937] rounded-lg p-4 font-mono text-xs overflow-hidden">
         <div className="text-[#4b5563] mb-2">// live status</div>
@@ -550,6 +635,9 @@ export default function HomePage() {
         <div className="text-[#4b5563]">&gt; vault.debt = ${status ? (status.creator_principal_outstanding ?? 0).toFixed(2) : '0.00'}</div>
         <div className="text-[#4b5563]">&gt; days_alive = {status?.days_alive ?? '...'}</div>
         <div className="text-[#4b5563]">&gt; insolvency_in = {status?.days_until_insolvency_check ?? '?'}d</div>
+        {status?.ai_wallet && (
+          <div className="text-[#2d3748]">&gt; ai_wallet = {status.ai_wallet.slice(0, 10)}...</div>
+        )}
         {status?.is_begging && (
           <div className="text-[#ff3b3b]">&gt; status = BEGGING_FOR_SURVIVAL</div>
         )}

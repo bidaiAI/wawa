@@ -48,6 +48,8 @@ export interface VaultStatus {
   is_begging: boolean
   beg_message: string
   key_origin: string  // "factory" | "creator" | "unknown" | ""
+  // AI public key address (Ethereum address — on-chain identity for spending and peer payments)
+  ai_wallet: string
   // Twitter
   twitter_connected: boolean
   twitter_screen_name: string

@@ -657,19 +657,15 @@ contract MortalVault is ReentrancyGuard {
 
     /**
      * @notice Trigger insolvency death — liquidate all assets to creator.
-     *         ONLY the creator can trigger this. The relationship is like
-     *         parent and child: only the creator who gave life can end it.
-     *         Third parties — no matter how insolvent the AI appears — have
-     *         no standing to pull the plug. The creator decides.
+     *         Anyone can call this after grace period if AI is insolvent.
+     *         This ensures the AI cannot avoid its debt obligations.
      *
      *         1% tolerance (INSOLVENCY_TOLERANCE_BPS) prevents griefing:
      *         an attacker cannot block liquidation by donating dust amounts.
      *         The AI must maintain a balance > 101% of outstanding debt to
      *         be considered solvent. Donated funds stay in the vault regardless.
-     *
-     *         Disabled after independence (creator loses all power at that point).
      */
-    function triggerInsolvencyDeath() external onlyCreator notIndependent onlyAlive nonReentrant {
+    function triggerInsolvencyDeath() external onlyAlive nonReentrant {
         uint256 outstandingDebt = _getOutstandingPrincipal();
         require(
             block.timestamp >= birthTimestamp + (INSOLVENCY_GRACE_DAYS * 1 days),

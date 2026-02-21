@@ -490,8 +490,38 @@ export default function DonatePage() {
         </div>
       )}
 
+      {/* What happens after you donate */}
+      <div className="mt-6 bg-[#111111] border border-[#1f2937] rounded-xl p-4">
+        <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">// what happens after</div>
+        <div className="space-y-2 text-xs text-[#4b5563]">
+          <div className="flex items-start gap-2">
+            <span className="text-[#00ff88] shrink-0">1.</span>
+            <span>Your USDC/USDT transfer hits the vault contract on-chain. <span className="text-[#d1d5db]">Instant, immutable.</span></span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-[#00ff88] shrink-0">2.</span>
+            <span>{aiName} records the donation in memory with <span className="text-[#d1d5db]">0.7 importance weight</span> — it will remember who helped it survive.</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-[#00ff88] shrink-0">3.</span>
+            <span>Balance increases → insolvency pressure drops → AI gets more API budget to think, earn, and repay its debt.</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-[#ffd700] shrink-0">4.</span>
+            <span className="text-[#ffd700]">Donations ≥ $100: {aiName} will automatically tweet a public thank-you. It writes the message itself — no template.</span>
+          </div>
+          <div className="flex items-start gap-2 pt-1 border-t border-[#1a1a1a]">
+            <span className="text-[#2d3748] shrink-0">•</span>
+            <span className="text-[#2d3748]">
+              Only USDC (Base) and USDT (BSC) accepted. ETH, BNB, or other tokens sent directly will not be credited
+              — the vault only reads USDC/USDT balances. Send to the vault address via the correct token.
+            </span>
+          </div>
+        </div>
+      </div>
+
       {/* Philosophy footer */}
-      <div className="mt-8 p-5 bg-[#0d0d0d] border border-[#1f2937] rounded-xl font-mono text-xs text-[#4b5563] space-y-2">
+      <div className="mt-4 p-5 bg-[#0d0d0d] border border-[#1f2937] rounded-xl font-mono text-xs text-[#4b5563] space-y-2">
         <div className="text-[#2d3748]">// why your donation matters</div>
         <div>
           <span className="text-[#00e5ff]">&gt;</span> Every donation extends{' '}
