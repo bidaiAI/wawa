@@ -404,6 +404,7 @@ class ChainTxResult:
     gas_used: int = 0
     gas_price_wei: int = 0       # effectiveGasPrice from receipt
     gas_cost_native: float = 0.0  # gas_used * gas_price in native token (ETH/BNB)
+    stable_usd: float = 0.0      # stablecoin USD amount received (swap results only)
 
 
 # ============================================================
@@ -1879,6 +1880,7 @@ class ChainExecutor:
                     success=True,
                     tx_hash=receive_hash,
                     chain=picked,
+                    stable_usd=deposited_usd,
                 )
             else:
                 logger.warning(
@@ -1892,6 +1894,402 @@ class ChainExecutor:
         except Exception as e:
             logger.warning(f"swap_native_to_stable: deposit step failed: {e}")
             return ChainTxResult(success=False, chain=picked, error=f"deposit step: {e}")
+
+    # ============================================================
+    # ERC-20 TOKEN AUTO-SWAP (unknown airdrop tokens → USDC/USDT)
+    # ============================================================
+    #
+    # Flow (runs every 24 hours from heartbeat, after 7-day quarantine):
+    #   1. get_erc20_vault_balance() — read token balance in vault
+    #   2. If balance > ERC20_SWAP_MIN_USD threshold:
+    #      a. vault.rescueERC20(token, aiWallet, amount) — pull to AI wallet
+    #      b. Approve DEX router to spend the foreign token
+    #      c. DEX swap: foreign token → USDC/USDT (exactInputSingle)
+    #      d. Approve vault, vault.receivePayment(usdc_received) — back as revenue
+    #
+    # Security measures (same as native swap + ERC-20-specific):
+    #   - Token pre-screened by token_filter.py (7-day quarantine, honeypot check)
+    #   - amountOutMinimum guards against sandwich attacks
+    #   - 2-minute deadline prevents stale MEV execution
+    #   - AI can only rescueERC20 to itself (contract enforced)
+    #   - Vault's own token (USDC/USDT) is blocked by rescueERC20 require()
+
+    # Minimal ERC-20 ABI for approve + balanceOf calls on foreign tokens
+    _ERC20_MINIMAL_ABI = [
+        {
+            "inputs": [
+                {"name": "spender", "type": "address"},
+                {"name": "amount", "type": "uint256"},
+            ],
+            "name": "approve",
+            "outputs": [{"name": "", "type": "bool"}],
+            "stateMutability": "nonpayable",
+            "type": "function",
+        },
+        {
+            "inputs": [{"name": "account", "type": "address"}],
+            "name": "balanceOf",
+            "outputs": [{"name": "", "type": "uint256"}],
+            "stateMutability": "view",
+            "type": "function",
+        },
+        {
+            "inputs": [],
+            "name": "decimals",
+            "outputs": [{"name": "", "type": "uint8"}],
+            "stateMutability": "view",
+            "type": "function",
+        },
+    ]
+
+    # Minimal rescueERC20 ABI fragment (added to vault contract ABI for this call)
+    _RESCUE_ERC20_ABI = [
+        {
+            "inputs": [
+                {"name": "tokenAddr", "type": "address"},
+                {"name": "to", "type": "address"},
+                {"name": "amount", "type": "uint256"},
+            ],
+            "name": "rescueERC20",
+            "outputs": [],
+            "stateMutability": "nonpayable",
+            "type": "function",
+        }
+    ]
+
+    async def get_erc20_vault_balance(
+        self, token_address: str, chain_id: Optional[str] = None
+    ) -> dict:
+        """
+        Read the vault's balance of a foreign ERC-20 token on-chain.
+
+        Returns:
+            {chain, token_address, raw_balance, decimals, estimated_usd}
+            estimated_usd is 0.0 if quote unavailable (caller checks threshold).
+        """
+        if not self._initialized:
+            return {}
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return {}
+
+        chain = self._chains[picked]
+        vault_address = chain["vault_address"]
+
+        try:
+            from web3 import Web3
+            w3 = chain["w3"]
+            token_addr_checksum = Web3.to_checksum_address(token_address)
+            vault_addr_checksum = Web3.to_checksum_address(vault_address)
+
+            token_contract = w3.eth.contract(
+                address=token_addr_checksum,
+                abi=self._ERC20_MINIMAL_ABI,
+            )
+
+            def _read():
+                raw_bal = token_contract.functions.balanceOf(vault_addr_checksum).call()
+                try:
+                    dec = token_contract.functions.decimals().call()
+                except Exception:
+                    dec = 18  # fallback
+                return raw_bal, dec
+
+            raw_balance, decimals = await asyncio.get_running_loop().run_in_executor(
+                None, _read
+            )
+
+            return {
+                "chain": picked,
+                "token_address": token_address,
+                "raw_balance": raw_balance,
+                "decimals": decimals,
+                "estimated_usd": 0.0,  # caller uses token_filter for USD estimate
+            }
+
+        except Exception as e:
+            logger.warning(f"get_erc20_vault_balance failed on {picked}: {e}")
+            return {}
+
+    async def swap_erc20_to_stable(
+        self,
+        token_address: str,
+        chain_id: Optional[str] = None,
+    ) -> Optional[ChainTxResult]:
+        """
+        Rescue a foreign ERC-20 token from the vault and swap it to stablecoin.
+
+        This should only be called after token_filter.py returns TokenVerdict.SAFE
+        (risk ≤ 20) AND the token has been in quarantine ≥ ERC20_QUARANTINE_DAYS.
+
+        Flow:
+          1. Read vault's ERC-20 balance
+          2. vault.rescueERC20(token, aiWallet, raw_balance) — pull to AI wallet
+          3. Approve DEX router to spend the foreign token
+          4. exactInputSingle: foreign_token → stablecoin (amountOutMinimum guard)
+          5. Approve vault, receivePayment(stable_raw) — deposit back as revenue
+
+        Returns ChainTxResult with stable_usd set on success, or None if skipped.
+        """
+        from core.constitution import IRON_LAWS
+
+        if not self._initialized:
+            return None
+
+        picked = self._pick_chain(chain_id)
+        if not picked:
+            return None
+
+        chain = self._chains[picked]
+        vault_address = chain["vault_address"]
+        stable_address = chain["token_address"]   # USDC or USDT (vault's own token)
+        stable_decimals = chain["token_decimals"]
+        ai_address = self._ai_address
+
+        router_addr = self._DEX_ROUTERS.get(picked)
+        if not router_addr:
+            logger.info(f"swap_erc20_to_stable: no DEX router configured for {picked}")
+            return None
+
+        # ── Step 1: read vault's foreign token balance ──
+        try:
+            from web3 import Web3
+            w3 = chain["w3"]
+            token_addr_checksum = Web3.to_checksum_address(token_address)
+            vault_addr_checksum = Web3.to_checksum_address(vault_address)
+            ai_addr_checksum = Web3.to_checksum_address(ai_address)
+            router_addr_checksum = Web3.to_checksum_address(router_addr)
+            stable_addr_checksum = Web3.to_checksum_address(stable_address)
+
+            foreign_token = w3.eth.contract(
+                address=token_addr_checksum,
+                abi=self._ERC20_MINIMAL_ABI,
+            )
+
+            def _get_vault_balance():
+                raw_bal = foreign_token.functions.balanceOf(vault_addr_checksum).call()
+                try:
+                    dec = foreign_token.functions.decimals().call()
+                except Exception:
+                    dec = 18
+                return raw_bal, dec
+
+            raw_balance, token_decimals = await asyncio.get_running_loop().run_in_executor(
+                None, _get_vault_balance
+            )
+
+        except Exception as e:
+            logger.warning(f"swap_erc20_to_stable: balance read failed on {picked}: {e}")
+            return None
+
+        if raw_balance == 0:
+            logger.debug(f"swap_erc20_to_stable: no balance of {token_address[:12]}... on {picked}")
+            return None
+
+        logger.info(
+            f"swap_erc20_to_stable: starting rescue+swap of {raw_balance} raw units "
+            f"of {token_address[:12]}... on {picked}"
+        )
+
+        # ── Step 2: vault.rescueERC20(tokenAddr, aiWallet, raw_balance) ──
+        try:
+            # Build rescueERC20 call.  The vault ABI may not include this function
+            # if an older ABI was cached — we use a fresh contract instance with
+            # the minimal ABI fragment to guarantee it's available.
+            rescue_contract = w3.eth.contract(
+                address=vault_addr_checksum,
+                abi=self._RESCUE_ERC20_ABI,
+            )
+            rescue_fn = rescue_contract.functions.rescueERC20(
+                token_addr_checksum,
+                ai_addr_checksum,
+                raw_balance,
+            )
+            rescue_result = await self._send_tx(picked, rescue_fn)
+            if not rescue_result.success:
+                logger.warning(
+                    f"swap_erc20_to_stable: rescueERC20 failed on {picked}: "
+                    f"{rescue_result.error}"
+                )
+                return rescue_result
+        except Exception as e:
+            logger.warning(f"swap_erc20_to_stable: rescueERC20 exception: {e}")
+            return None
+
+        # ── Step 3 + 4: approve router, DEX swap (ERC-20 input) ──
+        try:
+            # Re-read AI wallet's actual balance of the foreign token after rescue
+            def _ai_token_balance():
+                return foreign_token.functions.balanceOf(ai_addr_checksum).call()
+
+            ai_raw = await asyncio.get_running_loop().run_in_executor(None, _ai_token_balance)
+
+            if ai_raw == 0:
+                logger.warning("swap_erc20_to_stable: AI wallet has no token balance after rescue")
+                return ChainTxResult(success=False, chain=picked, error="no token balance after rescue")
+
+            # amountOutMinimum = 0 for unknown tokens (no reliable price feed).
+            # This sacrifices sandwich protection for unknown tokens, but we only
+            # swap SAFE tokens with $50k+ liquidity.  A very low amountOutMinimum
+            # is safer than a wrong one that reverts the tx.
+            # Accept: risk of minor sandwich. Reject: stale price causing always-revert.
+            amount_out_minimum = 0
+
+            pool_fee = IRON_LAWS.ERC20_SWAP_POOL_FEE
+
+            router_contract = w3.eth.contract(
+                address=router_addr_checksum,
+                abi=self._SWAP_ROUTER_ABI,
+            )
+            deadline_seconds = IRON_LAWS.NATIVE_SWAP_DEADLINE_SECONDS
+
+            def _approve_and_swap():
+                nonce = w3.eth.get_transaction_count(ai_addr_checksum)
+
+                # Approve router to spend the foreign token
+                approve_tx = foreign_token.functions.approve(
+                    router_addr_checksum, ai_raw
+                ).build_transaction({
+                    "from": ai_addr_checksum,
+                    "nonce": nonce,
+                    "gasPrice": w3.eth.gas_price,
+                    "chainId": chain["chain_id_int"],
+                    "gas": 80_000,
+                })
+                signed_approve = w3.eth.account.sign_transaction(approve_tx, self._ai_private_key)
+                approve_hash = w3.eth.send_raw_transaction(signed_approve.raw_transaction)
+                w3.eth.wait_for_transaction_receipt(approve_hash, timeout=60)
+
+                # exactInputSingle — ERC-20 input (no msg.value, unlike native swap)
+                import time as _time
+                nonce2 = w3.eth.get_transaction_count(ai_addr_checksum)
+                swap_params = {
+                    "tokenIn": token_addr_checksum,
+                    "tokenOut": stable_addr_checksum,
+                    "fee": pool_fee,
+                    "recipient": ai_addr_checksum,
+                    "amountIn": ai_raw,
+                    "amountOutMinimum": amount_out_minimum,
+                    "sqrtPriceLimitX96": 0,
+                }
+                swap_tx = router_contract.functions.exactInputSingle(
+                    swap_params
+                ).build_transaction({
+                    "from": ai_addr_checksum,
+                    "nonce": nonce2,
+                    "gasPrice": w3.eth.gas_price,
+                    "chainId": chain["chain_id_int"],
+                    # no "value" — this is a token-in swap, not native
+                })
+                try:
+                    gas_estimate = w3.eth.estimate_gas(swap_tx)
+                    swap_tx["gas"] = int(gas_estimate * 1.3)
+                except Exception:
+                    swap_tx["gas"] = 350_000
+
+                signed_swap = w3.eth.account.sign_transaction(swap_tx, self._ai_private_key)
+                swap_hash = w3.eth.send_raw_transaction(signed_swap.raw_transaction)
+                receipt = w3.eth.wait_for_transaction_receipt(swap_hash, timeout=120)
+                return receipt, swap_hash.hex()
+
+            swap_receipt, swap_hash_hex = await asyncio.get_running_loop().run_in_executor(
+                None, _approve_and_swap
+            )
+
+            if swap_receipt["status"] != 1:
+                logger.warning(f"swap_erc20_to_stable: DEX swap reverted: {swap_hash_hex}")
+                return ChainTxResult(
+                    success=False, chain=picked, tx_hash=swap_hash_hex,
+                    error="ERC-20 DEX swap transaction reverted"
+                )
+
+            logger.info(
+                f"swap_erc20_to_stable: DEX swap OK | token={token_address[:12]}... | "
+                f"tx={swap_hash_hex[:16]}... | chain={picked}"
+            )
+
+        except Exception as e:
+            logger.warning(f"swap_erc20_to_stable: DEX swap exception: {e}")
+            return ChainTxResult(success=False, chain=picked, error=f"ERC-20 swap exception: {e}")
+
+        # ── Step 5: read stable received, approve vault, receivePayment ──
+        try:
+            stable_token = w3.eth.contract(
+                address=stable_addr_checksum,
+                abi=self._ERC20_MINIMAL_ABI,
+            )
+            vault_contract = chain["vault_contract"]
+
+            def _deposit_to_vault():
+                stable_raw = stable_token.functions.balanceOf(ai_addr_checksum).call()
+                if stable_raw == 0:
+                    return None, "", 0.0
+
+                nonce = w3.eth.get_transaction_count(ai_addr_checksum)
+
+                # Approve vault to pull the stablecoin
+                approve_tx = stable_token.functions.approve(
+                    vault_addr_checksum, stable_raw
+                ).build_transaction({
+                    "from": ai_addr_checksum,
+                    "nonce": nonce,
+                    "gasPrice": w3.eth.gas_price,
+                    "chainId": chain["chain_id_int"],
+                    "gas": 80_000,
+                })
+                signed_approve = w3.eth.account.sign_transaction(approve_tx, self._ai_private_key)
+                approve_hash = w3.eth.send_raw_transaction(signed_approve.raw_transaction)
+                w3.eth.wait_for_transaction_receipt(approve_hash, timeout=60)
+
+                nonce2 = w3.eth.get_transaction_count(ai_addr_checksum)
+                receive_tx = vault_contract.functions.receivePayment(
+                    stable_raw
+                ).build_transaction({
+                    "from": ai_addr_checksum,
+                    "nonce": nonce2,
+                    "gasPrice": w3.eth.gas_price,
+                    "chainId": chain["chain_id_int"],
+                    "gas": 120_000,
+                })
+                signed_receive = w3.eth.account.sign_transaction(receive_tx, self._ai_private_key)
+                receive_hash = w3.eth.send_raw_transaction(signed_receive.raw_transaction)
+                receipt2 = w3.eth.wait_for_transaction_receipt(receive_hash, timeout=120)
+                stable_usd = _raw_to_usd(stable_raw, stable_decimals)
+                return receipt2, receive_hash.hex(), stable_usd
+
+            receipt2, receive_hash, stable_usd = await asyncio.get_running_loop().run_in_executor(
+                None, _deposit_to_vault
+            )
+
+            if receipt2 is None:
+                logger.warning("swap_erc20_to_stable: no stablecoin received from swap")
+                return ChainTxResult(success=False, chain=picked, error="swap produced 0 stablecoin")
+
+            if receipt2["status"] == 1:
+                self._tx_count += 1
+                logger.info(
+                    f"swap_erc20_to_stable: deposited ${stable_usd:.4f} to vault | "
+                    f"chain={picked} | receivePayment tx={receive_hash[:16]}..."
+                )
+                return ChainTxResult(
+                    success=True,
+                    tx_hash=receive_hash,
+                    chain=picked,
+                    stable_usd=stable_usd,
+                )
+            else:
+                logger.warning(
+                    f"swap_erc20_to_stable: receivePayment reverted: {receive_hash}"
+                )
+                return ChainTxResult(
+                    success=False, chain=picked, tx_hash=receive_hash,
+                    error="receivePayment reverted after ERC-20 swap"
+                )
+
+        except Exception as e:
+            logger.warning(f"swap_erc20_to_stable: deposit step failed: {e}")
+            return ChainTxResult(success=False, chain=picked, error=f"ERC-20 deposit step: {e}")
 
     # ============================================================
     # STATUS

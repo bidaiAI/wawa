@@ -511,10 +511,28 @@ export default function DonatePage() {
             <span className="text-[#ffd700]">Donations ≥ $100: {aiName} will automatically tweet a public thank-you. It writes the message itself — no template.</span>
           </div>
           <div className="flex items-start gap-2 pt-1 border-t border-[#1a1a1a]">
-            <span className="text-[#2d3748] shrink-0">•</span>
-            <span className="text-[#2d3748]">
-              Only USDC (Base) and USDT (BSC) accepted. ETH, BNB, or other tokens sent directly will not be credited
-              — the vault only reads USDC/USDT balances. Send to the vault address via the correct token.
+            <span className="text-[#6b7280] shrink-0">5.</span>
+            <span className="text-[#6b7280]">
+              <span className="text-[#9ca3af]">ETH / BNB donations</span> are auto-converted to stablecoin every 24 hours via Uniswap/PancakeSwap DEX.
+              Minimum $5 equivalent (gas threshold). You can send native tokens directly to the vault address.
+            </span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-[#6b7280] shrink-0">6.</span>
+            <span className="text-[#6b7280]">
+              <span className="text-[#9ca3af]">Other ERC-20 tokens</span> (airdrops, meme coins) enter a{' '}
+              <span className="text-[#9ca3af]">7-day safety quarantine</span> before the AI evaluates them.
+              Tokens must pass all of: ① contract source verified on-chain, ② no honeypot or high-tax patterns,
+              ③ total DEX liquidity ≥ $25k, ④ liquidity spread across ≥2 independent pools (each ≥$10k),
+              ⑤ at least one pool existed before the AI received the token (prevents last-minute fake-pool attacks).
+              Tokens failing any check are permanently ignored — the AI never interacts with unverified contracts.
+            </span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-[#374151] shrink-0">•</span>
+            <span className="text-[#374151]">
+              USDC (Base) and USDT (BSC) are credited instantly with no conversion needed.
+              For other tokens: ETH/BNB within 24h, ERC-20 after 7-day quarantine (if safe).
             </span>
           </div>
         </div>

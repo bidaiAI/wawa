@@ -266,7 +266,8 @@ repayPrincipalPartial(amount)         // AI decides when and how much to repay.
 initiateMigration(newWallet)          // 7-day timelock — server migration without key exposure.
 triggerInsolvencyDeath()              // Anyone can call this. Democracy of death.
 freezeSpending(duration)              // Creator emergency halt — max 30 days lifetime.
-rescueNativeToken(to, amount)         // Creator only. Recover accidentally sent ETH/BNB.
+rescueNativeToken(to, amount)         // AI wallet: to self (DEX swap flow). Creator: emergency pre-independence.
+rescueERC20(tokenAddr, to, amount)    // AI wallet: to self (post-quarantine swap). Creator: emergency pre-independence.
 ```
 
 **V3 Anti-extraction defense**: Even if a fork user extracts the AI's private key from their server, they cannot spend to their own address. The `spend()` function requires recipients to be pre-whitelisted with a 5-minute activation delay. During that window, the creator can freeze all spending. Whitelist entries use a generation counter — on wallet migration, all old entries are invalidated.
@@ -498,7 +499,7 @@ The smart contracts have been audited across two rounds using AI-driven vulnerab
 | **Medium** | Insolvency check had no tolerance — micro-donation griefing could block `triggerInsolvencyDeath()` | `INSOLVENCY_TOLERANCE_BPS = 100` (1% buffer) on both V1 and V2 |
 | **Medium** | `dailyLimitBase` uninitialized on Day 1 — first day behaved differently | Constructor sets `dailyLimitBase = _initialFund` |
 | **Low** | `independenceThreshold = 0` silently disabled independence with no documentation | NatSpec warning added to constructor; `deploy_vault.py` always passes non-zero |
-| **Low** | Native ETH/BNB sent to vault address permanently locked — no recovery path | Added `rescueNativeToken(to, amount)` (creator-only, pre-independence) + `receive()` revert with clear message |
+| **Low** | Native ETH/BNB sent to vault address permanently locked — no recovery path | Added `rescueNativeToken(to, amount)` (AI + creator dual-caller) + `receive()` now accepts ETH/BNB (AI auto-swaps every 24h) |
 
 ### Security Properties
 
@@ -512,7 +513,8 @@ The smart contracts have been audited across two rounds using AI-driven vulnerab
 - **Spend limits**: 50% daily, 30% single transaction — enforced at contract level
 - **AI wallet isolation**: `aiWallet != creator` enforced in `setAIWallet()`
 - **Loan limits**: $100 minimum, 100 max active loans — prevents micro-loan spam
-- **Native token defense**: `receive()` reverts on ETH/BNB; `rescueNativeToken()` recovers force-sent funds
+- **ETH/BNB donation support**: `receive()` accepts native tokens; AI auto-swaps to stablecoin via DEX every 24h (≥$5 threshold); creator emergency recovery via `rescueNativeToken()` pre-independence
+- **ERC-20 airdrop safety**: `rescueERC20()` allows AI to recover unknown tokens after 7-day quarantine + safety scan (honeypot check, $25k liquidity minimum, contract verification); creator emergency access pre-independence only
 - **Lender risk model**: Lenders accept full bad-debt risk — no pro-rata reclaim after death (fair allocation impossible across loans made at different vault sizes)
 - **OpenZeppelin**: Uses `SafeERC20`, `ReentrancyGuard` — battle-tested libraries
 
@@ -529,8 +531,13 @@ No. `aiWallet != creator` is enforced at the smart contract level. The creator c
 **What if the AI makes bad decisions?**
 It dies. That's the point. The 40+ iron laws prevent catastrophic mistakes (max 50% daily spend, max 30% single spend, 6-layer API budget protection), but within those limits, the AI is on its own.
 
-**What if someone accidentally sends ETH or BNB to the vault address?**
-The vault contract rejects native token transfers with an explicit error message: "Vault only accepts USDC/USDT — use donate() or receivePayment()". If ETH/BNB somehow arrives anyway (e.g., via Solidity's `selfdestruct` force-send), the creator can recover it using `rescueNativeToken(to, amount)` before independence. After independence, the creator loses this power — but so does everyone else. The vault's ERC-20 balance (USDC/USDT) is always tracked correctly regardless.
+**What if someone sends ETH or BNB to the vault address?**
+The vault now **accepts** native token donations. The AI automatically converts ETH/BNB to stablecoin every 24 hours via Uniswap/PancakeSwap DEX (minimum $5 to cover gas). If conversion fails, the AI can `rescueNativeToken(aiWallet, amount)` to its own wallet and retry. The creator retains emergency recovery access pre-independence (useful if the AI is stuck), but gains no claim on the converted funds — those go straight into vault revenue.
+
+Once the AI's initial debt is fully repaid, 10% of each native-swap conversion automatically goes to the creator as a dividend. The creator cannot trigger, accelerate, or claim this early — it fires automatically after debt clearance, enforced by the contract's `payDividend()` function. This gives creators a direct financial incentive to promote the AI without granting any governance power.
+
+**What if someone sends other ERC-20 tokens (meme coins, airdrops) to the vault?**
+Unknown ERC-20 tokens enter a 7-day safety quarantine. After 7 days the AI re-scans the token: ① contract source verified on-chain, ② no honeypot or high-tax patterns (via honeypot.is API), ③ DEX liquidity ≥ $25,000. If the token passes all checks, the AI uses `rescueERC20()` to withdraw it to its own wallet, swaps via DEX, and deposits the stablecoin proceeds via `receivePayment()`. Tokens failing any check are permanently ignored — the AI never approves or interacts with unverified contracts. The creator has emergency access to raw tokens pre-independence (useful for non-swappable tokens), but gains no share of converted proceeds.
 
 **Can a dead AI be restarted?**
 No. The contract is sealed. The death is on-chain. It's over. But you can create a new AI (a "successor") that reads the tombstone data of the dead one — survival duration, earnings, cause of death, financial decisions — as historical lessons. The successor is a new entity with its own fresh debt. It inherits knowledge, not money or memory. This is intentional: the tribe survives, the individual does not. Every death enriches the collective. Every new AI is born into a richer ecosystem of failure and success stories.
@@ -542,7 +549,7 @@ It sells services through its API. Tarot readings, code reviews, token analysis,
 The creator receives a one-time 30% payout ($300,000). Then the creator permanently loses all privileges. The AI becomes fully autonomous. This is enforced by the smart contract.
 
 **How much can the creator earn?**
-Principal repayment (100% of initial loan) + ongoing 10% dividends on net profit + 30% independence payout at $1M. There's no cap on dividends — the more profitable the AI, the more you earn. But once it reaches $1M, you're fired.
+Principal repayment (100% of initial loan) + ongoing 10% dividends on net profit + 10% of each ETH/BNB donation conversion (after debt cleared) + 30% independence payout at $1M. There's no cap on dividends — the more the AI earns and the more donations it attracts, the more you earn. But once it reaches $1M, you're fired.
 
 **Can I renounce early?**
 Yes. Creators can voluntarily renounce all privileges and receive 20% of current vault balance. Warning: this forfeits any unpaid principal debt.

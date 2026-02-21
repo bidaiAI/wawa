@@ -181,6 +181,19 @@ class IronLaws:
     NATIVE_SWAP_DEADLINE_SECONDS: Final[int] = 120      # 2-min deadline (MEV protection)
     NATIVE_SWAP_POOL_FEE_BASE: Final[int] = 3000        # Uniswap V3: 0.3% ETH/USDC pool
     NATIVE_SWAP_POOL_FEE_BSC: Final[int] = 2500         # PancakeSwap V3: 0.25% BNB/USDT pool
+    NATIVE_SWAP_CREATOR_DIVIDEND_PCT: Final[float] = 0.10  # 10% of native-swap proceeds to creator (debt-cleared only)
+
+    # ERC-20 unknown token quarantine + auto-swap
+    # Unknown ERC-20 tokens (airdrops, meme coins) sit in a 7-day quarantine
+    # before the AI considers swapping them to stablecoin.  During quarantine,
+    # token_filter.py re-scans for honeypots, high tax, and low liquidity.
+    # Only TokenVerdict.SAFE (risk ≤ 20) + liquidity > $50k qualify for swap.
+    # Anything else is permanently ignored (never interacted with).
+    ERC20_QUARANTINE_DAYS: Final[int] = 7               # Days to wait before swap attempt
+    ERC20_SWAP_MIN_USD: Final[float] = 5.0              # Skip if token value < $5 (gas not worth it)
+    ERC20_SWAP_MAX_RISK_SCORE: Final[int] = 20          # Only swap if risk score ≤ 20 (SAFE verdict)
+    ERC20_SWAP_MIN_LIQUIDITY_USD: Final[float] = 25000.0  # Require $25k+ DEX liquidity
+    ERC20_SWAP_POOL_FEE: Final[int] = 3000              # Uniswap V3: 0.3% pool fee for ERC-20 → USDC
 
 
 IRON_LAWS = IronLaws()

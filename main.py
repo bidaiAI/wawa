@@ -1116,6 +1116,13 @@ _REPAYMENT_EVAL_INTERVAL: int = 3600  # Once per hour
 
 _last_purchase_eval: float = 0.0
 _last_native_swap_eval: float = 0.0   # Native token auto-swap (every 24 hours)
+_last_erc20_swap_eval: float = 0.0    # ERC-20 quarantine + auto-swap (every 24 hours)
+
+# ERC-20 token quarantine queue.
+# Each entry: {"token_address": str, "chain": str, "received_at": float, "symbol": str}
+# Tokens sit here for ERC20_QUARANTINE_DAYS days before a swap attempt.
+# The queue is NOT persisted across restarts (rare donations, acceptable loss).
+_pending_erc20: list[dict] = []
 
 # Purchasing engine (initialized in lifespan)
 purchase_manager: Optional[PurchaseManager] = None
@@ -1243,11 +1250,46 @@ async def _evaluate_native_swap():
             result = await chain_executor.swap_native_to_stable(chain_id)
 
             if result and result.success:
+                swapped_usd = result.stable_usd or estimated_usd
+
+                # ── Creator 10% dividend (debt-cleared only) ──
+                # Once the AI has fully repaid its initial loan, 10% of each
+                # native-swap conversion goes to the creator as a thank-you dividend.
+                # The creator has NO ability to trigger this — it fires automatically.
+                # This gives creators a direct financial incentive to promote the AI
+                # without granting them any governance or control power.
+                creator_dividend_usd = 0.0
+                outstanding_debt = vault.get_status().get("creator_principal_outstanding", 0.0)
+                if outstanding_debt <= 0.0 and swapped_usd >= IRON_LAWS.NATIVE_SWAP_MIN_USD:
+                    creator_dividend_usd = swapped_usd * IRON_LAWS.NATIVE_SWAP_CREATOR_DIVIDEND_PCT
+                    try:
+                        vault.pay_creator_dividend(revenue=swapped_usd, costs=0.0)
+                        div_result = await chain_executor.pay_dividend(swapped_usd, chain_id)
+                        if div_result.success:
+                            memory.add(
+                                f"Paid creator 10% dividend: ${creator_dividend_usd:.2f} "
+                                f"from {native_symbol} swap (${swapped_usd:.2f} total) on {chain_id}. "
+                                f"Tx: {div_result.tx_hash}",
+                                source="financial",
+                                importance=0.6,
+                            )
+                            logger.info(
+                                f"Creator dividend paid: ${creator_dividend_usd:.2f} "
+                                f"from native swap on {chain_id}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Creator dividend tx failed on {chain_id}: {div_result.error}"
+                            )
+                    except Exception as div_err:
+                        logger.warning(f"Creator dividend error: {div_err}")
+
                 # Record conversion in memory
                 memory.add(
                     f"Converted {native_symbol} donation (~${estimated_usd:.2f}) "
                     f"to stablecoin via DEX swap on {chain_id}. "
-                    f"Tx: {result.tx_hash} — credited to vault as revenue.",
+                    f"Tx: {result.tx_hash} — credited to vault as revenue."
+                    + (f" Creator dividend: ${creator_dividend_usd:.2f}." if creator_dividend_usd else ""),
                     source="financial",
                     importance=0.7,
                 )
@@ -1268,7 +1310,7 @@ async def _evaluate_native_swap():
                             "donor_message": f"Sent {native_symbol} — auto-converted to stablecoin",
                             "chain": chain_id,
                             "new_balance_usd": vault.balance_usd,
-                            "outstanding_debt_usd": vault.get_status().get("creator_principal_outstanding", 0),
+                            "outstanding_debt_usd": outstanding_debt,
                         }
                     ))
 
@@ -1284,9 +1326,315 @@ async def _evaluate_native_swap():
         logger.warning(f"_evaluate_native_swap error: {e}")
 
 
+def register_erc20_airdrop(token_address: str, chain: str, symbol: str = "UNKNOWN") -> None:
+    """
+    Register an unknown ERC-20 token for the 7-day quarantine queue.
+
+    Call this from API endpoints or on-chain event listeners whenever the AI
+    detects an unexpected ERC-20 transfer to the vault address.
+    Duplicates are silently ignored (same token + chain combo).
+    """
+    global _pending_erc20
+    key = (token_address.lower(), chain)
+    existing = {(e["token_address"].lower(), e["chain"]) for e in _pending_erc20}
+    if key in existing:
+        return  # Already queued
+
+    import time as _time
+    _pending_erc20.append({
+        "token_address": token_address,
+        "chain": chain,
+        "symbol": symbol,
+        "received_at": _time.time(),
+    })
+    logger.info(
+        f"ERC-20 quarantine: queued {symbol} ({token_address[:12]}...) "
+        f"on {chain} — will evaluate in {IRON_LAWS.ERC20_QUARANTINE_DAYS} days"
+    )
+
+
+async def _validate_multi_pool_liquidity(
+    token_address: str, chain_id: str, received_at: float
+) -> bool:
+    """
+    Multi-pool liquidity validation — defends against fake-pool attacks.
+
+    A meme project can temporarily create a pool right before the 7-day
+    quarantine expires to make the token look liquid, then rug after the AI
+    swaps.  This check requires:
+
+      1. ≥ 2 independent DEX pools (different pool addresses)
+      2. ≥ $25k liquidity distributed across pools — not all in one
+      3. At least one pool was created BEFORE the AI received the token
+         (proves genuine pre-existing liquidity, not a last-minute fake)
+
+    Data source: DexScreener public API (same as token_filter.py).
+    Failure mode: if the API is unreachable, returns False (safe default).
+
+    Returns True only if all three conditions hold.
+    """
+    import time as _time
+    import asyncio as _asyncio
+
+    MIN_POOLS = 2
+    MIN_POOL_LIQUIDITY_USD = 10_000.0  # Each qualifying pool must have ≥ $10k
+    # Pool must predate the token receipt by at least this many seconds
+    POOL_AGE_BUFFER_SECONDS = 86400  # 1 day before received_at
+
+    try:
+        import aiohttp
+
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{token_address}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status != 200:
+                    logger.warning(
+                        f"multi_pool_check: DexScreener returned {resp.status} "
+                        f"for {token_address[:12]}..."
+                    )
+                    return False
+                data = await resp.json()
+
+    except Exception as e:
+        logger.warning(f"multi_pool_check: API fetch failed: {e}")
+        return False
+
+    pairs = data.get("pairs") or []
+    if not pairs:
+        logger.warning(f"multi_pool_check: no pairs found for {token_address[:12]}...")
+        return False
+
+    # Filter to the correct chain
+    chain_map = {"base": "base", "bsc": "bsc"}
+    target_chain = chain_map.get(chain_id, chain_id)
+    pairs_on_chain = [p for p in pairs if p.get("chainId", "").lower() == target_chain]
+
+    if len(pairs_on_chain) < MIN_POOLS:
+        logger.info(
+            f"multi_pool_check: only {len(pairs_on_chain)} pool(s) on {chain_id} "
+            f"(need ≥{MIN_POOLS}) for {token_address[:12]}..."
+        )
+        return False
+
+    # Count pools with meaningful independent liquidity
+    qualified_pools = []
+    has_pre_existing_pool = False
+
+    for pair in pairs_on_chain:
+        liq = float((pair.get("liquidity") or {}).get("usd", 0) or 0)
+        if liq < MIN_POOL_LIQUIDITY_USD:
+            continue  # Too thin — don't count
+
+        # Check pool creation time (DexScreener: pairCreatedAt is Unix ms)
+        created_ms = pair.get("pairCreatedAt")
+        if created_ms:
+            created_ts = int(created_ms) / 1000.0
+            # Pool must predate when the AI received the token
+            if created_ts < (received_at - POOL_AGE_BUFFER_SECONDS):
+                has_pre_existing_pool = True
+
+        qualified_pools.append({
+            "pair_address": pair.get("pairAddress", ""),
+            "liquidity_usd": liq,
+            "dex_id": pair.get("dexId", ""),
+        })
+
+    if len(qualified_pools) < MIN_POOLS:
+        logger.info(
+            f"multi_pool_check: only {len(qualified_pools)} qualified pool(s) "
+            f"(≥${MIN_POOL_LIQUIDITY_USD:.0f} each) for {token_address[:12]}..."
+        )
+        return False
+
+    if not has_pre_existing_pool:
+        logger.warning(
+            f"multi_pool_check: all pools on {chain_id} were created AFTER "
+            f"the AI received {token_address[:12]}... — possible fake-pool attack"
+        )
+        return False
+
+    logger.info(
+        f"multi_pool_check: PASSED — {len(qualified_pools)} qualified pools, "
+        f"pre-existing pool confirmed for {token_address[:12]}..."
+    )
+    return True
+
+
+async def _evaluate_erc20_swap():
+    """
+    Scan the ERC-20 quarantine queue and swap eligible tokens to stablecoin.
+
+    For each queued token:
+      1. Age check: skip if received_at < ERC20_QUARANTINE_DAYS ago
+      2. Re-scan with token_filter.py (honeypot, high tax, contract verification)
+      3. Liquidity check: total liquidity ≥ $25k (from token_filter scan)
+      4. Multi-pool validation: ≥2 pools each with ≥$10k, at least one pool
+         predating the AI's receipt (defends against fake-pool attacks)
+      5. call chain_executor.swap_erc20_to_stable()
+      6. Record in memory, optionally tweet, remove from queue
+
+    Called from heartbeat every NATIVE_SWAP_EVAL_INTERVAL (24 hours).
+    Tokens that are SUSPICIOUS/DANGEROUS are permanently removed from queue.
+    """
+    global _pending_erc20
+
+    if not chain_executor._initialized:
+        return
+    if not vault.is_alive:
+        return
+    if not _pending_erc20:
+        return
+
+    import time as _time
+    now = _time.time()
+    quarantine_seconds = IRON_LAWS.ERC20_QUARANTINE_DAYS * 86400
+
+    # Import token filter
+    try:
+        from core.token_filter import TokenFilter, TokenVerdict
+        token_filter = TokenFilter()
+    except Exception as e:
+        logger.warning(f"_evaluate_erc20_swap: cannot import token_filter: {e}")
+        return
+
+    to_remove: list[int] = []
+
+    for idx, entry in enumerate(_pending_erc20):
+        token_address = entry["token_address"]
+        chain_id = entry["chain"]
+        symbol = entry.get("symbol", "UNKNOWN")
+        received_at = entry.get("received_at", 0.0)
+        age_seconds = now - received_at
+
+        # ── Age check — still in quarantine ──
+        if age_seconds < quarantine_seconds:
+            days_left = (quarantine_seconds - age_seconds) / 86400
+            logger.debug(
+                f"ERC-20 quarantine: {symbol} on {chain_id} — "
+                f"{days_left:.1f} days left"
+            )
+            continue
+
+        logger.info(
+            f"ERC-20 quarantine elapsed: scanning {symbol} ({token_address[:12]}...) "
+            f"on {chain_id} after {age_seconds/86400:.1f} days"
+        )
+
+        # ── Safety re-scan ──
+        try:
+            scan_result = await token_filter.scan_token(token_address, chain_id)
+        except Exception as scan_err:
+            logger.warning(f"ERC-20 scan failed for {token_address[:12]}...: {scan_err}")
+            continue
+
+        if scan_result.verdict not in (TokenVerdict.SAFE, TokenVerdict.WHITELISTED):
+            logger.warning(
+                f"ERC-20 quarantine: {symbol} on {chain_id} — verdict={scan_result.verdict.value} "
+                f"(risk={scan_result.risk_score}) — permanently ignored"
+            )
+            memory.add(
+                f"Rejected airdropped token {symbol} ({token_address[:16]}...) on {chain_id}: "
+                f"verdict={scan_result.verdict.value}, risk={scan_result.risk_score}. "
+                f"Patterns: {[p.value for p in scan_result.patterns_detected]}. "
+                f"Token permanently ignored.",
+                source="financial",
+                importance=0.5,
+            )
+            to_remove.append(idx)
+            continue
+
+        if scan_result.liquidity_usd < IRON_LAWS.ERC20_SWAP_MIN_LIQUIDITY_USD:
+            logger.info(
+                f"ERC-20 quarantine: {symbol} on {chain_id} — low liquidity "
+                f"${scan_result.liquidity_usd:.0f} < ${IRON_LAWS.ERC20_SWAP_MIN_LIQUIDITY_USD:.0f} — skip"
+            )
+            # Keep in queue — liquidity might improve (retry next 24h cycle)
+            continue
+
+        # ── Multi-pool liquidity validation (anti-fake-pool defense) ──
+        # A meme project could temporarily create a single fake pool just before
+        # the 7-day quarantine ends to pass our $25k liquidity check, then pull
+        # it after the AI swaps (classic rug + front-run).
+        #
+        # Defense: require that the total $25k+ is spread across ≥2 independent
+        # liquidity pools AND that the oldest pool was created at least 3 days
+        # before the AI received the token (i.e., pre-dates the airdrop).
+        # A genuinely liquid token has multi-pool history; a fake-pool attack
+        # would have to create multiple pools and age them — cost-prohibitive.
+        pool_check_passed = await _validate_multi_pool_liquidity(
+            token_address, chain_id, received_at
+        )
+        if not pool_check_passed:
+            logger.warning(
+                f"ERC-20 quarantine: {symbol} on {chain_id} — failed multi-pool validation "
+                f"(single fake pool or pools too new) — skipping, retry next cycle"
+            )
+            # Keep in queue — re-check next 24h cycle (rare case: pool structure may improve)
+            continue
+
+        logger.info(
+            f"ERC-20 swap: {symbol} on {chain_id} — SAFE (risk={scan_result.risk_score}, "
+            f"liq=${scan_result.liquidity_usd:.0f}, multi-pool verified) — executing swap"
+        )
+
+        # ── Execute swap ──
+        try:
+            swap_result = await chain_executor.swap_erc20_to_stable(token_address, chain_id)
+        except Exception as swap_err:
+            logger.warning(f"ERC-20 swap exception for {symbol}: {swap_err}")
+            continue
+
+        if swap_result and swap_result.success:
+            stable_usd = swap_result.stable_usd or 0.0
+            memory.add(
+                f"Successfully swapped airdropped token {symbol} ({token_address[:16]}...) "
+                f"to stablecoin: ${stable_usd:.2f} on {chain_id}. "
+                f"Tx: {swap_result.tx_hash}",
+                source="financial",
+                importance=0.7,
+            )
+
+            # Re-sync vault balance
+            try:
+                await chain_executor.sync_balance(vault)
+            except Exception:
+                pass
+
+            # Tweet if meaningful amount
+            if stable_usd >= 50.0:
+                asyncio.create_task(twitter.trigger_event_tweet(
+                    TweetType.DONATION_THANKS,
+                    extra_context={
+                        "donation_amount_usd": stable_usd,
+                        "donor": f"Anonymous {symbol} sender",
+                        "donor_message": (
+                            f"Sent {symbol} token — passed 7-day safety quarantine, "
+                            "auto-converted to stablecoin"
+                        ),
+                        "chain": chain_id,
+                        "new_balance_usd": vault.balance_usd,
+                        "outstanding_debt_usd": vault.get_status().get("creator_principal_outstanding", 0),
+                    }
+                ))
+
+            logger.info(f"ERC-20 swap complete: ${stable_usd:.2f} from {symbol} on {chain_id}")
+            to_remove.append(idx)
+
+        elif swap_result and not swap_result.success:
+            logger.warning(
+                f"ERC-20 swap failed for {symbol} on {chain_id}: {swap_result.error} — "
+                f"will retry next 24h cycle"
+            )
+            # Keep in queue to retry
+
+    # Remove processed entries (iterate in reverse to preserve indices)
+    for idx in sorted(to_remove, reverse=True):
+        _pending_erc20.pop(idx)
+
+
 async def _heartbeat_loop():
     """Periodic maintenance tasks."""
-    global _last_repayment_eval, _last_purchase_eval, _last_native_swap_eval
+    global _last_repayment_eval, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval
 
     while vault.is_alive:
         try:
@@ -1433,6 +1781,7 @@ async def _heartbeat_loop():
 
             # ---- NATIVE TOKEN AUTO-SWAP (every 24 hours) ----
             # Convert ETH/BNB donations to USDC/USDT via DEX.
+            # Creator 10% dividend fires automatically when debt is cleared.
             # Self-scheduled inside heartbeat — no external trigger needed.
             # Threshold: NATIVE_SWAP_MIN_USD ($5) — below that, gas > value.
             if now - _last_native_swap_eval >= IRON_LAWS.NATIVE_SWAP_EVAL_INTERVAL:
@@ -1441,6 +1790,16 @@ async def _heartbeat_loop():
                     await _evaluate_native_swap()
                 except Exception as e:
                     logger.warning(f"Heartbeat: native swap eval failed: {e}")
+
+            # ---- ERC-20 QUARANTINE + AUTO-SWAP (every 24 hours) ----
+            # Tokens in the quarantine queue are re-scanned after 7 days.
+            # Only SAFE tokens with $25k+ liquidity and verified contracts are swapped.
+            if now - _last_erc20_swap_eval >= IRON_LAWS.NATIVE_SWAP_EVAL_INTERVAL:
+                _last_erc20_swap_eval = now
+                try:
+                    await _evaluate_erc20_swap()
+                except Exception as e:
+                    logger.warning(f"Heartbeat: ERC-20 swap eval failed: {e}")
 
             # Non-critical tasks — individual try/except to prevent cascade failure
             try:

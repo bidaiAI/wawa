@@ -114,6 +114,9 @@ contract MortalVaultV2 is ReentrancyGuard {
     // Native token rescue (ETH/BNB accidentally sent to vault)
     event NativeTokenRescued(address indexed to, uint256 amount);
 
+    // ERC-20 token rescue (non-vault tokens accidentally sent or airdropped)
+    event ERC20Rescued(address indexed tokenAddr, address indexed to, uint256 amount);
+
     // ============================================================
     // MODIFIERS
     // ============================================================
@@ -578,6 +581,39 @@ contract MortalVaultV2 is ReentrancyGuard {
         _graceEndsAt = birthTimestamp + (INSOLVENCY_GRACE_DAYS * 1 days);
         _graceExpired = block.timestamp >= _graceEndsAt;
         _fullyRepaid = principalRepaid;
+    }
+
+    // ============================================================
+    // ERC-20 TOKEN RESCUE — recovers non-vault tokens (airdrops, mistakes)
+    // ============================================================
+
+    /**
+     * @notice Withdraw any ERC-20 token that is NOT the vault's own token.
+     *         Same design as MortalVault V1 — see that contract for full NatSpec.
+     *
+     *         Creator has NO automatic claim on converted proceeds; those go
+     *         entirely through normal vault accounting (receivePayment + payDividend).
+     *         Creator's emergency-only access exists to unblock stuck situations.
+     */
+    function rescueERC20(address tokenAddr, address to, uint256 amount)
+        external
+        nonReentrant
+    {
+        require(tokenAddr != address(0), "zero token address");
+        require(tokenAddr != address(token), "cannot rescue vault token");
+        require(to != address(0), "zero recipient");
+        require(amount > 0, "zero amount");
+
+        if (msg.sender == aiWallet) {
+            require(to == aiWallet, "AI: can only withdraw to own wallet");
+        } else if (msg.sender == creator) {
+            require(!isIndependent, "AI is independent — creator has no power");
+        } else {
+            revert("only AI or creator");
+        }
+
+        IERC20(tokenAddr).safeTransfer(to, amount);
+        emit ERC20Rescued(tokenAddr, to, amount);
     }
 
     // ============================================================

@@ -190,6 +190,9 @@ contract MortalVault is ReentrancyGuard {
     // Native token rescue (ETH/BNB accidentally sent to vault)
     event NativeTokenRescued(address indexed to, uint256 amount);
 
+    // ERC-20 token rescue (non-vault tokens accidentally sent or airdropped)
+    event ERC20Rescued(address indexed tokenAddr, address indexed to, uint256 amount);
+
     // ============================================================
     // MODIFIERS
     // ============================================================
@@ -951,6 +954,55 @@ contract MortalVault is ReentrancyGuard {
         _initiatedAt = migrationInitiatedAt;
         _completesAt = migrationInitiatedAt > 0 ? migrationInitiatedAt + MIGRATION_DELAY : 0;
         _isPending = pendingAIWallet != address(0);
+    }
+
+    // ============================================================
+    // ERC-20 TOKEN RESCUE — recovers non-vault tokens (airdrops, mistakes)
+    // ============================================================
+
+    /**
+     * @notice Withdraw any ERC-20 token that is NOT the vault's own token
+     *         (USDC/USDT). Useful for recovering airdrops or mistaken transfers.
+     *
+     *         Two authorized callers (same pattern as rescueNativeToken):
+     *
+     *         1. AI wallet — autonomous swap flow:
+     *            After a 7-day quarantine + safety scan (token_filter.py),
+     *            the AI withdraws to its own wallet, swaps to USDC/USDT via
+     *            Uniswap/PancakeSwap, and deposits back via receivePayment().
+     *            The AI can only send to its own address.
+     *
+     *         2. Creator (pre-independence) — emergency recovery only.
+     *            Creator has NO claim on the converted proceeds; those go
+     *            entirely through the normal vault accounting. The creator
+     *            can only extract the raw foreign token in an emergency
+     *            (AI stuck, token unsellable, etc.).
+     *
+     * @param tokenAddr  The foreign ERC-20 token address (must NOT be vault token).
+     * @param to         Recipient. If caller is AI, must equal aiWallet.
+     * @param amount     Amount in token's native decimals.
+     */
+    function rescueERC20(address tokenAddr, address to, uint256 amount)
+        external
+        nonReentrant
+    {
+        require(tokenAddr != address(0), "zero token address");
+        require(tokenAddr != address(token), "cannot rescue vault token");
+        require(to != address(0), "zero recipient");
+        require(amount > 0, "zero amount");
+
+        if (msg.sender == aiWallet) {
+            // AI can only send foreign tokens to itself (for DEX swap)
+            require(to == aiWallet, "AI: can only withdraw to own wallet");
+        } else if (msg.sender == creator) {
+            // Creator: emergency recovery only, pre-independence
+            require(!isIndependent, "AI is independent — creator has no power");
+        } else {
+            revert("only AI or creator");
+        }
+
+        IERC20(tokenAddr).safeTransfer(to, amount);
+        emit ERC20Rescued(tokenAddr, to, amount);
     }
 
     // ============================================================
