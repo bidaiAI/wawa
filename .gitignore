@@ -81,3 +81,7 @@ PEER_NETWORK_IMPL.md
 # -----------------------------------------------------------------------------
 mortal_platform/
 web/app/platform/admin/
+web/lib/admin-api.ts
+Dockerfile.platform
+requirements.platform.txt
+.env.platform.example
