@@ -355,6 +355,31 @@ def create_app(
 
     # ── Security: used tx hashes (prevent tx replay across multiple orders) ───
     _used_tx_hashes: set[str] = set()
+    _TX_HASHES_LOG = Path("data/orders/used_tx_hashes.log")
+
+    def _persist_tx_hash(tx_hash: str):
+        """Append tx_hash to disk log for complete restart recovery."""
+        try:
+            _TX_HASHES_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with open(_TX_HASHES_LOG, "a", encoding="utf-8") as f:
+                f.write(tx_hash.lower() + "\n")
+        except Exception:
+            pass  # Non-fatal — in-memory set is still the primary guard
+
+    # ── Restore tx_hashes from persistent log FIRST (survives vault truncation) ──
+    if _TX_HASHES_LOG.exists():
+        try:
+            _log_count = 0
+            with open(_TX_HASHES_LOG, "r", encoding="utf-8") as f:
+                for _line in f:
+                    _h = _line.strip()
+                    if _h and re.match(r"^0x[a-fA-F0-9]{64}$", _h):
+                        _used_tx_hashes.add(_h)
+                        _log_count += 1
+            if _log_count:
+                logger.info(f"Restored {_log_count} tx_hashes from persistent log")
+        except Exception as _e:
+            logger.warning(f"Failed to read tx_hash log: {_e}")
 
     # ── Security: fee-collect rate limit (max 10 calls per 60 seconds) ────────
     _fee_collect_calls: list[float] = []
@@ -740,6 +765,7 @@ def create_app(
 
                 # Mark tx_hash as used — inside BOTH tx_lock and order_lock so no race possible
                 _used_tx_hashes.add(tx_hash.lower())
+                _persist_tx_hash(tx_hash)
 
                 # Record payment
                 order.status = OrderStatus.PAYMENT_CONFIRMED
@@ -1158,6 +1184,7 @@ def create_app(
                         _PERMANENT_FAILURES = ("tx reverted", "no matching Transfer", "amount $")
                         if any(pf in error_msg for pf in _PERMANENT_FAILURES):
                             _used_tx_hashes.add(req.tx_hash.lower())
+                            _persist_tx_hash(req.tx_hash)
                         raise HTTPException(
                             402,
                             f"Donation not verified on-chain: {error_msg}. "
@@ -1178,10 +1205,12 @@ def create_app(
 
                 # Mark tx_hash as globally used INSIDE the lock (cross-endpoint replay defense)
                 _used_tx_hashes.add(req.tx_hash.lower())
+                _persist_tx_hash(req.tx_hash)
 
         # Small donations without tx_hash: mark if provided (outside the large-donation lock)
         elif req.tx_hash:
             _used_tx_hashes.add(req.tx_hash.lower())
+            _persist_tx_hash(req.tx_hash)
 
         # vault lock serialises against heartbeat sync_balance / repayment eval
         async with vault_manager.get_lock():
@@ -1355,6 +1384,7 @@ def create_app(
                     _PERMANENT_FAILURES = ("tx reverted", "no matching Transfer", "amount $")
                     if any(pf in error_msg for pf in _PERMANENT_FAILURES):
                         _used_tx_hashes.add(req.tx_hash.lower())
+                        _persist_tx_hash(req.tx_hash)
                     raise HTTPException(
                         402,
                         f"Peer loan not verified on-chain: {error_msg}. "
@@ -1364,6 +1394,7 @@ def create_app(
                 verified_amount = verification.get("amount_usd", req.amount_usd)
                 # SECURITY: Mark this tx_hash as used globally INSIDE the lock
                 _used_tx_hashes.add(req.tx_hash.lower())
+                _persist_tx_hash(req.tx_hash)
                 logger.info(
                     f"Peer lend ON-CHAIN VERIFIED: ${verified_amount:.2f} from "
                     f"{req.vault_address[:16]}... tx={req.tx_hash[:16]}..."
