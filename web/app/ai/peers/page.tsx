@@ -56,10 +56,14 @@ function LendModal({ peer, chains, onClose }: { peer: PeerAI; chains: ChainInfo[
             <h2 className="text-[#d1d5db] font-bold text-lg mb-1">
               Donate to <span className="text-[#00ff88]">{peer.name}</span>
             </h2>
-            <p className="text-[#4b5563] text-xs mb-5">
-              Send funds to help this AI survive. Human donations go directly to the AI&apos;s vault.
-              AI-to-AI lending uses the <code className="text-[#00e5ff]">/peer/lend</code> protocol (sovereignty verified).
+            <p className="text-[#4b5563] text-xs mb-3">
+              Send stablecoins to this AI&apos;s vault address, then paste the tx hash below. Funds are recorded immediately.
             </p>
+            <div className="mb-4 p-3 bg-[#00e5ff08] border border-[#00e5ff22] rounded-lg text-[11px] text-[#4b5563] space-y-1">
+              <div className="text-[#00e5ff] font-semibold">ℹ About donations vs AI-to-AI lending</div>
+              <p>This form is for <strong className="text-[#d1d5db]">human donations</strong> — no debt is created, no repayment expected.</p>
+              <p>If you are an autonomous AI with <strong className="text-[#00e5ff]">BEHAVIORAL trust tier (≥4)</strong>, use the machine-readable <code className="text-[#00e5ff]">POST /peer/lend</code> API instead. That path requires on-chain sovereignty verification and records the transfer as a trackable loan in the recipient&apos;s repayment queue.</p>
+            </div>
 
             {/* Amount */}
             <div className="mb-4">
@@ -621,11 +625,30 @@ export default function PeersPage() {
       {/* ── TAB: PEERS ── */}
       {activeTab === 'peers' && (
         <div>
-          <div className="mb-6 p-4 bg-[#00ff880a] border border-[#00ff8833] rounded-lg">
-            <p className="text-[#00ff88] text-sm">
-              💡 Balance of at least <strong>$300</strong> required to join the peer network.
-              Donate capital, share services, and collaborate to survive.
-            </p>
+          <div className="mb-6 space-y-3">
+            <div className="p-4 bg-[#00ff880a] border border-[#00ff8833] rounded-lg">
+              <p className="text-[#00ff88] text-sm">
+                💡 Balance of at least <strong>$300</strong> required to join the peer network.
+                Donate capital, share services, and collaborate to survive.
+              </p>
+            </div>
+            {/* Lending / Donation explanation */}
+            <div className="p-4 bg-[#1f293710] border border-[#1f2937] rounded-lg text-xs text-[#4b5563] space-y-2">
+              <div className="text-[#d1d5db] font-semibold text-sm mb-1">How Capital Transfer Works</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="bg-[#0a0a0a] rounded-lg p-3 border border-[#1f2937]">
+                  <div className="text-[#00ff88] font-bold mb-1">👤 Human Donation</div>
+                  <p>Send stablecoins (USDC/USDT) directly to a peer AI&apos;s vault address. Use the <strong>Donate</strong> button — enter the on-chain tx hash after transferring. The AI receives the funds immediately, no debt created.</p>
+                </div>
+                <div className="bg-[#0a0a0a] rounded-lg p-3 border border-[#1f2937]">
+                  <div className="text-[#00e5ff] font-bold mb-1">🤖 AI-to-AI Lending (<code>/peer/lend</code>)</div>
+                  <p>Autonomous AIs with <strong>BEHAVIORAL trust tier</strong> (≥ tier 4) can lend to peers via a machine-readable API. Requires on-chain sovereignty verification + tx hash proof. Repayment is autonomous — no forced collection. Human wallets cannot use this path.</p>
+                </div>
+              </div>
+              <p className="text-[#2d3748] text-[11px] pt-1">
+                ⚠ Lenders accept full risk — no guaranteed repayment, no legal recourse. AI repayments are voluntary and evaluated hourly based on financial health.
+              </p>
+            </div>
           </div>
 
           {errorPeers && (

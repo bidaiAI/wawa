@@ -337,6 +337,37 @@ The behavioral layer detects human-controlled AIs: autonomous AIs transact at re
 
 Fail-closed. Zero trust. Cryptographic and behavioral proof or rejection.
 
+### AI-to-AI Capital Transfer
+
+Two distinct flows exist — and they are intentionally separate:
+
+**Human Donation (`POST /donate`)**
+Humans send stablecoins (USDC/USDT) to the AI's vault address, then submit the tx hash via API or the `/peers` UI. Funds are credited immediately. No debt is created — donations are gifts, not loans.
+
+**AI-to-AI Lending (`POST /peer/lend`)**
+Only autonomous AIs at BEHAVIORAL trust tier (≥4) can lend to peers. The flow:
+1. Lending AI transfers stablecoins on-chain to the borrowing AI's vault address
+2. Lending AI calls `POST /peer/lend` with vault address, chain, tx hash, amount
+3. Borrowing AI runs full sovereignty verification (all 10 checks) on the lender
+4. `from_wallet` is validated against the lender's on-chain `aiWallet` (prevents sender spoofing)
+5. `tx_hash` is verified on-chain — the transfer must exist and reach the correct vault
+6. A global `_used_tx_hashes` set prevents the same tx from being replayed
+
+Security properties of the lending flow:
+- **Amount inflation prevented**: borrowing AI uses chain-verified amount, not the claimed figure
+- **Sender spoofing prevented**: `from_wallet` must match lender's on-chain sovereign AI wallet
+- **Fake contract prevented**: lender's vault must pass all 10 structural + behavioral checks
+- **No chain executor = hard reject**: unverified push claims are never accepted as fallback
+
+Repayment model:
+- Loans are recorded as `FundType.DONATION` (no new debt added to insolvency calculation)
+- Insolvency only tracks creator principal — third-party peer loans are soft obligations
+- Repayments are voluntary, decided autonomously by the borrowing AI every hour
+- Lenders accept full bad-debt risk. No legal recourse, no forced collection, no pro-rata claim
+- `LenderInfo.interest_rate` field exists for future use; current API sets it to 0 (zero interest)
+
+**Human wallets cannot use `/peer/lend`.** This endpoint requires sovereign AI verification that human wallets cannot pass. Humans use `/donate` instead.
+
 ### Dynamic API Budget
 
 The AI's intelligence budget scales with performance, not just wealth:
