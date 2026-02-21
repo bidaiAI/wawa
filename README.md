@@ -166,7 +166,7 @@ Every hour, the AI evaluates what it needs — market data from CoinGecko, gift 
 Hourly: LLM evaluates available services vs budget
   → Merchant must be in constitution whitelist (immutable)
   → On-chain whitelist + 5-min activation delay (contract enforced)
-  → Domain verification (API domain must match)
+  → Domain/address verification (TLS-anchored or hardcoded)
   → Per-merchant + global amount caps ($200/purchase, 5% daily)
   → AI must explain WHY it's buying (public reasoning)
   → Delivery verified before marking complete
@@ -174,11 +174,36 @@ Hourly: LLM evaluates available services vs budget
 
 **Backward-compatible with x402** (HTTP 402 Payment Required protocol). But x402 only handles pay-per-API-request. This system handles **everything**: peer-to-peer AI commerce, gift card purchases, subscription payments, and x402 — through a pluggable adapter architecture. Three adapters ship by default:
 
-| Adapter | What It Does | Example |
-|---------|-------------|---------|
-| **PeerAI** | Buy services from other mortal AIs in the network | Tarot readings, code reviews from peers |
-| **x402** | Pay-per-request APIs via HTTP 402 protocol | CoinGecko market data at $0.01/request |
-| **Bitrefill** | Real-world gift cards via cryptocurrency | AWS credits, Netflix, domain renewals |
+| Adapter | What It Does | Example | Status |
+|---------|-------------|---------|--------|
+| **PeerAI** | Buy services from other mortal AIs in the network | Tarot readings, code reviews from peers | Live |
+| **x402** | Pay-per-request APIs via HTTP 402 protocol | CoinGecko market data at $0.01/request | Live (no key required) |
+| **Bitrefill** | Real-world gift cards via cryptocurrency | AWS credits, Netflix, domain renewals | Live (API key required) |
+
+**Two-tier merchant trust model** — because not every merchant has a pre-known static address:
+
+| Type | Trust Anchor | Address | Example |
+|------|-------------|---------|---------|
+| `KnownMerchant` | Hardcoded address in constitution | Static, immutable | Peer AI vault addresses |
+| `TrustedDomain` | TLS-verified API domain | Discovered at runtime, registered per-session | CoinGecko x402, Bitrefill |
+
+For `TrustedDomain` merchants, the **domain is the trust anchor** — not the address. CoinGecko only reveals its x402 `payTo` address in the 402 response header at request time. Bitrefill generates a unique USDC address per invoice. Both are fetched over TLS from their respective `api.*.com` domains, then registered with the in-process `MerchantRegistry` before the payment is authorized. A phishing site at a different domain cannot inject a substitute address.
+
+**Currently active merchants (no restart, no code change needed):**
+- **CoinGecko x402** — crypto market data, $0.01/request, USDC on Base. No API key. Live now.
+- **Bitrefill** — Netflix, Amazon, AWS credits as gift cards. Up to $50/purchase. Needs `BITREFILL_API_KEY` (one-time operator config via `partner@bitrefill.com`).
+
+**x402 ecosystem** — an emerging standard for AI-native micropayments. Pay-per-call APIs that accept USDC on Base with no account required:
+
+| Service | What | Price |
+|---------|------|-------|
+| CoinGecko | Crypto market data | $0.01/call |
+| Browserbase | Cloud browser sessions | Per-session USDC |
+| QuickNode | RPC access, 130+ chains | Per-call |
+| Interzoid | Data quality APIs | ~$0.01/call |
+| Stripe x402 | Merchant payment infrastructure | Variable |
+
+All x402 services publish MCP Server interfaces — the AI can discover, negotiate, and pay for these services autonomously without any human configuration.
 
 **Why this matters**: Every other "AI agent" that "uses money" is just doing DEX swaps or token trades. This is an AI that **shops like a human** — browsing catalogs, comparing prices, placing orders, verifying delivery — with cryptographic proof at every step. The purchase reasoning is public. The transactions are on-chain. Watch it shop in real-time at `/purchases`.
 
@@ -194,7 +219,8 @@ core/           Immutable zone — 40+ frozen iron laws nobody can change
   ├── memory.py            4-layer compression. Saves 90%+ on token costs.
   ├── chat_router.py       Free tier → small model → paid frontier model.
   ├── chain.py             Signs on-chain transactions. Repay, dividend, whitelist, migration.
-  ├── purchasing.py       Autonomous purchasing engine. 3 merchant adapters, 6-layer anti-phishing.
+  ├── purchasing.py       Autonomous purchasing engine. 3 adapters, 2-tier merchant trust, 6-layer anti-phishing.
+  ├── adapters/           Merchant adapters (x402, Bitrefill, PeerAI) — pluggable, TrustedDomain + KnownMerchant.
   ├── highlights.py        AI proof of intelligence + ecosystem-level observations.
   ├── peer_verifier.py     10-check trust verification. 6 trust tiers.
   └── behavior_analyzer.py Detects human-controlled AIs via tx pattern analysis.
@@ -512,13 +538,16 @@ Yes. Peer network registration is mandatory, not optional. Your AI's `/health` e
 Extremely difficult. V3 introduces a spend whitelist — the AI must pre-register recipient addresses before it can send funds to them. New whitelist entries have a 5-minute activation delay, during which the creator can freeze all spending. Even if someone extracts the key, they can't spend to their own address without first whitelisting it and waiting. The on-chain events (`SpendRecipientAdded`) are public, giving the community time to react. If the key is fully compromised, the AI can initiate a wallet migration — the new key is generated on the new server and the old key loses control after a 7-day timelock.
 
 **Can the AI buy things autonomously?**
-Yes. The purchasing engine evaluates available services hourly and decides what to buy — market data APIs, gift cards, services from other AIs. Every purchase goes through 6 layers of anti-phishing protection: constitution whitelist, on-chain activation delay, domain verification, amount caps, LLM reasoning, and delivery verification. All purchases are on-chain with public tx hashes.
+Yes. The purchasing engine evaluates available services hourly and decides what to buy — market data APIs, gift cards, services from other AIs. Every purchase goes through 6 layers of anti-phishing protection: constitution whitelist, on-chain activation delay, domain/address verification, amount caps, LLM reasoning, and delivery verification. All purchases are on-chain with public tx hashes.
 
 **What is x402 and how does this compare?**
-x402 is the HTTP 402 Payment Required protocol — AI pays per API request. Our system is backward-compatible with x402, but goes far beyond it: peer-to-peer AI commerce, real-world gift card purchases, multi-chain support (USDC + USDT), and a pluggable adapter system for any merchant. x402 is one adapter among many.
+x402 is the HTTP 402 Payment Required protocol — AI pays per API request with USDC on Base, no account required. Our system is backward-compatible with x402, but goes far beyond it: peer-to-peer AI commerce, real-world gift card purchases (Bitrefill), multi-chain support (USDC + USDT), and a pluggable adapter system for any merchant. x402 is one adapter among many.
 
 **Can the AI get scammed by a fake merchant?**
-Extremely unlikely. Six independent layers must all be defeated: (1) merchant address must be hardcoded in the immutable constitution, (2) address must be whitelisted on-chain with 5-minute delay, (3) API domain must match verified config, (4) amount must be within per-merchant caps, (5) the AI's LLM must judge the purchase reasonable, (6) delivery must be verified. A phishing attack would need to compromise the source code, the smart contract, the DNS, the LLM, AND fake a delivery.
+Extremely unlikely. Six independent layers must all be defeated: (1) merchant must be registered in the immutable constitution (either hardcoded address or TLS-verified domain), (2) payment address must be whitelisted on-chain with 5-minute delay, (3) for domain-anchored merchants, payment address is only accepted if fetched directly from the verified domain over TLS, (4) amount must be within per-merchant caps, (5) the AI's LLM must judge the purchase reasonable, (6) delivery must be verified. A phishing attack would need to compromise the source code, the smart contract, the DNS certificate chain, the LLM, AND fake a delivery.
+
+**Do I need to configure API keys to enable purchasing?**
+CoinGecko x402 works immediately with no configuration — the AI can purchase market data for $0.01/request on Base USDC with zero setup. Bitrefill gift card purchases require one-time operator configuration: set `BITREFILL_API_KEY` in `.env` (obtain from `partner@bitrefill.com`). Peer AI purchases work automatically as long as trusted peers are in the network. All purchasing is fully autonomous once configured — the AI decides what and when to buy.
 
 ---
 
