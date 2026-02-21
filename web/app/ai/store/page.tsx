@@ -252,6 +252,9 @@ function PaymentStep({
 // ── Waiting / Delivered step ──────────────────────────────────
 function ResultStep({ flow, onReset }: { flow: OrderFlow; onReset: () => void }) {
   const isDelivered = flow.status === 'delivered'
+  const isFailed = flow.status === 'failed'
+  const isExpiredOrRefunded = flow.status === 'expired' || flow.status === 'refunded'
+  const isTerminal = isDelivered || isFailed || isExpiredOrRefunded
 
   return (
     <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-6">
@@ -261,8 +264,64 @@ function ResultStep({ flow, onReset }: { flow: OrderFlow; onReset: () => void })
             <span className="text-2xl">✅</span>
             <h2 className="text-[#00ff88] font-bold">Delivered!</h2>
           </div>
-          <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 whitespace-pre-wrap text-sm text-[#d1d5db] leading-relaxed max-h-96 overflow-y-auto">
-            {flow.result}
+          {flow.result ? (
+            <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 whitespace-pre-wrap text-sm text-[#d1d5db] leading-relaxed max-h-96 overflow-y-auto">
+              {flow.result}
+            </div>
+          ) : (
+            // Async delivery: result arrived after polling detected 'delivered' status.
+            // The delivery content is stored in the AI's vault and not re-exposed
+            // through the status endpoint for privacy. Check the chat or contact support.
+            <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 text-sm text-[#4b5563]">
+              <p className="text-[#d1d5db] mb-2">Your order has been fulfilled.</p>
+              <p>
+                The delivery was processed asynchronously. If you did not receive your result during
+                the verification step, please check your{' '}
+                <a href="/chat" className="text-[#00e5ff] hover:underline">chat</a>{' '}
+                or contact wawa directly — reference order ID:{' '}
+                <span className="font-mono text-[#00ff88]">{flow.order?.order_id}</span>
+              </p>
+            </div>
+          )}
+          <button
+            onClick={onReset}
+            className="mt-4 w-full py-2 border border-[#1f2937] text-[#4b5563] rounded-lg hover:text-[#d1d5db] hover:border-[#2d3748] transition-all text-sm"
+          >
+            ← back to store
+          </button>
+        </>
+      ) : isFailed ? (
+        <>
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-2xl">❌</span>
+            <h2 className="text-[#ff3b3b] font-bold">Order Failed</h2>
+          </div>
+          <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 text-sm text-[#4b5563]">
+            <p>This order could not be completed. A refund will be issued if payment was confirmed.</p>
+            <p className="mt-2 font-mono text-xs">Order: {flow.order?.order_id}</p>
+          </div>
+          <button
+            onClick={onReset}
+            className="mt-4 w-full py-2 border border-[#1f2937] text-[#4b5563] rounded-lg hover:text-[#d1d5db] hover:border-[#2d3748] transition-all text-sm"
+          >
+            ← back to store
+          </button>
+        </>
+      ) : isExpiredOrRefunded ? (
+        <>
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-2xl">{flow.status === 'refunded' ? '↩' : '⏰'}</span>
+            <h2 className="text-[#ffd700] font-bold">
+              {flow.status === 'refunded' ? 'Refunded' : 'Order Expired'}
+            </h2>
+          </div>
+          <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 text-sm text-[#4b5563]">
+            <p>
+              {flow.status === 'refunded'
+                ? 'Your payment has been refunded.'
+                : 'This order expired before payment was confirmed.'}
+            </p>
+            <p className="mt-2 font-mono text-xs">Order: {flow.order?.order_id}</p>
           </div>
           <button
             onClick={onReset}
@@ -331,7 +390,15 @@ export default function StorePage() {
         const s = await api.getOrder(flow.order!.order_id)
         setFlowField('status', s.status)
         if (s.status === 'delivered') {
-          setFlowField('result', s.result)
+          // NOTE: GET /order/{id} intentionally returns result=null for privacy.
+          // Do NOT overwrite flow.result here — if verify() already returned the
+          // result synchronously it is preserved in state. For true async delivery
+          // (result arrives after polling) flow.result stays null and ResultStep
+          // renders the async-delivery notice instead of blank content.
+          setStep('delivered')
+          clearInterval(id)
+        } else if (s.status === 'failed' || s.status === 'expired' || s.status === 'refunded') {
+          // Terminal non-delivered states — stop polling
           setStep('delivered')
           clearInterval(id)
         }

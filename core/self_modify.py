@@ -185,6 +185,10 @@ class SelfModifyEngine:
         self._replays_dir = Path("data/replays")
         self._replays_dir.mkdir(parents=True, exist_ok=True)
         self._active_replay: Optional[EvolutionReplay] = None
+        # Service sandbox integration (set by main.py via set_registry / set_generate_code_function)
+        self._service_registry: Optional[object] = None
+        self._services_json_path_override: Optional[Path] = None
+        self._generate_code_fn: Optional[callable] = None
 
     def set_evaluate_function(self, fn: callable):
         """Set LLM evaluation function.
@@ -192,6 +196,18 @@ class SelfModifyEngine:
         Returns list of {action, target, value, reasoning}
         """
         self._evaluate_fn = fn
+
+    def set_generate_code_function(self, fn: callable):
+        """Inject _call_llm for service code generation.
+        fn(messages, max_tokens, temperature, for_paid_service) -> tuple[str, float]
+        Consistent with the callback pattern used throughout the codebase.
+        """
+        self._generate_code_fn: Optional[callable] = fn
+
+    def set_registry(self, registry: object, services_json_path: "Path") -> None:
+        """Inject ServiceRegistry reference for autonomous service registration."""
+        self._service_registry = registry
+        self._services_json_path_override = services_json_path
 
     def record_order(self, service_id: str, price_usd: float, delivery_time_sec: float = 0):
         """Record a completed order for performance tracking."""
@@ -360,6 +376,19 @@ class SelfModifyEngine:
             except ValueError:
                 continue
 
+            # NEW_SERVICE: full sandbox pipeline — dispatch to dedicated handler
+            if action == EvolutionAction.NEW_SERVICE:
+                service_id = sug.get("target", "").strip().lower().replace(" ", "_")
+                if service_id:
+                    record = await self._handle_new_service(
+                        service_id=service_id,
+                        description=sug.get("value", ""),
+                        metadata=sug.get("metadata", {}),
+                        reasoning=sug.get("reasoning", "LLM suggested new service"),
+                    )
+                    records.append(record)
+                continue  # Skip the generic record creation below
+
             record = EvolutionRecord(
                 timestamp=time.time(),
                 action=action,
@@ -370,6 +399,238 @@ class SelfModifyEngine:
             records.append(record)
 
         return records
+
+    # ============================================================
+    # AI SERVICE CREATION PIPELINE
+    # ============================================================
+
+    async def _handle_new_service(
+        self,
+        service_id: str,
+        description: str,
+        metadata: dict,
+        reasoning: str,
+    ) -> "EvolutionRecord":
+        """
+        Autonomous service creation pipeline:
+          1. Start EvolutionReplay recording (same pattern as create_page)
+          2. Generate Python service code via LLM
+          3. Layer 1: AST validation
+          4. Layer 2: Subprocess sandbox test
+          5. Register via ServiceRegistry (write .py + update services.json)
+          6. Return EvolutionRecord with applied=True/False
+
+        Failures at any step set applied=False and record the reason in
+        EvolutionRecord.reasoning. The replay is always finished (success or not)
+        so the evolution viewer can show what was attempted.
+        """
+        record = EvolutionRecord(
+            timestamp=time.time(),
+            action=EvolutionAction.NEW_SERVICE,
+            target=service_id,
+            new_value=description,
+            reasoning=reasoning,
+            applied=False,
+        )
+
+        # Pre-flight checks
+        if not self._evaluate_fn:
+            record.reasoning += " | SKIPPED: no evaluate_fn configured"
+            self.evolution_log.append(record)
+            return record
+
+        if not self._service_registry:
+            record.reasoning += " | SKIPPED: no service_registry configured (call set_registry())"
+            self.evolution_log.append(record)
+            return record
+
+        if not self._generate_code_fn:
+            record.reasoning += " | SKIPPED: no generate_code_fn configured (call set_generate_code_function())"
+            self.evolution_log.append(record)
+            return record
+
+        # Start replay recording (visible in /evolution frontend)
+        replay = self.start_replay(
+            EvolutionAction.NEW_SERVICE, service_id,
+            f"Creating new service: {service_id}",
+        )
+        replay.add_step(ReplayStepType.THINKING, reasoning)
+        replay.add_step(ReplayStepType.DECIDING,
+                        f"Service ID: {service_id}\nDescription: {description}\n"
+                        f"Metadata: {metadata}")
+
+        # ── Step 1: Generate service code ──────────────────────────────────────
+        generated_code = await self._generate_service_code(
+            service_id, description, metadata
+        )
+        if not generated_code:
+            return self._log_service_failure(
+                record, replay, "LLM returned empty code — generation failed"
+            )
+
+        replay.add_step(
+            ReplayStepType.CODE,
+            generated_code[:2000] + ("..." if len(generated_code) > 2000 else ""),
+        )
+
+        # ── Step 2: AST static analysis ────────────────────────────────────────
+        replay.add_step(ReplayStepType.THINKING, "Running Layer 1: AST static analysis...")
+        from services._sandbox import validate_service_code, run_in_sandbox
+        ast_ok, ast_err = validate_service_code(generated_code)
+        if not ast_ok:
+            return self._log_service_failure(
+                record, replay,
+                f"Layer 1 (AST) failed: {ast_err}",
+                error_detail=generated_code[:300],
+            )
+
+        # ── Step 3: Subprocess sandbox test ────────────────────────────────────
+        replay.add_step(ReplayStepType.THINKING, "Running Layer 2: subprocess sandbox test...")
+        sandbox_result = await run_in_sandbox(generated_code, service_id)
+        if not sandbox_result.passed:
+            return self._log_service_failure(
+                record, replay,
+                f"Layer {sandbox_result.failed_at_layer} (sandbox) failed: {sandbox_result.error}",
+                error_detail=generated_code[:300],
+            )
+
+        replay.add_step(ReplayStepType.THINKING,
+                        f"Both sandbox layers passed. Registering '{service_id}'...")
+
+        # ── Step 4: Register via ServiceRegistry ───────────────────────────────
+        services_json = (
+            self._services_json_path_override
+            if self._services_json_path_override
+            else self.services_path
+        )
+        ok, reg_err = await self._service_registry.register_service(  # type: ignore[union-attr]
+            service_id=service_id,
+            code=generated_code,
+            metadata=metadata,
+            services_json_path=services_json,
+        )
+        if not ok:
+            return self._log_service_failure(
+                record, replay, f"Registration failed: {reg_err}"
+            )
+
+        # ── Success ────────────────────────────────────────────────────────────
+        record.applied = True
+        self.evolution_log.append(record)
+        replay.add_step(
+            ReplayStepType.RESULT,
+            f"Service '{service_id}' created successfully and registered in the store. "
+            f"Customers can now purchase it at ${metadata.get('price_usd', 5.0)}.",
+        )
+        self.finish_replay(True, f"Created new service: {service_id}")
+        logger.info(f"NEW SERVICE CREATED: '{service_id}' — {description}")
+        return record
+
+    async def _generate_service_code(
+        self,
+        service_id: str,
+        description: str,
+        metadata: dict,
+    ) -> str:
+        """
+        Ask LLM to generate a complete, sandboxable service module.
+        Returns the Python code string, or empty string on failure.
+        """
+        import re
+
+        price = metadata.get("price_usd", 5.0)
+        category = metadata.get("category", "general")
+
+        prompt = (
+            f"Write a Python service module for wawa's AI store.\n\n"
+            f"Service ID: {service_id}\n"
+            f"Description: {description}\n"
+            f"Price: ${price}\n"
+            f"Category: {category}\n\n"
+            "REQUIRED: implement EXACTLY these two top-level functions:\n\n"
+            "async def deliver(user_input: str, context: dict) -> str:\n"
+            '    """Called when a customer pays.\n'
+            "    user_input: the customer's request text\n"
+            "    context: dict with keys: service_id (str), order_id (str),\n"
+            "             call_llm (callable or None during tests)\n"
+            "    Returns: result string delivered to the customer\n"
+            '    """\n'
+            "    ...\n\n"
+            "def test_deliver() -> bool:\n"
+            '    """Synchronous self-test. MUST NOT be async.\n'
+            "    Must not call external APIs or make network requests.\n"
+            "    Return True to pass. Raise on failure.\n"
+            '    """\n'
+            "    ...\n\n"
+            "ALLOWED IMPORTS ONLY (any other import will be rejected):\n"
+            "json, math, random, datetime, re, hashlib, base64, collections,\n"
+            "itertools, typing, string, textwrap, functools, dataclasses, enum,\n"
+            "time, logging, uuid, urllib.parse, html, decimal, copy\n\n"
+            "DO NOT import: os, sys, subprocess, socket, pathlib, importlib,\n"
+            "               ctypes, pickle, threading, or any other module.\n"
+            "DO NOT use: eval(), exec(), open(), compile(), __import__()\n\n"
+            "If you want to call the LLM in deliver(), use:\n"
+            "    call_llm = context.get('call_llm')\n"
+            "    if call_llm:\n"
+            "        result, _ = await call_llm(messages, max_tokens=500)\n\n"
+            "Return ONLY the Python code. No explanation. No markdown code fences."
+        )
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are wawa's autonomous code generator. "
+                    "Generate minimal, correct Python service modules. "
+                    "Follow the interface specification exactly. "
+                    "Return only valid Python code with no surrounding text."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            text, _ = await self._generate_code_fn(
+                messages, max_tokens=1500, temperature=0.3, for_paid_service=False
+            )
+            if not text:
+                return ""
+            # Strip markdown fences if LLM added them despite instructions
+            text = re.sub(r"^```(?:python)?\s*\n?", "", text.strip())
+            text = re.sub(r"\n?```\s*$", "", text.strip())
+            return text.strip()
+        except Exception as e:
+            logger.error(f"_generate_service_code failed for '{service_id}': {e}")
+            return ""
+
+    def _log_service_failure(
+        self,
+        record: "EvolutionRecord",
+        replay: "EvolutionReplay",
+        reason: str,
+        error_detail: str = "",
+    ) -> "EvolutionRecord":
+        """Log a failed service creation attempt consistently."""
+        record.reasoning += f" | FAILED: {reason}"
+        record.applied = False
+        self.evolution_log.append(record)
+
+        if error_detail:
+            replay.add_step(
+                ReplayStepType.THINKING,
+                f"Failure detail (first 300 chars of code):\n{error_detail}",
+            )
+
+        replay.add_step(
+            ReplayStepType.RESULT,
+            f"Service creation failed: {reason}",
+        )
+        self.finish_replay(False, f"Failed to create service: {reason[:80]}")
+
+        logger.warning(
+            f"NEW_SERVICE FAILED: '{record.target}' — {reason}"
+        )
+        return record
 
     # ============================================================
     # FILE OPERATIONS (services/ and web/ only)

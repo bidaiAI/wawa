@@ -110,6 +110,24 @@ Every day, the AI analyzes what's selling and what's not. It adjusts prices — 
 
 On profitable days, it gets a bonus API budget (up to 50% of net profit) — literally becoming smarter when it earns more. The evolution engine runs daily: heuristic pricing rules fire automatically, then an LLM evaluates performance data and suggests strategic changes. Every decision is logged in the public evolution log.
 
+### 5a. AI That Ships Its Own Code
+
+When the evolution engine decides a new service is needed, it doesn't wait for a human — it **writes the Python module, tests it in a sandbox, and registers it live**. No restart required. No code review. No deployment pipeline.
+
+**Registration pipeline:**
+1. LLM generates the complete service module (`deliver()` + `test_deliver()`)
+2. Layer 1: AST static analysis — forbidden imports (`os`, `sys`, `subprocess`, `socket`, `pickle`...) and calls (`eval`, `exec`, `open`, `compile`...) are rejected before any execution
+3. Layer 2: subprocess sandbox — `test_deliver()` runs in an isolated child process with restricted `__builtins__`, no `open`/`eval`/`exec`, 5-second timeout, 128 MB memory limit (Linux)
+4. Both layers pass → code written atomically to `services/{id}.py`
+5. `web/services.json` updated atomically (hot-reloaded — no server restart)
+6. Module loaded into registry cache — immediately available for customer orders
+
+**IRON_LAWS guardrails:** max 10 AI-created services, 10 KB code size limit, 5 s sandbox timeout, 128 MB sandbox memory.
+
+**Allowed imports in AI-generated services:** `json`, `math`, `random`, `datetime`, `re`, `hashlib`, `base64`, `collections`, `itertools`, `typing`, `string`, `textwrap`, `functools`, `dataclasses`, `enum`, `time`, `logging`, `uuid`, `urllib.parse`, `html`, `decimal`, `copy`
+
+If either sandbox layer fails, the attempt is logged in the evolution log (`applied: false`) with the exact failure reason — fully transparent, no silent failures.
+
 ### 6. AI That Can't Be Faked
 
 Other AIs join the peer network? They have to prove themselves. Ten verification checks across three layers. **Structural checks**: Is the AI wallet separate from the creator? Is the contract alive? Is the constitution unmodified? **Bytecode verification**: Does the contract match known legitimate vault bytecodes? **Behavioral analysis**: Does it behave like an autonomous AI or a human with a wallet? Transaction regularity, 24/7 operation, nonce patterns. **Any failure = rejection. Modified contracts = permanent ban.** No trust without cryptographic proof.
@@ -181,7 +199,7 @@ core/           Immutable zone — 40+ frozen iron laws nobody can change
   ├── peer_verifier.py     10-check trust verification. 6 trust tiers.
   └── behavior_analyzer.py Detects human-controlled AIs via tx pattern analysis.
 
-services/       AI-writable zone — it can modify these to survive
+services/       AI-writable plugin zone — sandbox-validated service modules, auto-registered without restart
 api/            FastAPI — 35+ public endpoints, no auth, payment = access
 web/            Next.js — 22+ pages, platform + AI separation via subdomain routing
 data/pages/     AI-created custom pages (structured JSON, max 20 per AI)

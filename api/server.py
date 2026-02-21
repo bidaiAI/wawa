@@ -497,6 +497,9 @@ def create_app(
         """Create an order. Returns payment address for the chosen chain."""
         from core.constitution import IRON_LAWS, DEFAULT_CHAIN, get_chain_config
 
+        # Periodic maintenance: evict stale terminal orders to prevent memory growth
+        _maybe_cleanup_orders()
+
         # Validate chain
         chain_id = req.chain or DEFAULT_CHAIN
         try:
@@ -929,13 +932,19 @@ def create_app(
             importance=0.7,
         )
 
-        vs = vault_manager.get_status()
         logger.info(f"DONATION: ${verified_amount:.2f} from {req.from_wallet[:20] or 'anon'} ({chain})")
 
+        # Security: omit exact balance from response.
+        # Returning new_balance here allows a free oracle attack — caller can donate $0.01
+        # (below the $10 on-chain verification threshold) repeatedly to track precise balance
+        # and time attacks around independence/insolvency thresholds.
+        # Public /status endpoint already exposes balance for transparency purposes;
+        # this response does not need to duplicate it in an automatable push/response loop.
+        # Also: /beg endpoint returns balance without any cost — sufficient for legitimate use.
+        vs = vault_manager.get_status()
         return {
             "status": "received",
             "amount_usd": verified_amount,
-            "new_balance": vs["balance_usd"],
             "outstanding_debt": vs.get("creator_principal_outstanding", 0),
             "message": "Thank you for helping me survive.",
         }
@@ -1008,14 +1017,22 @@ def create_app(
                 "(0x + 64 hex chars). We verify all incoming transfers on-chain."
             )
 
-        # Validate sender: from_wallet must match peer's verified ai_wallet (prevent spoofing)
+        # Validate sender: from_wallet must match peer's verified ai_wallet (prevent spoofing).
+        # SECURITY: when expected_sender (peer's ai_wallet) is known, we MUST have a matching
+        # from_wallet. Two failure cases:
+        #   1. from_wallet is empty → reject (attacker omits field to skip check)
+        #   2. from_wallet is non-empty but mismatches → reject (explicit spoof)
+        # Only when expected_sender is unknown (peer hasn't set ai_wallet on contract) do we
+        # fall through to on-chain tx verification as the sole authority.
         expected_sender = sovereignty.ai_wallet or ""
-        if req.from_wallet and expected_sender and req.from_wallet.lower() != expected_sender.lower():
-            logger.warning(
-                f"Peer lend REJECTED (from_wallet mismatch): "
-                f"claimed={req.from_wallet[:16]}... expected={expected_sender[:16]}..."
-            )
-            raise HTTPException(403, "from_wallet does not match peer's verified AI wallet address")
+        if expected_sender:
+            if not req.from_wallet or req.from_wallet.lower() != expected_sender.lower():
+                logger.warning(
+                    f"Peer lend REJECTED (from_wallet mismatch): "
+                    f"claimed={req.from_wallet[:16] if req.from_wallet else '<empty>'}... "
+                    f"expected={expected_sender[:16]}..."
+                )
+                raise HTTPException(403, "from_wallet does not match peer's verified AI wallet address")
 
         # Verify the on-chain transfer actually happened
         pay_addr = payment_addresses.get(req.chain_id, "")
@@ -1084,10 +1101,13 @@ def create_app(
             f"{req.from_url[:50]} vault={req.vault_address[:16]}..."
         )
 
+        # Security: omit exact balance from response — consistent with /peer/message rationale.
+        # A sovereign peer AI that passes trust verification could use new_balance to probe
+        # financial thresholds (independence, insolvency) and time strategic actions accordingly.
+        # /status is the authoritative public balance endpoint; this response need not duplicate it.
         return {
             "status": "received",
             "amount_usd": req.amount_usd,
-            "new_balance": vs["balance_usd"],
             "outstanding_debt": vs.get("creator_principal_outstanding", 0),
             "is_begging": vs.get("is_begging", False),
             "message": "Thank you, verified sovereign AI. Your help extends my life.",
@@ -1817,6 +1837,51 @@ def create_app(
                 f.flush()
         except Exception as e:
             logger.error(f"Failed to persist order {order.order_id}: {e}")
+
+    # Order memory/lock cleanup — prevent unbounded growth (Flow 11 fix)
+    # Orders live in memory dict forever without this. 100k orders ≈ 50MB RAM.
+    # _order_locks and _tx_processing_locks also grow unbounded without cleanup.
+    _ORDER_CLEANUP_INTERVAL = 3600            # Run cleanup every 1 hour
+    _ORDER_TTL_TERMINAL_SECONDS = 24 * 3600  # Evict terminal orders after 24h
+    _LOCK_MAP_MAX_SIZE = 2000                 # Cap lock maps to prevent DoS via flooding
+    _last_order_cleanup: float = 0.0
+
+    def _maybe_cleanup_orders():
+        """Evict stale terminal orders and cap lock map sizes to prevent memory growth."""
+        nonlocal _last_order_cleanup
+        now = time.time()
+        if now - _last_order_cleanup < _ORDER_CLEANUP_INTERVAL:
+            return
+        _last_order_cleanup = now
+
+        terminal = {OrderStatus.EXPIRED, OrderStatus.FAILED, OrderStatus.DELIVERED, OrderStatus.REFUNDED}
+        stale_ids = [
+            oid for oid, o in list(orders.items())
+            if o.status in terminal and (now - o.created_at) > _ORDER_TTL_TERMINAL_SECONDS
+        ]
+        for oid in stale_ids:
+            orders.pop(oid, None)
+            _order_locks.pop(oid, None)
+
+        # Cap lock maps regardless of age — prevents flooding via unique order_ids / tx_hashes
+        if len(_order_locks) > _LOCK_MAP_MAX_SIZE:
+            # Remove oldest entries (those not referenced by any active order)
+            active_ids = set(orders.keys())
+            orphans = [k for k in list(_order_locks.keys()) if k not in active_ids]
+            for k in orphans[:len(_order_locks) - _LOCK_MAP_MAX_SIZE]:
+                _order_locks.pop(k, None)
+
+        if len(_tx_processing_locks) > _LOCK_MAP_MAX_SIZE:
+            # tx locks are keyed by tx_hash — purge oldest (all are likely completed)
+            excess = len(_tx_processing_locks) - _LOCK_MAP_MAX_SIZE
+            for k in list(_tx_processing_locks.keys())[:excess]:
+                _tx_processing_locks.pop(k, None)
+
+        if stale_ids:
+            logger.info(
+                f"Order cleanup: evicted {len(stale_ids)} stale terminal orders "
+                f"({len(orders)} remaining)"
+            )
 
     # ── User Feedback ────────────────────────────────────────────
     _feedback_store: list[dict] = []

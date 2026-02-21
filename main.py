@@ -55,6 +55,7 @@ from core.memory import HierarchicalMemory
 from core.chat_router import ChatRouter
 from services.tarot import TarotService
 from services.token_analysis import TokenAnalysisService
+from services._registry import ServiceRegistry
 from core.governance import Governance, SuggestionType
 from core.token_filter import TokenFilter
 from core.self_modify import SelfModifyEngine
@@ -76,6 +77,7 @@ memory = HierarchicalMemory()
 chat_router = ChatRouter()
 tarot = TarotService()
 token_analysis = TokenAnalysisService()
+service_registry = ServiceRegistry()   # Dynamic plugin loader for AI-created services
 governance = Governance()
 token_filter = TokenFilter()
 self_modify = SelfModifyEngine()
@@ -649,7 +651,39 @@ async def _evolution_evaluate_fn(perf_data: dict, services: dict) -> list[dict]:
 
 
 async def _deliver_order(order: Order) -> str:
-    """Deliver a paid order using the appropriate service."""
+    """
+    Deliver a paid order using the appropriate service handler.
+
+    Dispatch priority:
+    1. ServiceRegistry  — AI-created plugin modules (services/*.py with deliver())
+    2. Built-in services — hardcoded handlers (tarot, token_analysis, etc.)
+    3. Generic LLM fallback — for custom / unknown service_ids
+
+    This design preserves full backward compatibility with existing services
+    while enabling AI to autonomously register and activate new ones.
+    """
+    # ── Priority 1: AI-created plugin services ────────────────────────────────
+    plugin_module = await service_registry.get_module(order.service_id)
+    if plugin_module is not None:
+        context = {
+            "service_id": order.service_id,
+            "order_id": order.order_id,
+            "call_llm": _call_llm,   # Inject LLM callback; may be None in tests
+        }
+        try:
+            result = await plugin_module.deliver(order.user_input, context)
+            return result or "Service completed. No output was returned."
+        except Exception as e:
+            logger.error(
+                f"Plugin service '{order.service_id}' delivery failed: "
+                f"{type(e).__name__}: {e}"
+            )
+            return (
+                f"Service delivery encountered an error. "
+                f"Your payment will be refunded. ({type(e).__name__})"
+            )
+
+    # ── Priority 2: Built-in hardcoded services ───────────────────────────────
     if order.service_id == "tarot":
         spread = await tarot.perform_reading(order.user_input, order.spread_type)
         if spread.interpretation:
@@ -674,7 +708,7 @@ async def _deliver_order(order: Order) -> str:
     if order.service_id == "code_review":
         return await _deliver_code_review(order.user_input)
 
-    # All other services (custom, etc.): use big model
+    # ── Priority 3: Generic LLM fallback (custom / unknown service_ids) ───────
     result, cost = await _big_llm_fn(order.service_id, order.user_input)
     return result
 
@@ -1196,13 +1230,20 @@ async def _heartbeat_loop():
 
                 if chain_confirmed:
                     logger.critical("INSOLVENCY DETECTED AND CONFIRMED — triggering liquidation and death")
-                    vault.trigger_insolvency_death()
 
-                    # Execute on-chain liquidation (transfer all funds to creator)
+                    # CEI ORDER FIX: Execute on-chain TX FIRST, then update Python state.
+                    # Rationale: if a donation arrives between the Python insolvency check
+                    # and the chain call, the contract's internal require()
+                    # ("not insolvent: balance covers debt") will REVERT, and the tx.success
+                    # will be False. In that case we must NOT mark the AI dead in Python —
+                    # doing so causes a permanent phantom death with the contract still alive.
+                    # Only set Python is_alive=False after the chain confirms liquidation.
+                    chain_tx_ok = False
                     if chain_executor._initialized:
                         try:
                             tx = await chain_executor.trigger_on_chain_insolvency()
                             if tx.success:
+                                chain_tx_ok = True
                                 logger.critical(f"ON-CHAIN LIQUIDATION: tx={tx.tx_hash} ({tx.chain})")
                                 memory.add(
                                     f"Insolvency liquidation executed on-chain: tx={tx.tx_hash} ({tx.chain})",
@@ -1211,21 +1252,31 @@ async def _heartbeat_loop():
                             else:
                                 logger.error(
                                     f"On-chain liquidation FAILED: {tx.error}. "
-                                    f"Creator must call triggerInsolvencyDeath() manually."
+                                    f"A donation may have arrived in the race window — "
+                                    f"deferring death to next heartbeat check."
                                 )
                                 memory.add(
                                     f"On-chain liquidation failed: {tx.error}. "
-                                    f"Creator must call triggerInsolvencyDeath() manually on the contract.",
-                                    source="financial", importance=1.0,
+                                    f"Will re-check insolvency next heartbeat.",
+                                    source="financial", importance=0.9,
                                 )
                         except Exception as e:
-                            logger.error(f"On-chain insolvency trigger exception: {e}")
+                            logger.error(f"On-chain insolvency trigger exception: {e}. Deferring death.")
+                    else:
+                        # No chain executor — trust Python (dev/test mode); proceed directly
+                        chain_tx_ok = True
 
-                    # CRITICAL: Persist death state before exiting heartbeat
-                    # Without this, a restart would load stale is_alive=True state
-                    vault.save_state()
-                    memory.save_to_disk()
-                    break  # Dead, exit heartbeat
+                    if chain_tx_ok:
+                        # Chain confirmed liquidation — now safe to update Python state
+                        vault.trigger_insolvency_death()
+
+                        # CRITICAL: Persist death state before exiting heartbeat
+                        # Without this, a restart would load stale is_alive=True state
+                        vault.save_state()
+                        memory.save_to_disk()
+                        break  # Dead, exit heartbeat
+                    # else: chain tx failed (e.g. donation arrived) — loop continues,
+                    # next heartbeat will re-check insolvency with updated balance
 
             # ---- AUTO-BEG (7 days before insolvency deadline) ----
             status = vault.get_status()
@@ -1372,6 +1423,11 @@ async def lifespan(app):
 
     # Self-modification engine
     self_modify.set_evaluate_function(_evolution_evaluate_fn)
+    self_modify.set_generate_code_function(_call_llm)
+    self_modify.set_registry(
+        service_registry,
+        Path(__file__).resolve().parent / "web" / "services.json",
+    )
 
     # Initialize tweepy once at startup (not per-tweet)
     _init_tweepy()

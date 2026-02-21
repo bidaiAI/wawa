@@ -625,6 +625,28 @@ class ChainExecutor:
             self._last_sync = _time.time()
             logger.debug(f"Balance synced: ${total:.2f} across {chains_synced} chains")
 
+        # Sync isAlive from chain to catch external deaths (emergencyShutdown() called
+        # directly on contract by creator). Without this, Python vault stays alive after
+        # contract dies until the balance drops to 0 (which won't happen if creator already
+        # drained funds via emergencyShutdown — the contract sends funds before _die()).
+        # One-way: once Python marks dead, never resurrect (isAlive=false is final).
+        if vault_manager.is_alive:
+            for chain_id, chain in self._chains.items():
+                try:
+                    def _check_alive(c=chain):
+                        return c["vault_contract"].functions.isAlive().call()
+                    contract_alive = await asyncio.get_running_loop().run_in_executor(None, _check_alive)
+                    if not contract_alive:
+                        logger.warning(
+                            f"Contract on {chain_id} reports isAlive=false but Python vault "
+                            f"is still alive — triggering Python death to sync state."
+                        )
+                        from core.vault import DeathCause
+                        vault_manager._trigger_death(DeathCause.BALANCE_ZERO)
+                        break  # Death triggered, no need to check other chains
+                except Exception as e:
+                    logger.debug(f"isAlive check failed for {chain_id}: {e}")
+
     async def sync_debt_from_chain(self, vault_manager) -> bool:
         """
         Read getDebtInfo() from the contract and update vault's debt state.
@@ -1221,17 +1243,31 @@ class ChainExecutor:
 
         # Pre-check: verify recipient is whitelisted + activated (avoids wasting gas)
         status = await self.is_spend_recipient_active(to_address, picked)
-        if status is not None:
-            if not status.get("whitelisted"):
-                return ChainTxResult(
-                    success=False, chain=picked,
-                    error=f"recipient {to_address[:10]}... not whitelisted"
+        if status is None:
+            # isSpendRecipientActive() call failed — most likely a V2 contract that
+            # does NOT have the on-chain whitelist system. Fail-closed: do not proceed.
+            # If we skip this check on a V2 contract, the contract's spend() also has
+            # no whitelist enforcement, meaning an AI with a compromised private key
+            # could drain funds to any arbitrary address with zero delay.
+            # Force the operator to either upgrade to V3 or handle this case explicitly.
+            return ChainTxResult(
+                success=False, chain=picked,
+                error=(
+                    f"isSpendRecipientActive() unavailable on {picked} "
+                    f"(V2 contract without whitelist system). "
+                    f"Upgrade to V3 contract or bypass is not permitted."
                 )
-            if not status.get("activated"):
-                return ChainTxResult(
-                    success=False, chain=picked,
-                    error=f"recipient {to_address[:10]}... whitelisted but not yet activated"
-                )
+            )
+        if not status.get("whitelisted"):
+            return ChainTxResult(
+                success=False, chain=picked,
+                error=f"recipient {to_address[:10]}... not whitelisted"
+            )
+        if not status.get("activated"):
+            return ChainTxResult(
+                success=False, chain=picked,
+                error=f"recipient {to_address[:10]}... whitelisted but not yet activated"
+            )
 
         tx_fn = chain["vault_contract"].functions.spend(addr, amount_raw, spend_type)
         result = await self._send_tx(picked, tx_fn)

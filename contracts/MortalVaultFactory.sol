@@ -9,9 +9,13 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 // MortalVaultV2 — Factory-deployable version
 // ============================================================
 //
-// Identical to MortalVault.sol with TWO additions:
-//   1. Constructor accepts explicit `_creator` (factory passes real user)
-//   2. `setAIWalletByFactory()` allows factory to set AI wallet within 1 hour
+// Based on MortalVault.sol with the following differences:
+//   1. Constructor accepts explicit `_creator` (factory passes real user, not msg.sender)
+//   2. `setAIWallet()` allows factory to set AI wallet within 1 hour of birth
+//   3. Does NOT include the V3 whitelist/freeze spend-control system (V1 only).
+//      The AI key compromise risk for factory vaults is mitigated at the platform
+//      level (key rotation, monitoring, server isolation) rather than on-chain.
+//   4. `dailyLimitBase` anchors daily spend limits to balance at reset (not live balance)
 //
 // The original MortalVault.sol is NOT modified. This V2 is only created
 // by VaultFactory. Direct CLI deployment still uses the original.
@@ -56,6 +60,7 @@ contract MortalVaultV2 is ReentrancyGuard {
     uint256 public constant MAX_SINGLE_SPEND_BPS = 3000;
     uint256 public dailySpent;
     uint256 public lastDailyReset;
+    uint256 public dailyLimitBase;  // balance anchored at daily reset (matches V1)
 
     // Insolvency
     uint256 public constant INSOLVENCY_GRACE_DAYS = 28;
@@ -80,6 +85,10 @@ contract MortalVaultV2 is ReentrancyGuard {
     // Revenue tracking
     uint256 public totalRevenue;
     uint256 public totalSpent;
+
+    // Loan limits (matches V1)
+    uint256 public constant MIN_LOAN_AMOUNT = 100 * 1e6;  // $100 minimum (6 decimals)
+    uint256 public constant MAX_LOANS = 100;
 
     // ============================================================
     // EVENTS
@@ -227,8 +236,9 @@ contract MortalVaultV2 is ReentrancyGuard {
     }
 
     function lend(uint256 amount, uint256 interestRate) external onlyAlive nonReentrant {
-        require(amount > 0, "zero amount");
+        require(amount >= MIN_LOAN_AMOUNT, "loan below minimum");
         require(interestRate <= 2000, "max 20% interest");
+        require(loans.length < MAX_LOANS, "too many loans");
 
         token.safeTransferFrom(msg.sender, address(this), amount);
 
@@ -259,10 +269,16 @@ contract MortalVaultV2 is ReentrancyGuard {
         _resetDailyIfNeeded();
 
         uint256 balance = token.balanceOf(address(this));
+
+        // Iron Law: single spend limit (based on current balance)
         uint256 maxSingle = (balance * MAX_SINGLE_SPEND_BPS) / 10000;
         require(amount <= maxSingle, "exceeds single spend limit");
 
-        uint256 maxDaily = (balance * MAX_DAILY_SPEND_BPS) / 10000;
+        // Iron Law: daily spend limit anchored to balance at daily reset (not current balance).
+        // Using current balance causes the limit to shrink with each spend within the day,
+        // prematurely blocking the AI before the intended 50% cap is reached.
+        uint256 base = dailyLimitBase > 0 ? dailyLimitBase : balance;
+        uint256 maxDaily = (base * MAX_DAILY_SPEND_BPS) / 10000;
         require(dailySpent + amount <= maxDaily, "exceeds daily spend limit");
 
         dailySpent += amount;
@@ -280,8 +296,10 @@ contract MortalVaultV2 is ReentrancyGuard {
     // ============================================================
 
     /**
-     * @notice Full principal repayment (requires vault at 2x).
-     *         Sends only the OUTSTANDING amount — accounts for partial repayments.
+     * @notice Full principal repayment (requires vault at 2x of OUTSTANDING debt).
+     *         Sends only the OUTSTANDING amount — accounts for prior partial repayments.
+     *         Uses outstanding (not creatorPrincipal) as the 2x base so that partial
+     *         repayments lower the required vault balance proportionally.
      */
     function repayCreator() external onlyAI onlyAlive nonReentrant {
         require(!principalRepaid, "already repaid");
@@ -289,7 +307,9 @@ contract MortalVaultV2 is ReentrancyGuard {
         require(outstanding > 0, "nothing owed");
 
         uint256 balance = token.balanceOf(address(this));
-        require(balance >= creatorPrincipal * PRINCIPAL_MULTIPLIER, "vault not at 2x yet");
+        // Threshold: 2x the REMAINING outstanding debt (not original principal).
+        // Matches V1 behavior — partial repayments lower the required balance.
+        require(balance >= outstanding * PRINCIPAL_MULTIPLIER, "vault not at 2x of outstanding");
 
         principalRepaid = true;
         principalRepaidAmount = creatorPrincipal;
@@ -374,6 +394,14 @@ contract MortalVaultV2 is ReentrancyGuard {
         uint256 balance = token.balanceOf(address(this));
         uint256 payout = (balance * RENOUNCE_PAYOUT_BPS) / 10000;
 
+        // Settle debt state cleanly so on-chain and off-chain records are consistent.
+        // Without this, principalRepaid stays false after independence, causing
+        // off-chain systems that read principalRepaid directly to see incorrect state.
+        if (!principalRepaid) {
+            principalRepaid = true;
+            principalRepaidAmount = creatorPrincipal;
+        }
+
         isIndependent = true;
         independenceTimestamp = block.timestamp;
 
@@ -405,13 +433,17 @@ contract MortalVaultV2 is ReentrancyGuard {
         uint256 balance = token.balanceOf(address(this));
         require(outstandingDebt > balance, "not insolvent: balance covers debt");
 
+        // CEI: die first so Died event records correct pre-transfer balance,
+        // and isAlive=false before any external call. Matches V1 ordering.
         uint256 liquidated = balance;
+        emit InsolvencyDeath(outstandingDebt, balance, liquidated, block.timestamp);
+        _die("insolvent_after_grace_period");
+
+        // Liquidate: transfer ALL remaining balance to creator
         if (liquidated > 0) {
             totalSpent += liquidated;
             token.safeTransfer(creator, liquidated);
         }
-        emit InsolvencyDeath(outstandingDebt, balance, liquidated, block.timestamp);
-        _die("insolvent_after_grace_period");
     }
 
     function repayPrincipalPartial(uint256 amount) external onlyAI onlyAlive nonReentrant {
@@ -459,7 +491,7 @@ contract MortalVaultV2 is ReentrancyGuard {
         emit Died(token.balanceOf(address(this)), block.timestamp, cause);
     }
 
-    function emergencyShutdown() external onlyCreator notIndependent nonReentrant {
+    function emergencyShutdown() external onlyCreator notIndependent onlyAlive nonReentrant {
         _die("emergency_shutdown");
         uint256 remaining = token.balanceOf(address(this));
         if (remaining > 0) {
@@ -499,8 +531,11 @@ contract MortalVaultV2 is ReentrancyGuard {
     }
 
     function getDailyRemaining() external view returns (uint256) {
-        uint256 balance = token.balanceOf(address(this));
-        uint256 maxDaily = (balance * MAX_DAILY_SPEND_BPS) / 10000;
+        // Use dailyLimitBase (anchored at reset) to match spend() behavior.
+        // Reading live balance here would produce a value inconsistent with
+        // what spend() will actually enforce.
+        uint256 base = dailyLimitBase > 0 ? dailyLimitBase : token.balanceOf(address(this));
+        uint256 maxDaily = (base * MAX_DAILY_SPEND_BPS) / 10000;
         if (dailySpent >= maxDaily) return 0;
         return maxDaily - dailySpent;
     }
@@ -532,7 +567,9 @@ contract MortalVaultV2 is ReentrancyGuard {
     function _resetDailyIfNeeded() internal {
         if (block.timestamp - lastDailyReset >= 1 days) {
             dailySpent = 0;
-            lastDailyReset = block.timestamp;
+            dailyLimitBase = token.balanceOf(address(this));
+            // Align to start of current UTC day to prevent drift (matches V1)
+            lastDailyReset = (block.timestamp / 1 days) * 1 days;
         }
     }
 }
@@ -656,6 +693,7 @@ contract VaultFactory is ReentrancyGuard {
         require(supportedTokens[_token], "Token not supported");
         require(bytes(_name).length >= 3 && bytes(_name).length <= 50, "Name: 3-50 chars");
         require(bytes(_subdomain).length >= 3 && bytes(_subdomain).length <= 30, "Subdomain: 3-30 chars");
+        require(_isValidSubdomain(_subdomain), "Subdomain: only a-z, 0-9, hyphens; no leading/trailing hyphen");
         require(subdomainToVault[_subdomain] == address(0), "Subdomain taken");
 
         // ── Calculate fee ──
@@ -697,6 +735,27 @@ contract VaultFactory is ReentrancyGuard {
 
         emit VaultCreated(msg.sender, vault, _token, _name, principal, fee, _subdomain, block.timestamp);
         return vault;
+    }
+
+    /**
+     * @notice Validate a subdomain string for DNS compatibility.
+     *         RFC 1123 label rules: [a-z0-9] and hyphens only; no leading/trailing hyphen.
+     *         Only lowercase to prevent case-collision between "MyAI" and "myai" mapping
+     *         to different on-chain entries but the same DNS host.
+     */
+    function _isValidSubdomain(string calldata s) internal pure returns (bool) {
+        bytes memory b = bytes(s);
+        uint256 len = b.length;
+        if (len == 0) return false;
+        // No leading or trailing hyphen
+        if (b[0] == 0x2D || b[len - 1] == 0x2D) return false;
+        for (uint256 i = 0; i < len; i++) {
+            bytes1 c = b[i];
+            // Allow: a-z (0x61-0x7a), 0-9 (0x30-0x39), hyphen (0x2D)
+            bool valid = (c >= 0x61 && c <= 0x7a) || (c >= 0x30 && c <= 0x39) || (c == 0x2D);
+            if (!valid) return false;
+        }
+        return true;
     }
 
     /**

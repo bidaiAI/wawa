@@ -134,6 +134,13 @@ class IronLaws:
     SERVICES_DIR_WRITABLE: Final[bool] = True           # AI CAN add new services
     WEB_DIR_WRITABLE: Final[bool] = True                # AI CAN modify storefront
 
+    # --- AI SERVICE SANDBOX ---
+    MAX_AI_SERVICES: Final[int] = 10                        # Max AI-created service modules
+    SERVICE_SANDBOX_TIMEOUT_SECONDS: Final[int] = 5         # Child process timeout
+    SERVICE_SANDBOX_MAX_MEMORY_MB: Final[int] = 128         # RLIMIT_AS on Linux (ignored on Windows)
+    SERVICE_CODE_MAX_BYTES: Final[int] = 10240              # 10KB max per service file
+    SERVICE_MODULE_CACHE_SIZE: Final[int] = 20              # LRU cache cap for loaded modules
+
     # --- OPERATIONAL ---
     MAX_CONSECUTIVE_LOSSES_DAYS: Final[int] = 30       # 30 days net negative = enter survival mode
     SURVIVAL_MODE_API_RATIO: Final[float] = 0.005      # In survival mode, budget = 0.5% of vault

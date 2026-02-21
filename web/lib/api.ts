@@ -138,7 +138,7 @@ export interface OrderResponse {
 
 export interface OrderStatus {
   order_id: string
-  status: 'pending_payment' | 'payment_confirmed' | 'processing' | 'delivered' | 'refunded' | 'expired'
+  status: 'pending_payment' | 'payment_confirmed' | 'processing' | 'delivered' | 'failed' | 'refunded' | 'expired'
   service_id: string
   price_usd: number
   result: string | null

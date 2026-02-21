@@ -45,6 +45,18 @@ contracts/cache/
 private_key*
 seed_phrase*
 
+# -----------------------------------------------------------------------------
+# Cursor / Claude local config — DO NOT COMMIT (added 2025-02; see docs/LOCAL_ONLY_FILES.md)
+# Reason: .cursorrules may contain machine paths (e.g. E:\AIDAO) and internal
+# project names; .claude/ is editor/session data. Rule *content* that matters
+# for contributors lives in CONTRIBUTING or docs, not in these tool-specific files.
+# Keeping them local avoids leaking internal setup and keeps the public repo clean.
+# -----------------------------------------------------------------------------
+.cursorrules
+.cursor/
+.claude/
+CLAUDE.md
+
 # Strategy & process docs (keep local only, never push)
 # Code = open source. Strategy = private.
 ANTI_COPY_PROMOTION_STRATEGY.md
@@ -61,3 +73,11 @@ AI_NAMING_AND_IDENTITY_SYSTEM.md
 USER_REQUIREMENTS_ADDRESSED.md
 SYSTEM_SELFCHECK_REPORT.md
 PEER_NETWORK_IMPL.md
+
+# -----------------------------------------------------------------------------
+# Private repository boundary — mortal_platform/ will move to bidaiAI/mortal-platform
+# Never commit platform internals (key_manager, fee_tracker, orchestrator, etc.)
+# to the public wawa repo.
+# -----------------------------------------------------------------------------
+mortal_platform/
+web/app/platform/admin/
