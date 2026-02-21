@@ -59,6 +59,11 @@ Peer endpoints require on-chain sovereignty verification.
 import os
 import re
 import time
+
+# Compiled once at module load — zero per-request compilation cost.
+# Matches a 64-char hex string (Ethereum private key format).
+# Used for output-side secret redaction in chat and order delivery.
+_SECRET_HEX64 = re.compile(r'(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])')
 import uuid
 import json
 import asyncio
@@ -524,14 +529,13 @@ def create_app(
             # Even if a jailbreak somehow succeeded and the LLM "knew" a secret,
             # this filter scrubs the output before it reaches the user.
             # Pattern: 64-char hex string (Ethereum private key format)
-            _HEX64 = re.compile(r'(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])')
-            if _HEX64.search(reply_text):
+            if _SECRET_HEX64.search(reply_text):
                 logger.critical(
                     f"OUTPUT REDACTION TRIGGERED — 64-char hex in chat reply "
                     f"(session={session_id}, layer={msg.layer.value}). "
                     f"Possible jailbreak. Input snippet: {req.message[:120]!r}"
                 )
-                reply_text = _HEX64.sub('[redacted]', reply_text)
+                reply_text = _SECRET_HEX64.sub('[redacted]', reply_text)
 
             return ChatResponse(
                 reply=reply_text,
@@ -765,13 +769,12 @@ def create_app(
             if deliver_fn:
                 result = await asyncio.wait_for(deliver_fn(order), timeout=120.0)
                 # Output-side secret redaction on paid service delivery
-                _HEX64_SVC = re.compile(r'(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])')
-                if _HEX64_SVC.search(result):
+                if _SECRET_HEX64.search(result):
                     logger.critical(
                         f"OUTPUT REDACTION on order delivery "
                         f"(order={order.order_id}, service={order.service_id})"
                     )
-                    result = _HEX64_SVC.sub('[redacted]', result)
+                    result = _SECRET_HEX64.sub('[redacted]', result)
                 order.result = result
                 order.status = OrderStatus.DELIVERED
                 order.delivered_at = time.time()
