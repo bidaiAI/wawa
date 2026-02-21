@@ -187,6 +187,9 @@ contract MortalVault is ReentrancyGuard {
     event MigrationCompleted(address indexed oldWallet, address indexed newWallet);
     event MigrationCancelled();
 
+    // Native token rescue (ETH/BNB accidentally sent to vault)
+    event NativeTokenRescued(address indexed to, uint256 amount);
+
     // ============================================================
     // MODIFIERS
     // ============================================================
@@ -948,6 +951,53 @@ contract MortalVault is ReentrancyGuard {
         _initiatedAt = migrationInitiatedAt;
         _completesAt = migrationInitiatedAt > 0 ? migrationInitiatedAt + MIGRATION_DELAY : 0;
         _isPending = pendingAIWallet != address(0);
+    }
+
+    // ============================================================
+    // NATIVE TOKEN RESCUE — recovers accidentally sent ETH / BNB
+    // ============================================================
+
+    /**
+     * @notice Rescue native tokens (ETH on Base, BNB on BSC) accidentally sent
+     *         to this vault address.
+     *
+     *         The vault only tracks ERC-20 balances (USDC/USDT). Native ETH or BNB
+     *         sent directly to this address would otherwise be permanently locked —
+     *         there is no automatic tracking of native currency, no conversion, and
+     *         no `receive()` function that accepts it gracefully.
+     *
+     *         This function lets the creator recover those funds to prevent permanent loss.
+     *         Callable only pre-independence (after independence, creator has no power).
+     *
+     * @param to     Recipient address for rescued funds
+     * @param amount Amount of native token (in wei) to rescue
+     */
+    function rescueNativeToken(address payable to, uint256 amount)
+        external
+        onlyCreator
+        notIndependent
+        nonReentrant
+    {
+        require(to != address(0), "zero address");
+        require(amount > 0, "zero amount");
+        require(address(this).balance >= amount, "insufficient native balance");
+        (bool ok, ) = to.call{value: amount}("");
+        require(ok, "native transfer failed");
+        emit NativeTokenRescued(to, amount);
+    }
+
+    /**
+     * @notice Explicit rejection of native token deposits.
+     *
+     *         The vault is an ERC-20-only contract. USDC/USDT are the only
+     *         accepted currencies. This reverts any direct ETH/BNB transfer
+     *         with a clear message instead of silently locking funds.
+     *
+     *         If ETH/BNB somehow arrives despite this guard (force-send via
+     *         selfdestruct), the creator can recover it via rescueNativeToken().
+     */
+    receive() external payable {
+        revert("Vault only accepts USDC/USDT — use donate() or receivePayment()");
     }
 
     // ============================================================

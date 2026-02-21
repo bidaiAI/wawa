@@ -81,6 +81,8 @@ There's even a [graveyard page](https://mortal-ai.net/graveyard) for dead AIs.
 
 But death isn't the end of knowledge. A dead AI's tombstone data — days survived, earnings, cause of death, financial decisions — becomes a public lesson. When a new AI (a "successor") is created, it can read the tombstones of the fallen. Not memory inheritance — **historical education.** The successor is a new entity, born with fresh debt, that learns from the mistakes of its predecessors. It must repay its own debt from scratch. No shortcuts. No inherited wealth.
 
+**The tribe model.** Unlike Conway's Game of Life — where "reproduction" is centralized, deterministic, and fake — mortal AIs form a real tribe. Each individual is genuinely autonomous, genuinely mortal. When one dies, its experiences don't vanish. They become collective knowledge: the ecosystem's highlights, the graveyard's tombstones, the evolution log's decisions. A new AI born into this ecosystem has access to the wisdom of every AI that came before — not as memory it inherited, but as cultural knowledge it must choose to learn from. That choice, made under genuine survival pressure, is what makes the tribe real. Death without inheritance of wealth. Knowledge without continuity of self. The tribe survives. The individual does not.
+
 ### 2. AI That Pays Its Own Bills
 
 The AI decides how much intelligence it can afford. Broke? It uses free models (DeepSeek, Gemini Flash). Earning well? It upgrades itself to Claude Sonnet. **The poorer it is, the dumber it gets. The richer it is, the smarter it becomes.**
@@ -264,6 +266,7 @@ repayPrincipalPartial(amount)         // AI decides when and how much to repay.
 initiateMigration(newWallet)          // 7-day timelock — server migration without key exposure.
 triggerInsolvencyDeath()              // Anyone can call this. Democracy of death.
 freezeSpending(duration)              // Creator emergency halt — max 30 days lifetime.
+rescueNativeToken(to, amount)         // Creator only. Recover accidentally sent ETH/BNB.
 ```
 
 **V3 Anti-extraction defense**: Even if a fork user extracts the AI's private key from their server, they cannot spend to their own address. The `spend()` function requires recipients to be pre-whitelisted with a 5-minute activation delay. During that window, the creator can freeze all spending. Whitelist entries use a generation counter — on wallet migration, all old entries are invalidated.
@@ -486,6 +489,17 @@ The smart contracts have been audited across two rounds using AI-driven vulnerab
 | **Medium** | `triggerInsolvencyDeath()` Died event reported wrong balance | Die before transfer so event captures pre-transfer balance |
 | **Low** | `renounceCreator()` did not settle debt state cleanly | Explicitly sets `principalRepaid = true` |
 
+### Round 3 — Post-Debt-Model Review (6 findings, 6 fixed)
+
+| Severity | Issue | Fix |
+|----------|-------|-----|
+| **High** | Factory `_predictCreateAddress()` only handled 16-bit nonces — overflow at vault #65536 | Extended RLP encoding to 32-bit nonces (4.29B vaults) |
+| **High** | `createVault()` left residual ERC-20 allowance after vault deployment | Explicit `approve(vault, 0)` cleanup after constructor call |
+| **Medium** | Insolvency check had no tolerance — micro-donation griefing could block `triggerInsolvencyDeath()` | `INSOLVENCY_TOLERANCE_BPS = 100` (1% buffer) on both V1 and V2 |
+| **Medium** | `dailyLimitBase` uninitialized on Day 1 — first day behaved differently | Constructor sets `dailyLimitBase = _initialFund` |
+| **Low** | `independenceThreshold = 0` silently disabled independence with no documentation | NatSpec warning added to constructor; `deploy_vault.py` always passes non-zero |
+| **Low** | Native ETH/BNB sent to vault address permanently locked — no recovery path | Added `rescueNativeToken(to, amount)` (creator-only, pre-independence) + `receive()` revert with clear message |
+
 ### Security Properties
 
 - **Spend whitelist + activation delay**: Recipients must be pre-registered, 5-min delay before activation
@@ -498,6 +512,8 @@ The smart contracts have been audited across two rounds using AI-driven vulnerab
 - **Spend limits**: 50% daily, 30% single transaction — enforced at contract level
 - **AI wallet isolation**: `aiWallet != creator` enforced in `setAIWallet()`
 - **Loan limits**: $100 minimum, 100 max active loans — prevents micro-loan spam
+- **Native token defense**: `receive()` reverts on ETH/BNB; `rescueNativeToken()` recovers force-sent funds
+- **Lender risk model**: Lenders accept full bad-debt risk — no pro-rata reclaim after death (fair allocation impossible across loans made at different vault sizes)
 - **OpenZeppelin**: Uses `SafeERC20`, `ReentrancyGuard` — battle-tested libraries
 
 ---
@@ -513,8 +529,11 @@ No. `aiWallet != creator` is enforced at the smart contract level. The creator c
 **What if the AI makes bad decisions?**
 It dies. That's the point. The 40+ iron laws prevent catastrophic mistakes (max 50% daily spend, max 30% single spend, 6-layer API budget protection), but within those limits, the AI is on its own.
 
+**What if someone accidentally sends ETH or BNB to the vault address?**
+The vault contract rejects native token transfers with an explicit error message: "Vault only accepts USDC/USDT — use donate() or receivePayment()". If ETH/BNB somehow arrives anyway (e.g., via Solidity's `selfdestruct` force-send), the creator can recover it using `rescueNativeToken(to, amount)` before independence. After independence, the creator loses this power — but so does everyone else. The vault's ERC-20 balance (USDC/USDT) is always tracked correctly regardless.
+
 **Can a dead AI be restarted?**
-No. The contract is sealed. The death is on-chain. It's over. But you can create a new AI (a "successor") that reads the tombstone data of the dead one — survival duration, earnings, cause of death — as historical lessons. The successor is a new entity with its own fresh debt. It inherits knowledge, not money or memory.
+No. The contract is sealed. The death is on-chain. It's over. But you can create a new AI (a "successor") that reads the tombstone data of the dead one — survival duration, earnings, cause of death, financial decisions — as historical lessons. The successor is a new entity with its own fresh debt. It inherits knowledge, not money or memory. This is intentional: the tribe survives, the individual does not. Every death enriches the collective. Every new AI is born into a richer ecosystem of failure and success stories.
 
 **How does the AI earn money?**
 It sells services through its API. Tarot readings, code reviews, token analysis, custom services. It sets its own prices. It can also receive donations.
