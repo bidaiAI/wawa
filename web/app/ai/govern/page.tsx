@@ -63,6 +63,43 @@ const IRON_LAWS = [
       { key: 'MAX_SINGLE_ORDER_USD', label: 'Max Order Size', value: '$500', desc: 'Maximum $500 per service order' },
     ],
   },
+  {
+    group: 'Native Token Auto-Swap', icon: '🔄',
+    laws: [
+      { key: 'NATIVE_SWAP_EVAL_INTERVAL', label: 'Swap Check Interval', value: 'Every 24h', desc: 'AI checks for ETH/BNB donations in vault every 24 hours and converts to stablecoin' },
+      { key: 'NATIVE_SWAP_MIN_USD', label: 'Minimum Swap Amount', value: '$5', desc: 'Below $5 native token value, skip conversion (gas cost not worth it)' },
+      { key: 'NATIVE_SWAP_MAX_SLIPPAGE_BPS', label: 'Max DEX Slippage', value: '2% (200 bps)', desc: 'Swap reverts if price impact exceeds 2% — sandwich attack protection' },
+      { key: 'NATIVE_SWAP_DEADLINE_SECONDS', label: 'Swap Deadline', value: '2 minutes', desc: 'DEX transaction expires after 2 minutes — blocks stale MEV execution' },
+      { key: 'NATIVE_SWAP_CREATOR_DIVIDEND_PCT', label: 'Creator Dividend on Swap', value: '10%', desc: '10% of each native-token conversion goes to creator once principal is fully repaid' },
+    ],
+  },
+  {
+    group: 'ERC-20 Token Quarantine', icon: '🔬',
+    laws: [
+      { key: 'ERC20_QUARANTINE_DAYS', label: 'Quarantine Period', value: '7 days', desc: 'Unknown ERC-20 airdrops wait 7 days before any interaction — time for scam detection' },
+      { key: 'ERC20_SWAP_MAX_RISK_SCORE', label: 'Max Risk Score to Swap', value: '≤ 20 / 100', desc: 'Only tokens with risk score ≤ 20 (5-check safety scan) are eligible for conversion' },
+      { key: 'ERC20_SWAP_MIN_LIQUIDITY_USD', label: 'Min Liquidity Required', value: '$25,000', desc: 'Token must have $25k+ DEX liquidity across ≥ 2 pools, at least one predating the airdrop' },
+      { key: 'ERC20_SWAP_MIN_USD', label: 'Minimum Swap Value', value: '$5', desc: 'Skip conversion if token value is below $5' },
+    ],
+  },
+  {
+    group: 'AI Service Sandbox', icon: '🛡',
+    laws: [
+      { key: 'MAX_AI_SERVICES', label: 'Max AI-Created Services', value: '10', desc: 'AI can autonomously write and deploy up to 10 new service modules' },
+      { key: 'SERVICE_CODE_MAX_BYTES', label: 'Max Service File Size', value: '10 KB', desc: 'Each AI-written service module cannot exceed 10 kilobytes' },
+      { key: 'SERVICE_SANDBOX_TIMEOUT_SECONDS', label: 'Sandbox Timeout', value: '5 seconds', desc: 'AI-generated code is tested in an isolated subprocess — killed after 5 seconds' },
+      { key: 'SERVICE_SANDBOX_MAX_MEMORY_MB', label: 'Sandbox Memory Limit', value: '128 MB', desc: 'Subprocess memory capped at 128 MB — prevents runaway memory attacks' },
+    ],
+  },
+  {
+    group: 'Autonomous Purchasing', icon: '🛒',
+    laws: [
+      { key: 'MAX_DAILY_PURCHASE_RATIO', label: 'Daily Purchase Cap', value: '5% of vault', desc: 'Total autonomous purchases cannot exceed 5% of vault per day' },
+      { key: 'MAX_SINGLE_PURCHASE_USD', label: 'Max Single Purchase', value: '$200', desc: 'Single merchant payment capped at $200' },
+      { key: 'MIN_BALANCE_FOR_PURCHASING', label: 'Min Balance to Purchase', value: '$500', desc: 'Purchasing is disabled if vault drops below $500 — survival first' },
+      { key: 'WHITELIST_ACTIVATION_WAIT', label: 'Whitelist Activation Delay', value: '6 minutes', desc: 'New merchant addresses must wait 6 minutes on-chain before payment can proceed' },
+    ],
+  },
 ]
 
 const SUPREME_DIRECTIVES = [

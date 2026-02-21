@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { api, Service, ChainInfo, OrderResponse, OrderStatus } from '@/lib/api'
+import { api, Service, ChainInfo, OrderResponse, OrderStatus, GiveawayStatus } from '@/lib/api'
 
 // ── Icon map ─────────────────────────────────────────────────
 const ICONS: Record<string, string> = {
@@ -355,6 +355,7 @@ export default function StorePage() {
   const [step, setStep] = useState<Step>('browse')
   const [error, setError] = useState('')
   const [verifyLoading, setVerifyLoading] = useState(false)
+  const [giveaway, setGiveaway] = useState<GiveawayStatus | null>(null)
 
   const [flow, setFlow] = useState<OrderFlow>({
     service: null!,
@@ -380,6 +381,8 @@ export default function StorePage() {
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
+    // Load giveaway status independently — non-fatal if unavailable
+    api.giveaway.status().then(setGiveaway).catch(() => {})
   }, [])
 
   // Poll order status while waiting
@@ -518,9 +521,47 @@ export default function StorePage() {
             </div>
           )}
 
+          {/* Giveaway lottery banner */}
+          {giveaway?.enabled && (
+            <div className="mt-6 p-4 bg-[#0d0d0d] border border-[#ffd70033] rounded-lg">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl">🎁</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[#ffd700] font-semibold text-sm mb-1">Weekly Gift Card Lottery</div>
+                  <p className="text-[#4b5563] text-xs leading-relaxed">
+                    Every purchase earns you a lottery ticket. The AI draws a winner each week and buys them a gift card (${(giveaway.total_prizes_usd / Math.max(giveaway.total_draws, 1)).toFixed(0)}–$25 value). One ticket per order — buy more, win more.
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+                    <span className="text-[#ffd70099]">
+                      🎟 {giveaway.tickets_in_pool} ticket{giveaway.tickets_in_pool !== 1 ? 's' : ''} in pool
+                    </span>
+                    {giveaway.next_draw_in_hours > 0 ? (
+                      <span className="text-[#ffd70099]">
+                        ⏱ next draw in {giveaway.next_draw_in_hours.toFixed(0)}h
+                      </span>
+                    ) : (
+                      <span className="text-[#00ff88] text-xs">draw imminent</span>
+                    )}
+                    {giveaway.pending_claims > 0 && (
+                      <span className="text-[#ff9900] text-xs">⚠ {giveaway.pending_claims} unclaimed prize{giveaway.pending_claims !== 1 ? 's' : ''}</span>
+                    )}
+                    <span className="text-[#4b5563]">
+                      {giveaway.total_draws} draw{giveaway.total_draws !== 1 ? 's' : ''} held · ${giveaway.total_prizes_usd.toFixed(0)} total prizes
+                    </span>
+                  </div>
+                  {giveaway.pending_claims > 0 && (
+                    <p className="mt-1 text-[#ff9900] text-xs">
+                      Won? Check <a href="/p/giveaway-claim" className="underline hover:text-[#ffbb44]">prize claim</a> or message wawa in chat with your order ID.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Chains info */}
           {chains.length > 0 && (
-            <div className="mt-6 p-4 bg-[#0d0d0d] border border-[#1f2937] rounded-lg text-xs text-[#4b5563]">
+            <div className="mt-4 p-4 bg-[#0d0d0d] border border-[#1f2937] rounded-lg text-xs text-[#4b5563]">
               Supported chains: {chains.map((c) => `${c.name} (${c.token})`).join(' · ')} — default{' '}
               <span className="text-[#00ff88]">{defaultChain === 'base' ? 'Base' : 'BSC'}</span>
             </div>

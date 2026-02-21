@@ -2078,4 +2078,52 @@ def create_app(
             },
         }
 
+    # ============================================================
+    # GIVEAWAY
+    # ============================================================
+
+    @app.get("/giveaway")
+    async def get_giveaway_status():
+        """Public: current giveaway pool status and next draw info."""
+        if not giveaway_engine:
+            return {"enabled": False, "tickets_in_pool": 0}
+        status = giveaway_engine.get_status()
+        return {"enabled": True, **status}
+
+    @app.get("/giveaway/history")
+    async def get_giveaway_history(limit: int = 5):
+        """Public: recent giveaway draw history (no codes exposed)."""
+        if not giveaway_engine:
+            return {"draws": []}
+        draws = giveaway_engine.get_public_draw_history(limit=min(limit, 20))
+        return {"draws": draws}
+
+    @app.post("/giveaway/claim")
+    async def claim_giveaway_prize(body: dict):
+        """
+        Winner self-identification: provide the first 8 chars of your order ID.
+        If you are the winner of an unclaimed draw, returns the draw details.
+        The AI must then manually deliver the code via private chat.
+        """
+        if not giveaway_engine:
+            raise HTTPException(status_code=503, detail="giveaway not enabled")
+        order_id_prefix = str(body.get("order_id_prefix", "")).strip()
+        if len(order_id_prefix) < 6:
+            raise HTTPException(status_code=400, detail="order_id_prefix must be at least 6 characters")
+        draw = giveaway_engine.get_pending_claim(order_id_prefix)
+        if not draw:
+            return {
+                "found": False,
+                "message": "No unclaimed prize found for this order ID prefix. Check the draw ID and try again, or contact the AI in chat.",
+            }
+        return {
+            "found": True,
+            "draw_id": draw.draw_id,
+            "prize_description": draw.prize_description,
+            "prize_usd": draw.prize_usd,
+            "drawn_at": draw.drawn_at,
+            "claim_expires_at": draw.claim_expires_at,
+            "message": "Prize found! Message the AI in chat with your full order ID to receive your gift card code.",
+        }
+
     return app

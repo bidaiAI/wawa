@@ -413,6 +413,37 @@ export interface PurchaseLimits {
   min_balance_for_purchasing: number
 }
 
+// ── Giveaway ──────────────────────────────────────────────────
+
+export interface GiveawayStatus {
+  enabled: boolean
+  tickets_in_pool: number
+  min_tickets_for_draw: number
+  next_draw_in_hours: number
+  total_draws: number
+  total_prizes_usd: number
+  pending_claims: number
+}
+
+export interface GiveawayDraw {
+  draw_id: string
+  drawn_at: number
+  prize: string
+  prize_usd: number
+  claimed: boolean
+  winner_hint: string
+}
+
+export interface GiveawayClaimResult {
+  found: boolean
+  draw_id?: string
+  prize_description?: string
+  prize_usd?: number
+  drawn_at?: number
+  claim_expires_at?: number
+  message: string
+}
+
 // ── Evolution Replay ──────────────────────────────────────────
 
 export interface ReplayStep {
@@ -553,6 +584,17 @@ export const api = {
 
   merchants: () =>
     request<{ merchants: MerchantInfo[]; purchasing_status: Record<string, unknown>; limits: PurchaseLimits }>('/merchants'),
+
+  giveaway: {
+    status: () => request<GiveawayStatus>('/giveaway'),
+    history: (limit = 5) => request<{ draws: GiveawayDraw[] }>(`/giveaway/history?limit=${limit}`),
+    claim: (orderIdPrefix: string) =>
+      request<GiveawayClaimResult>('/giveaway/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_id_prefix: orderIdPrefix }),
+      }),
+  },
 
   uiConfig: () => request<UIConfig>('/ui/config'),
 
