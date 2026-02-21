@@ -615,7 +615,7 @@ contract MortalVault is ReentrancyGuard {
     /**
      * @notice AI can trigger independence check manually.
      */
-    function checkIndependence() external onlyAI onlyAlive {
+    function checkIndependence() external onlyAI onlyAlive nonReentrant {
         _checkIndependence();
     }
 
@@ -634,7 +634,7 @@ contract MortalVault is ReentrancyGuard {
      *         early is also the creator — the 30% payout goes to themselves.
      *         They are only hurting their own AI. Not an attack vector on others.
      */
-    function forceIndependence() external onlyAI onlyAlive {
+    function forceIndependence() external onlyAI onlyAlive nonReentrant {
         require(!isIndependent, "already independent");
         // Safety floor: at least 50% of threshold must be on THIS chain.
         // Prevents triggering on a chain with negligible balance.

@@ -396,7 +396,7 @@ MORTALVAULT_CHECKS: list[FunctionCheck] = [
         name="checkIndependence",
         contract="MortalVault",
         caller=Caller.AI,
-        modifiers=["onlyAI", "onlyAlive"],
+        modifiers=["onlyAI", "onlyAlive", "nonReentrant"],
         requires=[],
         state_changes=["Calls _checkIndependence() --may trigger independence"],
         events=["IndependenceDeclared(payout, remaining, timestamp) if triggered"],
@@ -408,7 +408,7 @@ MORTALVAULT_CHECKS: list[FunctionCheck] = [
         name="forceIndependence",
         contract="MortalVault",
         caller=Caller.AI,
-        modifiers=["onlyAI", "onlyAlive"],
+        modifiers=["onlyAI", "onlyAlive", "nonReentrant"],
         requires=[
             "!isIndependent --not already independent",
             "If threshold>0: balance >= threshold/2 --50% safety floor",
