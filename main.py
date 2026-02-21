@@ -958,7 +958,16 @@ async def _evaluate_repayment():
         reasoning = decision.get("reasoning", "no reasoning")
 
         # Execute principal repayment
-        principal_amount = float(decision.get("repay_principal_amount", 0))
+        import math as _math
+        _raw_principal = decision.get("repay_principal_amount", 0)
+        try:
+            principal_amount = float(_raw_principal)
+        except (TypeError, ValueError):
+            principal_amount = 0.0
+        # Guard: reject NaN/Inf/negative from LLM output (e.g. "NaN", "Infinity", -999)
+        if _math.isnan(principal_amount) or _math.isinf(principal_amount) or principal_amount < 0:
+            logger.warning(f"Repayment: invalid principal_amount from LLM ({_raw_principal!r}) — skipping")
+            principal_amount = 0.0
         if principal_amount > 0:
             # SAFETY: Save pre-state for rollback if chain TX fails
             pre_balance = vault.balance_usd

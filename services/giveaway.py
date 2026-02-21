@@ -188,6 +188,7 @@ class GiveawayEngine:
         self._state.past_draws.append(draw)
         self._state.last_draw_at = time.time()
         self._state.total_draws += 1
+        self._state.total_prizes_usd += prize_usd  # Track cumulative prize spend
 
         # Step 4: Clear the ticket pool (draw consumed all entries)
         self._state.pending_tickets = []

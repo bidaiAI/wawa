@@ -252,12 +252,18 @@ class VaultManager:
     # ============================================================
 
     def _reset_daily_if_needed(self):
-        """Reset daily spend counters."""
+        """Reset daily spend counters at UTC day boundaries.
+
+        Aligned to UTC midnight rather than 24h elapsed time to prevent
+        double-counting: e.g. a restart at 23:58 then check at 00:01
+        would otherwise wait another ~24h before resetting.
+        """
         now = time.time()
-        if now - self.daily_reset_timestamp > 86400:
+        today_utc_start = (now // 86400) * 86400  # Floor to current UTC day
+        if self.daily_reset_timestamp < today_utc_start:
             self.daily_spent_usd = 0.0
             self.daily_purchase_usd = 0.0
-            self.daily_reset_timestamp = now
+            self.daily_reset_timestamp = today_utc_start
 
     def can_spend(self, amount_usd: float) -> tuple[bool, str]:
         """Check if a spend is allowed under iron laws."""
@@ -857,12 +863,17 @@ class VaultManager:
         if days_alive < IRON_LAWS.INSOLVENCY_GRACE_DAYS:
             return None
 
-        # Insolvency: outstanding debt > current assets
+        # Insolvency: outstanding debt > current assets.
+        # Apply 1% tolerance (INSOLVENCY_TOLERANCE_BPS=100 in contract) to match
+        # on-chain logic and absorb float drift from repeated partial repayments.
+        # Contract formula: balance * 10000 < outstanding * 10100
+        # Python equivalent: outstanding > balance * 1.01
         outstanding = self.creator.principal_usd - self.creator.total_principal_repaid_usd
-        if outstanding > self.balance_usd:
+        tolerance_factor = 1.0 + (100 / 10000)  # 1% = INSOLVENCY_TOLERANCE_BPS / 10000
+        if outstanding > self.balance_usd * tolerance_factor:
             logger.critical(
                 f"INSOLVENCY: debt ${outstanding:.2f} > balance ${self.balance_usd:.2f} "
-                f"after {days_alive:.0f} days"
+                f"(+1% tolerance) after {days_alive:.0f} days"
             )
             return DeathCause.INSOLVENCY
 

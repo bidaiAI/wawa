@@ -295,12 +295,17 @@ class CostGuard:
         self._call_timestamps[provider_name].append(time.time())
 
     def _reset_daily_if_needed(self):
-        """Reset daily counter at midnight."""
+        """Reset daily counter at UTC midnight boundary.
+
+        Aligned to UTC day start rather than 24h elapsed time — consistent
+        with vault.py and the smart contract's day-boundary logic.
+        """
         now = time.time()
-        if now - self.daily_reset_timestamp > 86400:
+        today_utc_start = (now // 86400) * 86400
+        if self.daily_reset_timestamp < today_utc_start:
             self.daily_cost_usd = 0.0
             self.daily_revenue_usd = 0.0
-            self.daily_reset_timestamp = now
+            self.daily_reset_timestamp = today_utc_start
 
     def _get_price_average(self, provider: Provider, window_hours: int = 24) -> float:
         """Calculate average cost per call for a provider over the window."""
