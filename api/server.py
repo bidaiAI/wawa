@@ -2852,6 +2852,21 @@ def create_app(
         os.environ["TWITTER_ACCESS_SECRET"] = access_secret
         os.environ["TWITTER_SCREEN_NAME"] = screen_name
 
+        # Persist to data volume so tokens survive container restarts
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            _creds_path = _Path("data/twitter_credentials.json")
+            _creds_path.parent.mkdir(parents=True, exist_ok=True)
+            _creds_path.write_text(_json.dumps({
+                "access_token": access_token,
+                "access_secret": access_secret,
+                "screen_name": screen_name,
+            }))
+            logger.info(f"Twitter credentials persisted to {_creds_path}")
+        except Exception as _e:
+            logger.warning(f"Failed to persist Twitter credentials: {_e}")
+
         # Re-initialize Twitter client without restarting the container
         if reinit_tweepy_fn:
             try:

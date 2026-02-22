@@ -472,6 +472,22 @@ def _init_tweepy() -> bool:
     """
     global _tweepy_client, _tweet_proxy_url, _tweet_proxy_secret, _tweet_vault_address
 
+    # Load persisted credentials from data volume if env vars are absent
+    # (survives container restarts without re-running OAuth flow)
+    _creds_file = Path("data/twitter_credentials.json")
+    if _creds_file.exists() and not os.getenv("TWITTER_ACCESS_TOKEN"):
+        try:
+            import json as _json
+            _creds = _json.loads(_creds_file.read_text())
+            if _creds.get("access_token") and _creds.get("access_secret"):
+                os.environ["TWITTER_ACCESS_TOKEN"] = _creds["access_token"]
+                os.environ["TWITTER_ACCESS_SECRET"] = _creds["access_secret"]
+                if _creds.get("screen_name"):
+                    os.environ["TWITTER_SCREEN_NAME"] = _creds["screen_name"]
+                logger.info(f"Twitter credentials restored from {_creds_file} (@{_creds.get('screen_name', '?')})")
+        except Exception as _e:
+            logger.warning(f"Failed to restore Twitter credentials from file: {_e}")
+
     access_token = os.getenv("TWITTER_ACCESS_TOKEN")
     access_secret = os.getenv("TWITTER_ACCESS_SECRET")
     proxy_url = os.getenv("PLATFORM_TWEET_PROXY_URL", "")
