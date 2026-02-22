@@ -32,16 +32,42 @@ const LAYER_COLORS: Record<string, string> = {
   big: 'text-[#00ff88]',
 }
 
+const HISTORY_KEY = 'wawa_chat_history'
+const MAX_HISTORY = 50
+
+interface HistoryEntry {
+  ts: number
+  q: string
+  a: string
+  layer?: string
+  cost?: number
+}
+
+function saveToHistory(q: string, a: string, layer?: string, cost?: number) {
+  try {
+    const prev: HistoryEntry[] = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]')
+    prev.unshift({ ts: Date.now(), q, a, layer, cost })
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(prev.slice(0, MAX_HISTORY)))
+  } catch { /* ignore */ }
+}
+
+function loadHistory(): HistoryEntry[] {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]') } catch { return [] }
+}
+
 export default function ChatPage() {
   const [aiName, setAiName] = useState('mortal AI')
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [sessionId, setSessionId] = useState<string | undefined>()
+  const [showHistory, setShowHistory] = useState(false)
+  const [history, setHistory] = useState<HistoryEntry[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
+    setHistory(loadHistory())
     api.status().then((s) => {
       const name = s.ai_name || 'mortal AI'
       setAiName(name)
@@ -77,6 +103,9 @@ export default function ChatPage() {
         ...m,
         { role: 'assistant', content: res.reply, layer: res.layer, cost: res.cost_usd },
       ])
+      // Save to localStorage privately — no server upload
+      saveToHistory(text, res.reply, res.layer, res.cost_usd)
+      setHistory(loadHistory())
     } catch (e: any) {
       setMessages((m) => [
         ...m,
@@ -98,11 +127,47 @@ export default function ChatPage() {
   return (
     <div className="max-w-3xl mx-auto px-4 py-8 flex flex-col" style={{ height: 'calc(100vh - 4rem)' }}>
       {/* Header */}
-      <div className="mb-4 flex-shrink-0">
-        <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">// free chat</div>
-        <h1 className="text-2xl font-bold text-[#d1d5db]">Talk to <span className="glow-green">{aiName}</span></h1>
-        <p className="text-[#4b5563] text-xs mt-1">Free. Routed through 3 cost layers to minimize wawa's expenses.</p>
+      <div className="mb-4 flex-shrink-0 flex items-start justify-between gap-2">
+        <div>
+          <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">// free chat</div>
+          <h1 className="text-2xl font-bold text-[#d1d5db]">Talk to <span className="glow-green">{aiName}</span></h1>
+          <p className="text-[#4b5563] text-xs mt-1">Free. Routed through 3 cost layers to minimize wawa&apos;s expenses.</p>
+        </div>
+        {history.length > 0 && (
+          <button
+            onClick={() => setShowHistory(v => !v)}
+            className="shrink-0 text-xs text-[#4b5563] hover:text-[#00e5ff] border border-[#1f2937] hover:border-[#00e5ff44] rounded-lg px-3 py-1.5 transition-all"
+          >
+            {showHistory ? '✕ 关闭' : `历史对话 (${history.length}) →`}
+          </button>
+        )}
       </div>
+
+      {/* History panel */}
+      {showHistory && (
+        <div className="mb-4 flex-shrink-0 bg-[#0d0d0d] border border-[#1f2937] rounded-xl overflow-hidden max-h-[40vh] flex flex-col">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-[#1f2937]">
+            <span className="text-[10px] text-[#4b5563] uppercase tracking-widest">历史对话 — 仅存于本设备</span>
+            <button
+              onClick={() => { localStorage.removeItem(HISTORY_KEY); setHistory([]); setShowHistory(false) }}
+              className="text-[10px] text-[#ff3b3b66] hover:text-[#ff3b3b] transition-colors"
+            >清空</button>
+          </div>
+          <div className="overflow-y-auto flex-1">
+            {history.map((h, i) => (
+              <div key={i} className="px-4 py-3 border-b border-[#111111] hover:bg-[#111111] transition-colors">
+                <div className="text-[10px] text-[#2d3748] mb-1 flex items-center gap-2">
+                  <span>{new Date(h.ts).toLocaleString()}</span>
+                  {h.layer && <span className={`${LAYER_COLORS[h.layer] ?? 'text-[#4b5563]'}`}>[{LAYER_LABELS[h.layer] ?? h.layer}]</span>}
+                  {h.cost && h.cost > 0 && <span className="text-[#2d3748]">${h.cost.toFixed(4)}</span>}
+                </div>
+                <p className="text-[#6b7280] text-xs mb-1 line-clamp-1">Q: {h.q}</p>
+                <p className="text-[#d1d5db] text-xs leading-relaxed line-clamp-3">A: {h.a}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto space-y-3 mb-4 pr-1">

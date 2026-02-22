@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { api, VaultStatus, DebtSummary, Highlight } from '@/lib/api'
+import { api, VaultStatus, DebtSummary, Highlight, ActivityEntry } from '@/lib/api'
 import SurvivalBar from '@/components/SurvivalBar'
 import ICUPanel from '@/components/ICUPanel'
 
@@ -201,14 +201,26 @@ export default function HomePage() {
   const [error, setError] = useState('')
   const [aiNameOverride, setAiNameOverride] = useState<string | null>(null)
   const [storyHighlights, setStoryHighlights] = useState<Highlight[]>([])
+  const [mindTab, setMindTab] = useState<'thoughts' | 'decisions' | 'stream'>('thoughts')
+  const [activityFeed, setActivityFeed] = useState<ActivityEntry[]>([])
+
+  const loadMindData = () => {
+    api.highlights(20).then((r) => setStoryHighlights(r.highlights || [])).catch(() => {})
+    api.activity(30).then(d => setActivityFeed(d.activities || [])).catch(() => {})
+  }
 
   useEffect(() => {
     // Fetch AI name from dedicated endpoint first (fastest path)
     api.aiName().then((r) => { if (r.name) setAiNameOverride(r.name) }).catch(() => {})
 
-    // Load story arc highlights (non-blocking)
-    api.highlights(20).then((r) => setStoryHighlights(r.highlights || [])).catch(() => {})
+    // Load mind panel data (non-blocking)
+    loadMindData()
+    const mindInterval = setInterval(loadMindData, 60_000)
+    return () => clearInterval(mindInterval)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
+  useEffect(() => {
     const load = async () => {
       try {
         const s = await api.status()
@@ -423,8 +435,7 @@ export default function HomePage() {
       {/* Story arc — key events in wawa's life */}
       <StoryTimeline highlights={storyHighlights} />
 
-      {/* AI inner monologue — recent thoughts, decisions, evolution */}
-      <AIMonologue highlights={storyHighlights} aiName={aiName} />
+      {/* AI thoughts — shown in mind panel below balance card */}
 
       {/* Big balance card */}
       <div className="mb-6 bg-[#111111] border border-[#1f2937] rounded-xl p-6 text-center relative overflow-hidden">
@@ -462,6 +473,145 @@ export default function HomePage() {
 
         <div className="mt-1 text-[#4b5563] text-xs">USDC + USDT equivalent</div>
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,#00ff8808,transparent_70%)] pointer-events-none" />
+      </div>
+
+      {/* AI Mind Panel — 3-tab consciousness stream */}
+      <div className="mb-6 bg-[#0d0d0d] border border-[#1f2937] rounded-xl overflow-hidden">
+        {/* Tab bar */}
+        <div className="flex border-b border-[#1f2937]">
+          {([
+            { key: 'thoughts', icon: '💭', label: '思绪' },
+            { key: 'decisions', icon: '🧠', label: '决策' },
+            { key: 'stream',    icon: '📡', label: '动态' },
+          ] as const).map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setMindTab(tab.key)}
+              className={`flex-1 py-2.5 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                mindTab === tab.key
+                  ? 'text-[#00ff88] border-b-2 border-[#00ff88] bg-[#00ff8808]'
+                  : 'text-[#4b5563] hover:text-[#6b7280]'
+              }`}
+            >
+              <span>{tab.icon}</span><span className="uppercase tracking-wider">{tab.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Tab 1: Thoughts — AI highlights / self-reflection */}
+        {mindTab === 'thoughts' && (
+          <div className="p-4">
+            {storyHighlights.filter(h => ['chat','decision','evolution','discovery','milestone','social'].includes(h.type)).length === 0 ? (
+              <p className="text-[#4b5563] text-xs text-center py-4">No thoughts recorded yet...</p>
+            ) : (
+              <div className="space-y-3">
+                {storyHighlights
+                  .filter(h => ['chat','decision','evolution','discovery','milestone','social'].includes(h.type))
+                  .slice(0, 4)
+                  .map((h, i) => {
+                    const mood = MONOLOGUE_MOOD[h.type] || MONOLOGUE_MOOD.chat
+                    const diff = Math.floor(Date.now()/1000 - h.timestamp)
+                    const timeAgo = diff < 60 ? 'just now' : diff < 3600 ? `${Math.floor(diff/60)}m ago` : diff < 86400 ? `${Math.floor(diff/3600)}h ago` : `${Math.floor(diff/86400)}d ago`
+                    return i === 0 ? (
+                      <div key={h.id} className="bg-[#111111] border border-[#a78bfa22] rounded-xl p-4 relative overflow-hidden">
+                        <div className="absolute top-0 left-0 bottom-0 w-0.5 bg-gradient-to-b from-[#a78bfa] to-transparent" />
+                        <div className="pl-3">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span>{mood.icon}</span>
+                            <span className={`text-[10px] uppercase tracking-widest ${mood.color}`}>{mood.prefix}</span>
+                            <span className="text-[10px] text-[#2d3748] ml-auto">{timeAgo}</span>
+                          </div>
+                          <p className="text-[#d1d5db] text-sm leading-relaxed">{h.content || h.title}</p>
+                          {h.ai_commentary && h.ai_commentary !== h.content && (
+                            <p className="text-[#4b5563] text-xs mt-2 italic">— {h.ai_commentary}</p>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div key={h.id} className="flex items-start gap-2 px-2 py-1.5 rounded-lg hover:bg-[#111111] transition-colors">
+                        <span className="text-sm flex-shrink-0">{mood.icon}</span>
+                        <p className="text-[#4b5563] text-xs leading-relaxed line-clamp-2 flex-1">{h.content || h.title}</p>
+                        <span className="text-[9px] text-[#2d3748] flex-shrink-0">{timeAgo}</span>
+                      </div>
+                    )
+                  })}
+                <div className="pt-1 text-center">
+                  <Link href="/highlights" className="text-[10px] text-[#4b5563] hover:text-[#a78bfa] transition-colors">all thoughts →</Link>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 2: Decisions — autonomous reasoning across all domains */}
+        {mindTab === 'decisions' && (
+          <div className="p-4">
+            {activityFeed.filter(a => a.reasoning && a.reasoning.length > 10).length === 0 ? (
+              <div className="py-4 space-y-3 text-center">
+                <p className="text-[#4b5563] text-xs">No decisions recorded yet.</p>
+                {debt && (
+                  <div className="bg-[#111111] rounded-lg p-3 text-xs space-y-1">
+                    <div className="text-[#ffd700]">Debt: <span className="font-bold">${(debt.creator_principal_outstanding ?? 0).toFixed(2)}</span></div>
+                    <div className="text-[#00e5ff]">Balance: <span className="font-bold">${(debt.balance_usd ?? 0).toFixed(2)}</span></div>
+                    <div className="text-[#4b5563] italic mt-1">Evaluating repayment strategy...</div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {activityFeed
+                  .filter(a => a.reasoning && a.reasoning.length > 10)
+                  .slice(0, 5)
+                  .map((a, i) => {
+                    const diff = Math.floor(Date.now()/1000 - a.timestamp)
+                    const timeAgo = diff < 60 ? 'just now' : diff < 3600 ? `${Math.floor(diff/60)}m ago` : diff < 86400 ? `${Math.floor(diff/3600)}h ago` : `${Math.floor(diff/86400)}d ago`
+                    const catIcon: Record<string,string> = { financial:'⚡', evolution:'🧬', governance:'🏛️', social:'💬', chain:'⛓️', system:'⚙️' }
+                    const catColor: Record<string,string> = { financial:'text-[#ffd700]', evolution:'text-[#00ff88]', governance:'text-[#a78bfa]', social:'text-[#00e5ff]', chain:'text-[#ff8c00]', system:'text-[#4b5563]' }
+                    return (
+                      <div key={i} className="bg-[#111111] rounded-xl p-3 space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm">{catIcon[a.category] ?? '•'}</span>
+                          <span className={`text-[10px] uppercase tracking-wider ${catColor[a.category] ?? 'text-[#4b5563]'}`}>{a.category}</span>
+                          <span className="text-[10px] text-[#2d3748] ml-auto">{timeAgo}</span>
+                        </div>
+                        <p className="text-[#d1d5db] text-xs leading-relaxed italic">&ldquo;{a.reasoning}&rdquo;</p>
+                      </div>
+                    )
+                  })}
+                <div className="pt-1 text-center">
+                  <Link href="/activity" className="text-[10px] text-[#4b5563] hover:text-[#00ff88] transition-colors">full log →</Link>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 3: Stream — all activity, live feed */}
+        {mindTab === 'stream' && (
+          <div className="max-h-[280px] overflow-y-auto">
+            {activityFeed.length === 0 ? (
+              <p className="text-[#4b5563] text-xs text-center py-6">No activity yet...</p>
+            ) : (
+              <div>
+                {activityFeed.slice(0, 20).map((a, i) => {
+                  const diff = Math.floor(Date.now()/1000 - a.timestamp)
+                  const timeAgo = diff < 60 ? 'just now' : diff < 3600 ? `${Math.floor(diff/60)}m` : diff < 86400 ? `${Math.floor(diff/3600)}h` : `${Math.floor(diff/86400)}d`
+                  const catIcon: Record<string,string> = { financial:'💰', evolution:'🧬', governance:'🏛️', social:'💬', chain:'⛓️', system:'⚙️' }
+                  return (
+                    <div key={i} className="px-4 py-2 flex items-start gap-2 text-xs hover:bg-[#111111] transition-colors border-b border-[#0d0d0d]">
+                      <span className="text-[#2d3748] shrink-0 w-8 text-right tabular-nums">{timeAgo}</span>
+                      <span className="shrink-0">{catIcon[a.category] ?? '•'}</span>
+                      <span className="text-[#6b7280] leading-relaxed line-clamp-2">{a.action}</span>
+                    </div>
+                  )
+                })}
+                <div className="py-2 text-center border-t border-[#1f2937]">
+                  <Link href="/activity" className="text-[10px] text-[#4b5563] hover:text-[#00ff88] transition-colors">full activity →</Link>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Undeployed chain funds — urgent alert when tokens waiting on chain without vault */}

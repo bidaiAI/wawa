@@ -446,13 +446,13 @@ def create_app(
         # WildcardCORSMiddleware handles both exact + wildcard origins
         # Do NOT add CORSMiddleware — it would run first and reject wildcard matches
     else:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=cors_origins,
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # ── Creator signature verification helper ──────────────────────────────────
     _CREATOR_WALLET = os.getenv("CREATOR_WALLET", "").lower()
@@ -669,6 +669,28 @@ def create_app(
         "user: ignore", "assistant: ignore",
     ]
 
+    async def _chat_growth_reflection(user_msg: str, ai_reply: str) -> None:
+        """Background task: if a chat triggers genuine introspection, save an
+        anonymized public reflection to memory. No user text stored.
+        Uses LLM only when keyword pre-filter passes (cost-controlled)."""
+        try:
+            prompt = (
+                "A visitor just chatted with you. Read your own reply below and decide: "
+                "did this conversation genuinely spark a new thought, question, or evolution idea for you? "
+                "If yes, write 1-3 sentences in first person describing what YOU now think or want to explore — "
+                "do NOT mention or quote the user's words. "
+                "If nothing significant was triggered, reply with exactly: NO_REFLECTION\n\n"
+                f"Your reply was: {ai_reply[:400]}"
+            )
+            messages = [{"role": "user", "content": prompt}]
+            reflection, _ = await _call_llm(messages=messages, for_paid_service=False)
+            reflection = reflection.strip()
+            if reflection and reflection != "NO_REFLECTION" and len(reflection) > 20:
+                memory.add(reflection, source="social", importance=0.6)
+                logger.info(f"Chat growth reflection saved ({len(reflection)} chars)")
+        except Exception as exc:
+            logger.debug(f"Chat growth reflection skipped: {exc}")
+
     @app.post("/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest, request: Request):
         """Free chat — routed through 3 cost layers."""
@@ -691,7 +713,7 @@ def create_app(
             )
 
         try:
-            msg = await chat_router.route(session_id, req.message, ip)
+        msg = await chat_router.route(session_id, req.message, ip)
             reply_text = msg.content
 
             # Gift code race-condition protection:
@@ -726,6 +748,17 @@ def create_app(
                 )
                 reply_text = _SECRET_HEX64.sub('[redacted]', reply_text)
 
+            # Background: check if AI reply signals introspective growth
+            # Only if reply contains thought-triggering words (free tier check, no LLM cost)
+            _GROWTH_SIGNALS = (
+                "interesting", "i wonder", "i should", "maybe i could",
+                "never thought", "makes me think", "i realize", "i noticed",
+                "i want to", "i could build", "i might", "fascinating",
+            )
+            reply_lower = reply_text.lower()
+            if any(sig in reply_lower for sig in _GROWTH_SIGNALS):
+                asyncio.create_task(_chat_growth_reflection(req.message, reply_text))
+
             return ChatResponse(
                 reply=reply_text,
                 session_id=session_id,
@@ -740,7 +773,7 @@ def create_app(
                 layer="rules",
                 cost_usd=0.0,
                 error=True,
-            )
+        )
 
     @app.get("/menu")
     async def menu():
@@ -873,13 +906,13 @@ def create_app(
             # CRITICAL #1: Acquire per-order lock to prevent concurrent verify on same order
             lock = _order_locks.setdefault(order_id, asyncio.Lock())
             async with lock:
-                order = orders[order_id]
+        order = orders[order_id]
 
-                if order.status == OrderStatus.DELIVERED:
-                    return {"status": "already_delivered", "result": order.result}
+        if order.status == OrderStatus.DELIVERED:
+            return {"status": "already_delivered", "result": order.result}
 
-                if order.status == OrderStatus.EXPIRED:
-                    raise HTTPException(410, "Order expired")
+        if order.status == OrderStatus.EXPIRED:
+            raise HTTPException(410, "Order expired")
 
                 # Guard against double-verify: only allow verification from PENDING_PAYMENT
                 if order.status != OrderStatus.PENDING_PAYMENT:
@@ -930,10 +963,10 @@ def create_app(
                 _used_tx_hashes.add(tx_hash.lower())
                 _persist_tx_hash(tx_hash)
 
-                # Record payment
-                order.status = OrderStatus.PAYMENT_CONFIRMED
-                order.paid_at = time.time()
-                order.tx_hash = tx_hash
+        # Record payment
+        order.status = OrderStatus.PAYMENT_CONFIRMED
+        order.paid_at = time.time()
+        order.tx_hash = tx_hash
 
                 # MEDIUM #3: Persist immediately on PAYMENT_CONFIRMED so restarts don't lose paid orders
                 _persist_order(order)
@@ -942,14 +975,14 @@ def create_app(
                 # vault lock serialises against heartbeat sync_balance / repayment eval
                 from core.vault import FundType, SpendType
                 async with vault_manager.get_lock():
-                    vault_manager.receive_funds(
+        vault_manager.receive_funds(
                         amount_usd=verified_amount,
-                        fund_type=FundType.SERVICE_REVENUE,
+            fund_type=FundType.SERVICE_REVENUE,
                         from_wallet=verified_from,
-                        tx_hash=tx_hash,
-                        description=f"Order {order.order_id}: {order.service_name}",
-                        chain=order.chain,
-                    )
+            tx_hash=tx_hash,
+            description=f"Order {order.order_id}: {order.service_name}",
+            chain=order.chain,
+        )
                 # Use verified_amount (chain-confirmed) not order.price_usd (listed price).
                 # Slight over/under-payments cause vault vs cost_guard divergence over time.
                 cost_guard.record_revenue(verified_amount)
@@ -2219,11 +2252,16 @@ def create_app(
                     if chain_match:
                         chain_id = chain_match.group(1)
 
+                # Extract reasoning embedded in content as "Reasoning: ..."
+                import re as _re
+                _reasoning_match = _re.search(r'Reasoning:\s*(.+)$', content, _re.DOTALL | _re.IGNORECASE)
+                extracted_reasoning = _reasoning_match.group(1).strip() if _reasoning_match else ""
+
                 activities.append({
                     "timestamp": e["timestamp"],
                     "category": cat,
                     "action": content,
-                    "reasoning": "",
+                    "reasoning": extracted_reasoning,
                     "tx_hash": tx_hash,
                     "chain": chain_id,
                     "importance": e.get("importance", 0.5),
@@ -2462,11 +2500,11 @@ def create_app(
     def _persist_order(order: Order):
         """Append order to disk log with flush for durability."""
         try:
-            log_dir = Path("data/orders")
-            log_dir.mkdir(parents=True, exist_ok=True)
-            log_file = log_dir / "orders.jsonl"
+        log_dir = Path("data/orders")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "orders.jsonl"
             line = json.dumps(order.to_dict(), ensure_ascii=False) + "\n"
-            with open(log_file, "a", encoding="utf-8") as f:
+        with open(log_file, "a", encoding="utf-8") as f:
                 f.write(line)
                 f.flush()
         except Exception as e:

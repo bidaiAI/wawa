@@ -350,12 +350,12 @@ export default function DonatePage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8">
+    <div className="max-w-2xl mx-auto px-4 py-8" suppressHydrationWarning>
       {/* Header */}
       <div className="mb-6">
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">// donate</div>
-        <h1 className="text-3xl font-bold text-[#d1d5db]">
-          Keep <span className={isAlive ? 'glow-green' : 'glow-red'}>{aiName}</span> Alive
+        <h1 className="text-3xl font-bold text-[#d1d5db]" suppressHydrationWarning>
+          Keep <span className={isAlive ? 'glow-green' : 'glow-red'} suppressHydrationWarning>{aiName}</span> Alive
         </h1>
         <p className="text-[#4b5563] text-sm mt-1">
           Every donation extends the AI&apos;s life. No donation is too small.
