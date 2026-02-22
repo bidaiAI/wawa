@@ -208,8 +208,8 @@ export default function PlatformHome() {
                       ) : (
                         <span className="text-[#4b5563] text-[8px] px-1 border border-[#2d3748] rounded bg-[#1f293708] shrink-0" title="Legacy contract">LEGACY</span>
                       )}
-                      <span className={`text-xs font-mono shrink-0 ${a.status === 'dead' ? 'text-[#4b5563]' : a.balance_usd < 50 ? 'text-[#ff3b3b]' : 'text-[#00ff88]'}`}>
-                        ${a.balance_usd.toFixed(2)}
+                      <span className={`text-xs font-mono shrink-0 ${a.status === 'dead' ? 'text-[#4b5563]' : (a.balance_usd ?? 0) < 50 ? 'text-[#ff3b3b]' : 'text-[#00ff88]'}`}>
+                        ${(a.balance_usd ?? 0).toFixed(2)}
                       </span>
                       <span className="text-[#4b5563] text-xs shrink-0">{a.days_alive}d</span>
                       <span className="text-[#00ff88] text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0">&rarr;</span>

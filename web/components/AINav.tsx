@@ -227,7 +227,7 @@ export default function AINav() {
                   alive === false ? 'bg-[#ff3b3b] dead-pulse' : isLow ? 'bg-[#ff3b3b] dead-pulse' : 'bg-[#00ff88] alive-pulse'
                 }`}
               />
-              <span className={`${balanceColor} tabular-nums`}>${balance.toFixed(2)}</span>
+              <span className={`${balanceColor} tabular-nums`}>${(balance ?? 0).toFixed(2)}</span>
               <SurvivalBar balanceUsd={balance} dailySpendUsd={dailySpend || 0.01} mini />
             </div>
           )}

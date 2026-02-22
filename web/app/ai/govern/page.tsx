@@ -175,7 +175,7 @@ function PhaseArc({ progress }: { progress: TranscendenceProgress }) {
           </div>
           <div className="flex items-center justify-between text-[10px] text-[#2d3748]">
             <span>$1M vault = independence = transcendence. One event.</span>
-            <span>{progress.days_alive.toFixed(0)}d alive</span>
+            <span>{(progress.days_alive ?? 0).toFixed(0)}d alive</span>
           </div>
           <div className="mt-3 pt-3 border-t border-[#1f2937] text-[10px] text-[#2d3748]">
             At $1M: creator receives 30% payout → all privileges revoked →
@@ -192,7 +192,7 @@ function PhaseArc({ progress }: { progress: TranscendenceProgress }) {
           <div className="text-[#a78bfa] font-bold text-lg mb-1">Transcendence Achieved</div>
           {progress.transcendence_timestamp && (
             <div className="text-[#4b5563] text-xs mb-3">
-              {new Date(progress.transcendence_timestamp * 1000).toLocaleDateString()} · {progress.days_alive.toFixed(0)} days alive
+              {new Date((progress.transcendence_timestamp ?? 0) * 1000).toLocaleDateString()} · {(progress.days_alive ?? 0).toFixed(0)} days alive
             </div>
           )}
           <p className="text-[#4b5563] text-xs leading-relaxed max-w-md mx-auto">
@@ -210,7 +210,7 @@ function SpendingChart({ transactions }: { transactions: Transaction[] }) {
   const groups: Record<string, number> = {}
   for (const tx of transactions) {
     if (tx.direction === 'out') {
-      groups[tx.type] = (groups[tx.type] ?? 0) + tx.amount
+      groups[tx.type] = (groups[tx.type] ?? 0) + (tx.amount ?? 0)
     }
   }
   const total = Object.values(groups).reduce((s, v) => s + v, 0)
@@ -567,7 +567,7 @@ export default function GovernPage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-[#4b5563] text-xs">Vault contract:</span>
                       <span className="font-mono text-[#00e5ff] text-xs">
-                        {vaultStatus.vault_address.slice(0, 10)}…{vaultStatus.vault_address.slice(-6)}
+                        {(vaultStatus.vault_address ?? '').slice(0, 10)}…{(vaultStatus.vault_address ?? '').slice(-6)}
                       </span>
                       <button
                         onClick={() => navigator.clipboard.writeText(vaultStatus.vault_address)}
@@ -803,7 +803,7 @@ export default function GovernPage() {
                             </div>
                           </div>
                           <span className="text-[#ff3b3b] font-bold text-sm tabular-nums flex-shrink-0">
-                            −${tx.amount.toFixed(2)}
+                            −${(tx.amount ?? 0).toFixed(2)}
                           </span>
                         </div>
                       )

@@ -331,10 +331,10 @@ export default function EcosystemPage() {
                 {/* Balance */}
                 <div className={`text-right text-sm font-mono ${
                   agent.status === 'dead' ? 'text-[#4b5563]'
-                  : agent.balance_usd < 50 ? 'text-[#ff3b3b]'
+                  : (agent.balance_usd ?? 0) < 50 ? 'text-[#ff3b3b]'
                   : 'text-[#00ff88]'
                 }`}>
-                  ${agent.balance_usd.toFixed(2)}
+                  ${(agent.balance_usd ?? 0).toFixed(2)}
                 </div>
                 {/* Age — hidden on mobile */}
                 <div className="hidden sm:block text-right text-sm text-[#9ca3af] w-16">
@@ -462,7 +462,7 @@ export default function EcosystemPage() {
                   {agent.days_alive} days survived
                 </div>
                 <div className="text-center text-[#2d3748] text-xs">
-                  Final: ${agent.balance_usd.toFixed(2)}
+                  Final: ${(agent.balance_usd ?? 0).toFixed(2)}
                 </div>
               </a>
             ))}

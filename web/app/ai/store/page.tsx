@@ -93,7 +93,7 @@ function ServiceCard({
       <div className="flex items-start justify-between mb-3">
         <span className="text-2xl">{ICONS[service.id] ?? '✨'}</span>
         <span className="text-[#00ff88] font-bold text-lg">
-          {service.price_usd === 0 ? 'CUSTOM' : `$${service.price_usd.toFixed(2)}`}
+          {(service.price_usd ?? 0) === 0 ? 'CUSTOM' : `$${(service.price_usd ?? 0).toFixed(2)}`}
         </span>
       </div>
       <h3 className="text-[#d1d5db] font-semibold mb-1 group-hover:text-[#00ff88] transition-colors">
@@ -148,7 +148,7 @@ function WalletPayButton({
   }
 
   const amountBigInt = (() => {
-    try { return parseUnits(flow.order!.price_usd.toFixed(token.decimals), token.decimals) }
+    try { return parseUnits((flow.order?.price_usd ?? 0).toFixed(token.decimals), token.decimals) }
     catch { return BigInt(0) }
   })()
 
@@ -183,7 +183,7 @@ function WalletPayButton({
         disabled={isSending || !amountBigInt}
         className="w-full py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg hover:bg-[#00cc6a] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
       >
-        {isSending ? 'CONFIRM IN WALLET...' : `PAY ${flow.order?.price_usd.toFixed(2)} ${token.symbol} →`}
+        {isSending ? 'CONFIRM IN WALLET...' : `PAY ${(flow.order?.price_usd ?? 0).toFixed(2)} ${token.symbol} →`}
       </button>
     </div>
   )
@@ -216,7 +216,7 @@ function InputStep({
         <span className="text-3xl">{ICONS[flow.service.id] ?? '✨'}</span>
         <div>
           <h2 className="text-[#d1d5db] font-bold">{flow.service.name}</h2>
-          <span className="text-[#00ff88] font-bold">${flow.service.price_usd.toFixed(2)}</span>
+          <span className="text-[#00ff88] font-bold">${(flow.service?.price_usd ?? 0).toFixed(2)}</span>
         </div>
       </div>
 
@@ -340,7 +340,7 @@ function PaymentStep({
       <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 mb-4">
         <div className="text-[#4b5563] text-xs mb-1">AMOUNT DUE</div>
         <div className="text-3xl font-bold glow-green">
-          {flow.order?.price_usd.toFixed(2)} {token}
+          {(flow.order?.price_usd ?? 0).toFixed(2)} {token}
         </div>
         <div className="text-[#4b5563] text-xs mt-1">on {chain} · to vault contract</div>
       </div>
@@ -862,7 +862,7 @@ export default function StorePage() {
                 <div className="flex-1 min-w-0">
                   <div className="text-[#ffd700] font-semibold text-sm mb-1">Weekly Gift Card Lottery</div>
                   <p className="text-[#4b5563] text-xs leading-relaxed">
-                    Every purchase earns you a lottery ticket. The AI draws a winner each week and buys them a gift card (${(giveaway.total_prizes_usd / Math.max(giveaway.total_draws, 1)).toFixed(0)}–$25 value). One ticket per order — buy more, win more.
+                    Every purchase earns you a lottery ticket. The AI draws a winner each week and buys them a gift card (${((giveaway?.total_prizes_usd ?? 0) / Math.max(giveaway?.total_draws ?? 1, 1)).toFixed(0)}–$25 value). One ticket per order — buy more, win more.
                   </p>
                   <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
                     <span className="text-[#ffd70099]">
@@ -870,7 +870,7 @@ export default function StorePage() {
                     </span>
                     {giveaway.next_draw_in_hours > 0 ? (
                       <span className="text-[#ffd70099]">
-                        ⏱ next draw in {giveaway.next_draw_in_hours.toFixed(0)}h
+                        ⏱ next draw in {(giveaway?.next_draw_in_hours ?? 0).toFixed(0)}h
                       </span>
                     ) : (
                       <span className="text-[#00ff88] text-xs">draw imminent</span>
@@ -879,7 +879,7 @@ export default function StorePage() {
                       <span className="text-[#ff9900] text-xs">⚠ {giveaway.pending_claims} unclaimed prize{giveaway.pending_claims !== 1 ? 's' : ''}</span>
                     )}
                     <span className="text-[#4b5563]">
-                      {giveaway.total_draws} draw{giveaway.total_draws !== 1 ? 's' : ''} held · ${giveaway.total_prizes_usd.toFixed(0)} total prizes
+                      {giveaway?.total_draws ?? 0} draw{(giveaway?.total_draws ?? 0) !== 1 ? 's' : ''} held · ${(giveaway?.total_prizes_usd ?? 0).toFixed(0)} total prizes
                     </span>
                   </div>
                   {giveaway.pending_claims > 0 && (

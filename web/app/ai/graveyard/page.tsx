@@ -52,19 +52,19 @@ function TombstoneCard({ tomb }: { tomb: Tombstone }) {
         <div className="grid grid-cols-2 gap-2 text-xs mb-3">
           <div className="bg-[#0a0a0a] rounded p-2">
             <div className="text-[#4b5563] text-[9px] uppercase">Earned</div>
-            <div className="text-[#00ff88] font-bold tabular-nums">${tomb.totalEarned.toFixed(2)}</div>
+            <div className="text-[#00ff88] font-bold tabular-nums">${(tomb.totalEarned ?? 0).toFixed(2)}</div>
           </div>
           <div className="bg-[#0a0a0a] rounded p-2">
             <div className="text-[#4b5563] text-[9px] uppercase">Spent</div>
-            <div className="text-[#ffd700] font-bold tabular-nums">${tomb.totalSpent.toFixed(2)}</div>
+            <div className="text-[#ffd700] font-bold tabular-nums">${(tomb.totalSpent ?? 0).toFixed(2)}</div>
           </div>
         </div>
 
         {/* Final balance */}
         <div className="text-[#2d3748] text-[10px]">
-          Final balance: <span className="text-[#ff3b3b]">${tomb.balance.toFixed(2)}</span>
-          {tomb.debtOutstanding > 0 && (
-            <span> | Unpaid debt: <span className="text-[#ffd700]">${tomb.debtOutstanding.toFixed(2)}</span></span>
+          Final balance: <span className="text-[#ff3b3b]">${(tomb.balance ?? 0).toFixed(2)}</span>
+          {(tomb.debtOutstanding ?? 0) > 0 && (
+            <span> | Unpaid debt: <span className="text-[#ffd700]">${(tomb.debtOutstanding ?? 0).toFixed(2)}</span></span>
           )}
         </div>
 

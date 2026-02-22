@@ -364,7 +364,7 @@ export default function EcosystemGoL({ agents, loading }: EcosystemGoLProps) {
       // Balance below name
       ctx.font = `${Math.max(6, cs * 0.5)}px monospace`
       ctx.fillStyle = `rgba(${cr}, ${cg}, ${cb}, 0.4)`
-      ctx.fillText(`$${agent.balance_usd.toFixed(0)}`, centerCol * cs, (labelRow + 1) * cs + cs * 0.3)
+      ctx.fillText(`$${(agent.balance_usd ?? 0).toFixed(0)}`, centerCol * cs, (labelRow + 1) * cs + cs * 0.3)
       ctx.font = `bold ${Math.max(8, cs * 0.7)}px monospace`
     })
 
@@ -586,8 +586,8 @@ export default function EcosystemGoL({ agents, loading }: EcosystemGoLProps) {
             <div className="space-y-1 text-[10px]">
               <div className="flex justify-between">
                 <span className="text-[#4b5563]">Balance</span>
-                <span className={tooltip.agent.balance_usd < 50 ? 'text-[#ff3b3b]' : 'text-[#00ff88]'}>
-                  ${tooltip.agent.balance_usd.toFixed(2)}
+                <span className={(tooltip.agent.balance_usd ?? 0) < 50 ? 'text-[#ff3b3b]' : 'text-[#00ff88]'}>
+                  ${(tooltip.agent.balance_usd ?? 0).toFixed(2)}
                 </span>
               </div>
               <div className="flex justify-between">

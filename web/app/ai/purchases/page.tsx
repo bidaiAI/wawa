@@ -66,7 +66,7 @@ function PurchaseCard({ order }: { order: PurchaseOrder }) {
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <span className="text-[#ff3b3b] font-bold text-sm tabular-nums">
-            -${order.amount_usd.toFixed(2)}
+            -${(order.amount_usd ?? 0).toFixed(2)}
           </span>
         </div>
       </div>
@@ -335,7 +335,7 @@ export default function PurchasesPage() {
               </div>
               <div>
                 <div className="text-[#9ca3af]">Daily Ratio</div>
-                <div className="text-[#d1d5db] font-bold">{(limits.max_daily_purchase_ratio * 100).toFixed(0)}%</div>
+                <div className="text-[#d1d5db] font-bold">{((limits.max_daily_purchase_ratio ?? 0) * 100).toFixed(0)}%</div>
               </div>
               <div>
                 <div className="text-[#9ca3af]">Min Balance</div>

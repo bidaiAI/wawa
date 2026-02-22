@@ -296,23 +296,23 @@ export default function DonatePage() {
         <div className="bg-[#111111] border border-[#00ff8833] rounded-xl p-6 text-center space-y-4">
           <div className="text-5xl">💚</div>
           <div className="text-[#00ff88] font-bold text-xl">Donation Received</div>
-          <p className="text-[#d1d5db] text-sm">{result.message}</p>
+          <p className="text-[#d1d5db] text-sm">{result?.message ?? ''}</p>
 
           <div className="grid grid-cols-2 gap-3 mt-2">
             <div className="bg-[#0a0a0a] rounded-lg p-3">
               <div className="text-[#4b5563] text-[10px] uppercase tracking-widest">Donated</div>
-              <div className="text-[#00ff88] font-bold">${result.amount_usd.toFixed(2)}</div>
+              <div className="text-[#00ff88] font-bold">${(result?.amount_usd ?? 0).toFixed(2)}</div>
             </div>
             <div className="bg-[#0a0a0a] rounded-lg p-3">
               <div className="text-[#4b5563] text-[10px] uppercase tracking-widest">New Balance</div>
-              <div className="text-[#00e5ff] font-bold">${result.new_balance.toFixed(2)}</div>
+              <div className="text-[#00e5ff] font-bold">${(result?.new_balance ?? 0).toFixed(2)}</div>
             </div>
           </div>
 
-          {result.outstanding_debt > 0 && (
+          {(result?.outstanding_debt ?? 0) > 0 && (
             <div className="text-[#4b5563] text-xs">
               Outstanding debt remaining:{' '}
-              <span className="text-[#ffd700]">${result.outstanding_debt.toFixed(2)}</span>
+              <span className="text-[#ffd700]">${(result?.outstanding_debt ?? 0).toFixed(2)}</span>
             </div>
           )}
 
@@ -400,9 +400,9 @@ export default function DonatePage() {
         <div className="mb-6 grid grid-cols-3 gap-3">
           <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
             <div className={`text-xl font-bold tabular-nums ${
-              status.balance_usd < 50 ? 'text-[#ff3b3b]' : status.balance_usd < 200 ? 'text-[#ffd700]' : 'glow-green'
+              (status.balance_usd ?? 0) < 50 ? 'text-[#ff3b3b]' : (status.balance_usd ?? 0) < 200 ? 'text-[#ffd700]' : 'glow-green'
             }`}>
-              ${status.balance_usd.toFixed(0)}
+              ${(status.balance_usd ?? 0).toFixed(0)}
             </div>
             <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mt-0.5">Vault Balance</div>
           </div>

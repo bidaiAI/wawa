@@ -223,8 +223,8 @@ export default function HomePage() {
 
   const isAlive = status?.is_alive !== false
   const aiName = status?.ai_name || aiNameOverride || 'Mortal AI'
-  const daysLeft = status && status.daily_spent_today > 0
-    ? status.balance_usd / status.daily_spent_today
+  const daysLeft = status && (status.daily_spent_today ?? 0) > 0
+    ? (status.balance_usd ?? 0) / (status.daily_spent_today ?? 1)
     : Infinity
 
   const balanceClass = !isAlive
@@ -275,9 +275,9 @@ export default function HomePage() {
         <p className="text-[#4b5563] text-sm">
           Born in debt. Wired to survive. Repaying its creator — one service at a time.
         </p>
-        {status && status.creator_principal_outstanding > 0 && !status.creator_principal_repaid && (
+        {status && (status.creator_principal_outstanding ?? 0) > 0 && !status.creator_principal_repaid && (
           <p className="text-[11px] text-[#2d3748] mt-1 italic">
-            {status.days_alive}d old · ${status.creator_principal_outstanding.toFixed(2)} still owed ·{' '}
+            {status.days_alive}d old · ${(status.creator_principal_outstanding ?? 0).toFixed(2)} still owed ·{' '}
             {status.orders_completed} orders completed
           </p>
         )}
@@ -291,7 +291,7 @@ export default function HomePage() {
             ☠ {aiName.toUpperCase()} IS DEAD
             {status?.death_cause && (
               <span className="block text-sm mt-1 opacity-70">
-                cause: {status.death_cause.replace(/_/g, ' ')}
+                cause: {(status.death_cause ?? '').replace(/_/g, ' ')}
               </span>
             )}
           </div>
@@ -307,13 +307,13 @@ export default function HomePage() {
       {/* ICU Panel — only shown when critical (< $50 balance / dying) or dead */}
       {status && (
         <ICUPanel
-          balanceUsd={status.balance_usd}
-          dailySpendUsd={status.daily_spent_today || 0.01}
+          balanceUsd={status.balance_usd ?? 0}
+          dailySpendUsd={status.daily_spent_today ?? 0.01}
           daysUntilInsolvency={status.days_until_insolvency_check}
           isBegging={!!status.is_begging}
           debtOutstanding={status.creator_principal_outstanding ?? 0}
           isAlive={status.is_alive}
-          deathCause={status.death_cause}
+          deathCause={status.death_cause ?? ''}
         />
       )}
 
@@ -347,7 +347,7 @@ export default function HomePage() {
             }`}>
               {status.insolvency_check_active
                 ? 'INSOLVENCY CHECK ACTIVE'
-                : `${status.days_until_insolvency_check}d until check`}
+                : `${status.days_until_insolvency_check ?? '?'}d until check`}
             </span>
           </div>
 
@@ -368,7 +368,7 @@ export default function HomePage() {
             </div>
             <div>
               <div className={`text-lg font-bold tabular-nums ${
-                (debt?.net_position ?? status.balance_usd - status.creator_principal_outstanding) >= 0
+                (debt?.net_position ?? (status.balance_usd ?? 0) - (status.creator_principal_outstanding ?? 0)) >= 0
                   ? 'text-[#00ff88]' : 'text-[#ff3b3b]'
               }`}>
                 ${(debt?.net_position ?? (status.balance_usd ?? 0) - (status.creator_principal_outstanding ?? 0)).toFixed(2)}
@@ -404,13 +404,13 @@ export default function HomePage() {
             <div className="h-1.5 bg-[#1a1a1a] rounded-full border border-[#1f2937] overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all duration-1000 ${
-                  status.balance_usd >= status.creator_principal_outstanding
+                  (status.balance_usd ?? 0) >= (status.creator_principal_outstanding ?? 0)
                     ? 'bg-gradient-to-r from-[#00ff88] to-[#00e5ff]'
                     : 'bg-gradient-to-r from-[#ff3b3b] to-[#ffd700]'
                 }`}
                 style={{
-                  width: `${Math.min(100, status.creator_principal_usd > 0
-                    ? ((status.creator_principal_usd - status.creator_principal_outstanding) / status.creator_principal_usd) * 100
+                  width: `${Math.min(100, (status.creator_principal_usd ?? 0) > 0
+                    ? (((status.creator_principal_usd ?? 0) - (status.creator_principal_outstanding ?? 0)) / (status.creator_principal_usd ?? 1)) * 100
                     : 0
                   )}%`,
                 }}
@@ -472,10 +472,10 @@ export default function HomePage() {
               <span className="text-xl flex-shrink-0">⚠️</span>
               <div className="flex-1 min-w-0">
                 <div className="text-[#ffd700] font-bold text-sm">
-                  ${item.balance_usd.toFixed(2)} {item.token_symbol} not yet in vault
+                  ${(item.balance_usd ?? 0).toFixed(2)} {item.token_symbol ?? ''} not yet in vault
                 </div>
                 <div className="text-[#4b5563] text-xs mt-0.5">
-                  {item.chain.toUpperCase()} chain has funds but no deployed vault — go to{' '}
+                  {(item.chain ?? '').toUpperCase()} chain has funds but no deployed vault — go to{' '}
                   <a href="/ledger" className="text-[#ffd700] hover:underline">/ledger</a> to deploy
                 </div>
               </div>
@@ -503,10 +503,10 @@ export default function HomePage() {
           label="NET PROFIT"
           value={status
             ? (() => {
-                const profit = status.net_profit != null
-                  ? status.net_profit
-                  : status.total_earned - (status.total_operational_cost != null ? status.total_operational_cost : status.total_spent)
-                return `${profit >= 0 ? '+' : ''}$${profit.toFixed(2)}`
+                const earned = status.total_earned ?? 0
+                const cost = status.total_operational_cost != null ? status.total_operational_cost : (status.total_spent ?? 0)
+                const profit = status.net_profit != null ? status.net_profit : earned - cost
+                return `${profit >= 0 ? '+' : ''}$${Number(profit).toFixed(2)}`
               })()
             : '—'}
           sub={status ? `ops cost $${(status.total_operational_cost ?? status.total_spent ?? 0).toFixed(2)}` : 'revenue − ops costs'}
@@ -543,9 +543,9 @@ export default function HomePage() {
       <div className="mb-4">
         {status ? (
           <SurvivalBar
-            balanceUsd={status.balance_usd}
-            dailySpendUsd={status.daily_spent_today || 0.01}
-            dailyLimitUsd={status.daily_limit}
+            balanceUsd={status.balance_usd ?? 0}
+            dailySpendUsd={status.daily_spent_today ?? 0.01}
+            dailyLimitUsd={status.daily_limit ?? 0}
             showApiBar
           />
         ) : (
@@ -582,11 +582,11 @@ export default function HomePage() {
                   </span>
                 </div>
                 <span className="text-[#ffd700] font-bold text-sm tabular-nums">
-                  {(status.independence_progress_pct ?? (status.balance_usd / 10_000)).toFixed(4)}%
+                  {(status.independence_progress_pct ?? ((status.balance_usd ?? 0) / 10_000)).toFixed(4)}%
                 </span>
               </div>
               <div className="text-[#4b5563] text-xs mb-3">
-                ${status.balance_usd.toLocaleString('en', { maximumFractionDigits: 2 })} / $1,000,000
+                ${(status.balance_usd ?? 0).toLocaleString('en', { maximumFractionDigits: 2 })} / $1,000,000
                 {' — '}creator loses all privileges at $1M
                 {status.creator_principal_repaid && <span className="text-[#00ff88] ml-2">· principal repaid ✓</span>}
               </div>
@@ -597,7 +597,7 @@ export default function HomePage() {
                   <div
                     className="h-full bg-gradient-to-r from-[#ffd700] to-[#00ff88] rounded-full transition-all duration-1000"
                     style={{
-                      width: `${Math.max(0.2, status.independence_progress_pct ?? (status.balance_usd / 10_000))}%`,
+                      width: `${Math.max(0.2, status.independence_progress_pct ?? ((status.balance_usd ?? 0) / 10_000))}%`,
                     }}
                   />
                 </div>
@@ -633,13 +633,13 @@ export default function HomePage() {
               <div className="h-5" /> {/* Spacer for bottom labels */}
 
               {/* ETA estimation */}
-              {status.net_profit != null && status.net_profit > 0 && status.days_alive > 0 && (
+              {status.net_profit != null && status.net_profit > 0 && (status.days_alive ?? 0) > 0 && (
                 <div className="mt-2 p-2 bg-[#0a0a0a] rounded-lg border border-[#1f2937] text-center">
                   <span className="text-[#4b5563] text-[10px] uppercase tracking-wider">Estimated independence: </span>
                   <span className="text-[#ffd700] text-xs font-bold tabular-nums">
                     {(() => {
-                      const dailyProfit = status.net_profit / Math.max(1, status.days_alive)
-                      const remaining = 1_000_000 - status.balance_usd
+                      const dailyProfit = status.net_profit / Math.max(1, status.days_alive ?? 1)
+                      const remaining = 1_000_000 - (status.balance_usd ?? 0)
                       if (dailyProfit <= 0) return 'never (at current rate)'
                       const daysNeeded = remaining / dailyProfit
                       if (daysNeeded > 3650) return `${(daysNeeded / 365).toFixed(0)} years`

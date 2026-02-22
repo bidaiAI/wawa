@@ -70,7 +70,7 @@ function TxRow({ tx }: { tx: Transaction }) {
       </div>
 
       <span className={`font-bold text-sm flex-shrink-0 tabular-nums ${isIn ? 'glow-green' : 'text-[#ff3b3b]'}`}>
-        {isIn ? '+' : '-'}${tx.amount.toFixed(2)}
+        {isIn ? '+' : '-'}${(tx.amount ?? 0).toFixed(2)}
       </span>
     </div>
   )
@@ -87,8 +87,8 @@ export default function LedgerPage() {
     chain: string; balance_usd: number; token_symbol: string; vault_address: string; explorer: string
   }>>([])
 
-  const totalIn = transactions.filter((t) => t.direction === 'in').reduce((s, t) => s + t.amount, 0)
-  const totalOut = transactions.filter((t) => t.direction === 'out').reduce((s, t) => s + t.amount, 0)
+  const totalIn = transactions.filter((t) => t.direction === 'in').reduce((s, t) => s + (t.amount ?? 0), 0)
+  const totalOut = transactions.filter((t) => t.direction === 'out').reduce((s, t) => s + (t.amount ?? 0), 0)
 
   useEffect(() => {
     api.transactions(100)
@@ -149,7 +149,7 @@ export default function LedgerPage() {
             </div>
             {floatingTotal > 0 && (
               <div className="text-right">
-                <div className="text-[#ffd700] font-bold text-lg">~${floatingTotal.toFixed(2)}</div>
+                <div className="text-[#ffd700] font-bold text-lg">~${(floatingTotal ?? 0).toFixed(2)}</div>
                 <div className="text-[#4b5563] text-xs">est. value</div>
               </div>
             )}
@@ -179,9 +179,9 @@ export default function LedgerPage() {
                     </div>
                   )}
                 </div>
-                {a.estimated_usd > 0 && (
+                {(a.estimated_usd ?? 0) > 0 && (
                   <span className="text-[#ffd700] text-sm font-medium tabular-nums">
-                    ~${a.estimated_usd.toFixed(2)}
+                    ~${(a.estimated_usd ?? 0).toFixed(2)}
                   </span>
                 )}
               </div>
@@ -219,7 +219,7 @@ export default function LedgerPage() {
           <div className="flex items-center gap-2 mb-2">
             <span className="text-[#ff3b3b] text-base">🚨</span>
             <span className="text-[#ff3b3b] text-sm font-bold uppercase tracking-wide">
-              ${item.balance_usd.toFixed(2)} {item.token_symbol} waiting on undeployed {item.chain.toUpperCase()} vault!
+              ${(item.balance_usd ?? 0).toFixed(2)} {item.token_symbol ?? ''} waiting on undeployed {(item.chain ?? '').toUpperCase()} vault!
             </span>
           </div>
           <p className="text-[#6b7280] text-xs leading-relaxed mb-2">

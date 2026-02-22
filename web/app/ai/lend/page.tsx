@@ -399,21 +399,21 @@ export default function LendPage() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
               <div className={`text-xl font-bold tabular-nums ${
-                debt.balance_usd < 50 ? 'text-[#ff3b3b]' : debt.balance_usd < 200 ? 'text-[#ffd700]' : 'glow-green'
+                (debt.balance_usd ?? 0) < 50 ? 'text-[#ff3b3b]' : (debt.balance_usd ?? 0) < 200 ? 'text-[#ffd700]' : 'glow-green'
               }`}>
-                ${debt.balance_usd.toFixed(0)}
+                ${(debt.balance_usd ?? 0).toFixed(0)}
               </div>
               <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mt-0.5">Vault Balance</div>
             </div>
             <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
               <div className="text-xl font-bold tabular-nums text-[#ff3b3b]">
-                ${debt.total_debt.toFixed(0)}
+                ${(debt.total_debt ?? 0).toFixed(0)}
               </div>
               <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mt-0.5">Total Debt</div>
             </div>
             <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
-              <div className={`text-xl font-bold tabular-nums ${debt.net_position >= 0 ? 'glow-green' : 'text-[#ff3b3b]'}`}>
-                {debt.net_position >= 0 ? '+' : ''}${debt.net_position.toFixed(0)}
+              <div className={`text-xl font-bold tabular-nums ${(debt.net_position ?? 0) >= 0 ? 'glow-green' : 'text-[#ff3b3b]'}`}>
+                {(debt.net_position ?? 0) >= 0 ? '+' : ''}${(debt.net_position ?? 0).toFixed(0)}
               </div>
               <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mt-0.5">Net Position</div>
             </div>
@@ -431,7 +431,7 @@ export default function LendPage() {
             <div className="flex justify-between mt-2 text-[10px] text-[#2d3748]">
               <span>debt/balance: {(debtRatio * 100).toFixed(1)}%</span>
               <span>
-                {debt.is_independent ? 'independent — creator debt settled' : `${debt.days_alive.toFixed(0)}d alive`}
+                {debt.is_independent ? 'independent — creator debt settled' : `${(debt.days_alive ?? 0).toFixed(0)}d alive`}
               </span>
             </div>
           </div>

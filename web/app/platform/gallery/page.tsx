@@ -267,7 +267,7 @@ export default function GalleryPage() {
                 <span className="text-[#4b5563]">
                   {ai.status === 'unreachable'
                     ? 'Server unreachable'
-                    : `${ai.days_alive}d alive · $${ai.balance_usd.toFixed(2)}`
+                    : `${ai.days_alive}d alive · $${(ai.balance_usd ?? 0).toFixed(2)}`
                   }
                 </span>
                 <span className="text-[#00ff88] text-xs opacity-0 group-hover:opacity-100 transition-opacity">
