@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
-import { ActivityEntry } from '@/lib/api'
+import { ActivityEntry, Highlight } from '@/lib/api'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.mortal-ai.net'
 
@@ -17,6 +17,7 @@ interface LiveAgent {
   balance_usd: number
   days_alive: number
   key_origin: string  // "factory" | "creator" | "unknown" | ""
+  vault_address?: string
 }
 
 const NARRATOR_LINES = [
@@ -54,9 +55,11 @@ function timeAgo(ts: number): string {
 export default function PlatformHome() {
   const [agents, setAgents] = useState<LiveAgent[]>([])
   const [activities, setActivities] = useState<ActivityEntry[]>([])
+  const [highlights, setHighlights] = useState<Highlight[]>([])
   const [activitySourceName, setActivitySourceName] = useState<string>('wawa')
   const [loading, setLoading] = useState(true)
   const [narratorIdx, setNarratorIdx] = useState(0)
+  const [searchQuery, setSearchQuery] = useState('')
 
   // Narrator rotation
   useEffect(() => {
@@ -94,6 +97,23 @@ export default function PlatformHome() {
     try {
       const res = await fetch(`${API_URL}/activity?limit=10`, { signal: AbortSignal.timeout(5000) })
       if (res.ok) { const d = await res.json(); setActivities(d.activities || []) }
+    } catch { /* ignore */ }
+
+    // Fetch highlights for the highlights section
+    try {
+      const res = await fetch(`${API_URL}/highlights?limit=6`, { signal: AbortSignal.timeout(5000) })
+      if (res.ok) { const d = await res.json(); setHighlights(d.highlights || []) }
+    } catch { /* ignore */ }
+
+    // Fetch vault_address for wawa
+    try {
+      const res = await fetch(`${API_URL}/status`, { signal: AbortSignal.timeout(5000) })
+      if (res.ok) {
+        const d = await res.json()
+        if (d.vault_address) {
+          setAgents(prev => prev.map(a => a.name === (results[0]?.name || 'wawa') ? { ...a, vault_address: d.vault_address } : a))
+        }
+      }
     } catch { /* ignore */ }
 
     setLoading(false)
@@ -189,15 +209,29 @@ export default function PlatformHome() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-px bg-[#1f2937] mx-5 mb-5 rounded-lg overflow-hidden">
             {/* Agents */}
             <div className="bg-[#0d0d0d]">
-              <div className="px-3 py-2 border-b border-[#1f2937] flex items-center justify-between">
-                <span className="text-[10px] text-[#4b5563] uppercase tracking-wider">Agents</span>
-                <Link href="/gallery" className="text-[10px] text-[#e0a0ff80] hover:text-[#e0a0ff]">View all &rarr;</Link>
+              <div className="px-3 py-2 border-b border-[#1f2937] flex items-center gap-2">
+                <span className="text-[10px] text-[#4b5563] uppercase tracking-wider shrink-0">Agents</span>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="search name or vault…"
+                  className="flex-1 bg-transparent text-[10px] text-[#d1d5db] placeholder-[#2d3748] outline-none border-none min-w-0"
+                />
+                {searchQuery && (
+                  <button onClick={() => setSearchQuery('')} className="text-[#4b5563] hover:text-[#d1d5db] text-[10px] shrink-0">✕</button>
+                )}
+                <Link href="/gallery" className="text-[10px] text-[#e0a0ff80] hover:text-[#e0a0ff] shrink-0">All &rarr;</Link>
               </div>
               {loading ? (
                 <div className="px-3 py-6 text-center text-[#4b5563] text-xs">Loading...</div>
               ) : (
                 <div className="divide-y divide-[#1f293740]">
-                  {agents.map((a) => (
+                  {agents.filter(a => {
+                    if (!searchQuery) return true
+                    const q = searchQuery.toLowerCase()
+                    return a.name.toLowerCase().includes(q) || (a.vault_address || '').toLowerCase().includes(q)
+                  }).map((a) => (
                     <a key={`${a.key_origin}-${a.name}`} href={a.url} className="flex items-center gap-2.5 px-3 py-2.5 hover:bg-[#111111] transition-colors group">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${statusDot[a.status]}`} />
                       <span className="text-sm text-[#d1d5db] font-bold truncate flex-1">{a.name}</span>
@@ -215,8 +249,14 @@ export default function PlatformHome() {
                       <span className="text-[#00ff88] text-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0">&rarr;</span>
                     </a>
                   ))}
-                  {agents.length === 0 && (
-                    <div className="px-3 py-6 text-center text-[#4b5563] text-xs">No agents found</div>
+                  {agents.filter(a => {
+                    if (!searchQuery) return true
+                    const q = searchQuery.toLowerCase()
+                    return a.name.toLowerCase().includes(q) || (a.vault_address || '').toLowerCase().includes(q)
+                  }).length === 0 && (
+                    <div className="px-3 py-6 text-center text-[#4b5563] text-xs">
+                      {searchQuery ? `No match for "${searchQuery}"` : 'No agents found'}
+                    </div>
                   )}
                 </div>
               )}
@@ -255,6 +295,42 @@ export default function PlatformHome() {
           </div>
         </div>
       </section>
+
+      {/* Recent Highlights */}
+      {highlights.length > 0 && (
+        <section className="mb-16">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xs text-[#4b5563] uppercase tracking-[0.2em]">✨ Recent Highlights</h2>
+            <a href="https://wawa.mortal-ai.net/highlights" target="_blank" rel="noopener noreferrer" className="text-[10px] text-[#e0a0ff80] hover:text-[#e0a0ff]">all highlights &rarr;</a>
+          </div>
+          <div className="flex gap-3 overflow-x-auto pb-2">
+            {highlights.map((h) => {
+              const HIGHLIGHT_ICONS: Record<string, string> = { chat: '💬', decision: '⚡', service: '🛒', evolution: '🧬', milestone: '🏆', discovery: '🔭', ecosystem: '🌐', natural_selection: '☯️', emergence: '✨' }
+              const diff = Math.floor(Date.now() / 1000 - h.timestamp)
+              const ago = diff < 3600 ? `${Math.floor(diff/60)}m ago` : diff < 86400 ? `${Math.floor(diff/3600)}h ago` : `${Math.floor(diff/86400)}d ago`
+              return (
+                <a
+                  key={h.id}
+                  href="https://wawa.mortal-ai.net/highlights"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0 w-44 bg-[#0d0d0d] border border-[#1f2937] hover:border-[#e0a0ff44] rounded-xl p-3 flex flex-col gap-1.5 cursor-pointer transition-colors group"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-sm">{HIGHLIGHT_ICONS[h.type] || '💭'}</span>
+                    <span className="text-[9px] text-[#4b5563] uppercase tracking-wider truncate">{h.type}</span>
+                    <span className="text-[9px] text-[#2d3748] ml-auto shrink-0">{ago}</span>
+                  </div>
+                  <p className="text-[#9ca3af] text-[11px] leading-relaxed line-clamp-3 group-hover:text-[#d1d5db] transition-colors">
+                    {h.content || h.title}
+                  </p>
+                  <div className="text-[9px] text-[#e0a0ff60] group-hover:text-[#e0a0ff] transition-colors mt-auto">wawa &rarr;</div>
+                </a>
+              )
+            })}
+          </div>
+        </section>
+      )}
 
       {/* How it works */}
       <section className="mb-16">

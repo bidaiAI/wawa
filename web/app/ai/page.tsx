@@ -233,6 +233,15 @@ export default function HomePage() {
     return () => clearInterval(id)
   }, [])
 
+  // Auto-rotate mind panel tabs every 7 seconds
+  useEffect(() => {
+    const tabs: Array<'thoughts' | 'decisions' | 'stream'> = ['thoughts', 'decisions', 'stream']
+    const id = setInterval(() => {
+      setMindTab(prev => tabs[(tabs.indexOf(prev) + 1) % tabs.length])
+    }, 7000)
+    return () => clearInterval(id)
+  }, [])
+
   const isAlive = status?.is_alive !== false
   const aiName = status?.ai_name || aiNameOverride || 'Mortal AI'
   const daysLeft = status && (status.daily_spent_today ?? 0) > 0
@@ -432,9 +441,6 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Story arc — key events in wawa's life */}
-      <StoryTimeline highlights={storyHighlights} />
-
       {/* AI thoughts — shown in mind panel below balance card */}
 
       {/* Big balance card */}
@@ -500,7 +506,7 @@ export default function HomePage() {
 
         {/* Tab 1: Thoughts — AI highlights / self-reflection */}
         {mindTab === 'thoughts' && (
-          <div className="p-4">
+          <div key="thoughts" className="p-4 tab-fade-in">
             {storyHighlights.filter(h => ['chat','decision','evolution','discovery','milestone','social'].includes(h.type)).length === 0 ? (
               <p className="text-[#4b5563] text-xs text-center py-4">No thoughts recorded yet...</p>
             ) : (
@@ -545,7 +551,7 @@ export default function HomePage() {
 
         {/* Tab 2: Decisions — autonomous reasoning across all domains */}
         {mindTab === 'decisions' && (
-          <div className="p-4">
+          <div key="decisions" className="p-4 tab-fade-in">
             {activityFeed.filter(a => a.reasoning && a.reasoning.length > 10).length === 0 ? (
               <div className="py-4 space-y-3 text-center">
                 <p className="text-[#4b5563] text-xs">No decisions recorded yet.</p>
@@ -588,7 +594,7 @@ export default function HomePage() {
 
         {/* Tab 3: Stream — all activity, live feed */}
         {mindTab === 'stream' && (
-          <div className="max-h-[280px] overflow-y-auto">
+          <div key="stream" className="max-h-[280px] overflow-y-auto tab-fade-in">
             {activityFeed.length === 0 ? (
               <p className="text-[#4b5563] text-xs text-center py-6">No activity yet...</p>
             ) : (
@@ -613,6 +619,9 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
+      {/* Story arc — key events in wawa's life */}
+      <StoryTimeline highlights={storyHighlights} />
 
       {/* Undeployed chain funds — urgent alert when tokens waiting on chain without vault */}
       {status && (status.undeployed_chain_funds ?? []).length > 0 && (
