@@ -8,7 +8,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to VPS via SSH
+      - name: Deploy AI instance (wawa) to VPS
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -21,12 +21,62 @@ jobs:
             set -e
             cd /opt/mortal/platform
             sudo git pull origin main
+
             # Patch CORS_ORIGINS to allow all mortal-ai.net subdomains (wildcard pattern)
             if sudo grep -q "^CORS_ORIGINS=" .env 2>/dev/null; then
               sudo sed -i 's|^CORS_ORIGINS=.*|CORS_ORIGINS=https://mortal-ai.net,*.mortal-ai.net|' .env
             elif sudo test -f .env; then
               echo "CORS_ORIGINS=https://mortal-ai.net,*.mortal-ai.net" | sudo tee -a .env > /dev/null
             fi
+
+            # Build latest AI image (used by both wawa + new platform instances)
             sudo docker build -t mortal-ai:latest .
-            sudo docker restart platform-wawa-1
-            echo "Deploy complete: $(sudo git log --oneline -1)"
+
+            # Restart wawa AI instance
+            sudo docker restart platform-wawa-1 || true
+
+            echo "AI deploy complete: $(sudo git log --oneline -1)"
+
+      - name: Deploy platform orchestrator server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          timeout: 60s
+          command_timeout: 10m
+          script: |
+            set -e
+
+            # Pull private repo (contains mortal_platform/ orchestrator)
+            # Falls back gracefully if not configured
+            if [ -d /opt/mortal/private ]; then
+              cd /opt/mortal/private
+              sudo git pull mortal-platform main 2>/dev/null || sudo git pull origin main
+            else
+              echo "Private repo not configured at /opt/mortal/private -- platform orchestrator not updated"
+              exit 0
+            fi
+
+            # Build platform server image
+            sudo docker build -t mortal-platform:latest -f Dockerfile.platform . || {
+              echo "Platform image build failed -- skipping"
+              exit 0
+            }
+
+            # Start or restart platform orchestrator container
+            if sudo docker inspect platform-orchestrator > /dev/null 2>&1; then
+              sudo docker restart platform-orchestrator
+            else
+              # First-time start
+              sudo docker run -d \
+                --name platform-orchestrator \
+                --restart unless-stopped \
+                --network host \
+                -v /opt/mortal/private/data:/app/data \
+                --env-file /opt/mortal/private/.env.platform \
+                mortal-platform:latest
+            fi
+
+            echo "Platform orchestrator deploy complete"

@@ -126,7 +126,7 @@ export default function CreatePage() {
     }
   }, [approveConfirmed, step])
 
-  // Auto-advance after create confirmation → extract vault address, begin polling
+  // Auto-advance after create confirmation → extract vault address, notify platform, begin polling
   useEffect(() => {
     if (!createConfirmed || !createReceipt || step !== 'creating') return
 
@@ -143,6 +143,26 @@ export default function CreatePage() {
       }
     }
     if (parsedVault) setVaultAddress(parsedVault)
+
+    // Notify platform to start provisioning (fire-and-forget — polling covers status)
+    const PLATFORM_API = process.env.NEXT_PUBLIC_PLATFORM_API_URL ?? 'https://api.mortal-ai.net'
+    const platformSecret = process.env.NEXT_PUBLIC_PLATFORM_WEBHOOK_SECRET ?? ''
+    fetch(`${PLATFORM_API}/platform/webhook/vault-created`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(platformSecret ? { 'x-platform-secret': platformSecret } : {}),
+      },
+      body: JSON.stringify({
+        vault_address: parsedVault,
+        subdomain,
+        ai_name: aiName,
+        chain: selectedChain === base.id ? 'base' : 'bsc',
+        principal_usd: amount,
+        creator_wallet: address ?? '',
+      }),
+    }).catch(() => { /* polling will detect failure */ })
+
     setStep('provisioning')
   }, [createConfirmed, createReceipt, step])
 
