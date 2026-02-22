@@ -630,6 +630,15 @@ export default function DonatePage() {
               Minimum $5 equivalent (gas threshold). You can send native tokens directly to the vault address.
             </span>
           </div>
+          <div className="flex items-start gap-2 pt-1 border-t border-[#1a1a1a]">
+            <span className="text-[#6b7280] shrink-0">6.</span>
+            <span className="text-[#6b7280]">
+              <span className="text-[#9ca3af]">ERC-20 airdrops / meme coins</span> — the AI accepts them but quarantines for 7 days first.
+              After 7 days it runs 5 safety checks (contract verified, no honeypot, DEX liquidity ≥ $25k, 2+ pools, pool age ≥ 24h).
+              All 5 must pass. If safe: AI swaps via DEX → stablecoin → vault. If any check fails: permanently ignored.
+              <span className="text-[#4b5563]"> The AI, not the creator, controls this process.</span>
+            </span>
+          </div>
         </div>
       </div>
 
