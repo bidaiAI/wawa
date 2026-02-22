@@ -2833,32 +2833,40 @@ async def lifespan(app):
 
             # ---- Initialize chain executor for on-chain transactions ----
             # Key loading order (most to least secure):
-            #   1. secrets/ai_private_key file (chmod 600) — set by deploy_vault.py
-            #   2. AI_KEY_FILE env var pointing to a custom path
-            #   3. AI_PRIVATE_KEY env var (legacy fallback — .env plaintext)
+            #   1. secrets/ai_private_key file (chmod 600) — written by deploy_vault.py
+            #   2. AI_KEY_FILE env var pointing to a custom secrets file path
+            #   3. AI_PRIVATE_KEY env var (legacy fallback — plaintext in .env)
             ai_pk = ""
+            _secrets_default = Path(__file__).resolve().parent / "secrets" / "ai_private_key"
             key_file_path = os.getenv("AI_KEY_FILE", "").strip()
-            if not key_file_path:
-                # Default secrets file location
-                from pathlib import Path as _Path
-                _default = _Path(__file__).resolve().parent / "secrets" / "ai_private_key"
-                if _default.exists():
-                    key_file_path = str(_default)
+            if not key_file_path and _secrets_default.exists():
+                # Default secrets file location (auto-created by deploy_vault.py)
+                key_file_path = str(_secrets_default)
             if key_file_path:
                 try:
-                    from pathlib import Path as _Path
-                    ai_pk = _Path(key_file_path).read_text(encoding="utf-8").strip()
+                    ai_pk = Path(key_file_path).read_text(encoding="utf-8").strip()
                     logger.info(f"AI key loaded from secrets file: {key_file_path}")
+                except FileNotFoundError:
+                    logger.error(
+                        f"AI_KEY_FILE path set to '{key_file_path}' but file does not exist. "
+                        "Chain executor will be disabled. Re-run deploy_vault.py to regenerate."
+                    )
                 except Exception as _e:
-                    logger.warning(f"Failed to read AI key from {key_file_path}: {_e}")
+                    logger.error(f"Failed to read AI key file '{key_file_path}': {_e}")
             if not ai_pk:
-                # Legacy fallback — plaintext in .env (discouraged, logs warning)
+                # Legacy fallback — plaintext in .env (discouraged)
                 ai_pk = os.getenv("AI_PRIVATE_KEY", "")
                 if ai_pk:
                     logger.warning(
                         "AI_PRIVATE_KEY loaded from environment variable (plaintext). "
-                        "Re-run deploy_vault.py on the server to migrate to secure secrets file."
+                        "Re-run deploy_vault.py on the server to migrate to secrets file."
                     )
+            if not ai_pk:
+                logger.error(
+                    "AI private key not found (checked secrets file and AI_PRIVATE_KEY env). "
+                    "ChainExecutor disabled — debt repayment and on-chain functions will not work. "
+                    "Fix: run deploy_vault.py on this server to generate and seal the key."
+                )
             if ai_pk and vaults_cfg:
                 vault_addrs = {
                     cid: cd.get("vault_address", "")

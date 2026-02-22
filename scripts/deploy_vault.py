@@ -114,8 +114,10 @@ def _detect_local_env() -> bool:
     # macOS personal machine indicator
     if sys.platform == "darwin":
         return True
-    # Linux: check for desktop environment or typical macOS/Windows home path
-    if os.path.exists("/Users") or os.path.exists("/home") and os.getenv("DISPLAY"):
+    # Linux: /Users means macOS-like; DISPLAY on Linux = desktop environment (not a server)
+    if os.path.exists("/Users"):
+        return True
+    if os.path.exists("/home") and os.getenv("DISPLAY"):
         return True
     # Common CI/local indicators
     for env_var in ("USERPROFILE", "APPDATA", "HOMEPATH"):

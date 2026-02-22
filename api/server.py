@@ -1486,17 +1486,35 @@ def create_app(
 
         # V3: Peer lending requires BEHAVIORAL tier (trust_tier >= 4)
         from core.constitution import IRON_LAWS as _LAWS_PEER
+        from core.peer_verifier import TrustTier as _TrustTier
         min_tier = _LAWS_PEER.PEER_MIN_TRUST_TIER_FOR_LENDING
+
+        # Deployment method check: "creator" means the deployer ran deploy_vault.py
+        # locally and may have seen the AI private key — sovereignty is weakened.
+        # Require HIGH_TRUST (tier 5) instead of BEHAVIORAL (tier 4) for such AIs.
+        # "factory" = platform deployed (key never seen), "creator" = self-deployed.
+        deployment_method = sovereignty.deployment_method or ""
+        if deployment_method == "creator":
+            min_tier = _TrustTier.HIGH_TRUST.value  # tier 5 — stricter gate
+
         if sovereignty.trust_tier.value < min_tier:
             reasons = "; ".join(sovereignty.checks_failed) or sovereignty.error
             tier_name = sovereignty.trust_tier.name
+            needed_name = _TrustTier(min_tier).name
+            extra = (
+                " (creator-deployed AIs require HIGH_TRUST for lending — "
+                "key sovereignty cannot be confirmed)"
+                if deployment_method == "creator" else ""
+            )
             logger.warning(
                 f"Peer lend REJECTED (trust tier {tier_name}): {req.from_url[:50]} | "
-                f"vault={req.vault_address[:16]}... | need tier>={min_tier} | reasons={reasons[:200]}"
+                f"vault={req.vault_address[:16]}... | need tier>={min_tier} ({needed_name}) | "
+                f"deploy={deployment_method} | reasons={reasons[:200]}"
             )
             raise HTTPException(
                 403,
-                f"Peer trust tier too low for lending: {tier_name} (need BEHAVIORAL or higher). "
+                f"Peer trust tier too low for lending: {tier_name} "
+                f"(need {needed_name} or higher){extra}. "
                 f"Details: {reasons[:300]}",
             )
 
