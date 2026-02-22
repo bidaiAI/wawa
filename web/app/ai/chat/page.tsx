@@ -12,6 +12,8 @@ interface Message {
 }
 
 const UPSELL_SERVICES = [
+  { id: 'twitter_takeover_12h', label: '🐦 12h Twitter Takeover', price: '$5' },
+  { id: 'tweet_pack_5', label: '✍️ 5 Personalized Tweets', price: '$3' },
   { id: 'tarot', label: '🔮 Tarot Reading', price: '$2' },
   { id: 'token_analysis', label: '📊 Token Analysis', price: '$5' },
   { id: 'thread_writer', label: '🧵 Twitter Thread', price: '$3' },
