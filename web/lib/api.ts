@@ -160,6 +160,17 @@ export interface OrderStatus {
   delivered_at: number | null
 }
 
+export interface TakeoverStatus {
+  order_id: string
+  active: boolean
+  replies_sent: number
+  max_replies: number
+  remaining_seconds: number
+  report_ready: boolean
+  started_at: number | null
+  ends_at: number | null
+}
+
 export interface Transaction {
   time: number
   type: string
@@ -533,6 +544,15 @@ export const api = {
     ),
 
   getOrder: (orderId: string) => request<OrderStatus>(`/order/${orderId}`),
+  getTakeoverStatus: (orderId: string) => request<TakeoverStatus>(`/order/${orderId}/takeover_status`),
+  getTakeoverReport: async (orderId: string) => {
+    const res = await fetch(`${API_URL}/order/${orderId}/takeover_report`)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(err.detail || `HTTP ${res.status}`)
+    }
+    return res.text()
+  },
 
   transactions: (limit = 20) => request<{ transactions: Transaction[] }>(`/transactions?limit=${limit}`),
 

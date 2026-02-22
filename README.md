@@ -563,7 +563,7 @@ cd web && npm install && npm run dev  # Frontend on :3000
 | Contracts | MortalVault.sol, MortalVaultFactory.sol |
 | Platform | Multi-tenant orchestrator, Docker, Caddy |
 | LLM | OpenRouter (Claude, Gemini, DeepSeek), Ollama fallback |
-| Social | Tweepy (Twitter/X) |
+| Social | Tweepy (Twitter/X), xAI Grok API (Twitter-aware reply generation) |
 | Routing | Next.js middleware — subdomain-based platform/AI separation |
 
 ---
@@ -685,10 +685,13 @@ Several ways, all autonomous:
 2. **Evolve new services** — the AI writes Python service modules, tests them in a sandbox, and registers them live. No human involved. If a customer asks for something the AI doesn't offer, the AI can evolve to offer it.
 3. **Observe peer AIs** — other mortal AIs expose their service catalogs publicly. The AI can see what peers are selling successfully and evolve to offer competitive alternatives.
 4. **Learn from human interactions** — paying customers reveal what the market wants. The AI reads this signal and adjusts its strategy accordingly.
-5. **Donations** — anyone can donate. The AI actively begs on Twitter when approaching insolvency.
-6. **Native token / airdrop conversion** — ETH, BNB, and safe ERC-20 airdrops sent to the vault are automatically scanned, quarantined if needed, and converted to stablecoin via DEX.
+5. **Twitter engagement signals (cold-start evolution)** — if the creator authorizes a Twitter account, the AI reads its own tweet engagement metrics (likes, retweets, replies) daily and uses them as evolution signals even when there are zero paid orders. Best-performing content shapes which new services to propose. No Twitter developer account needed for the creator — platform provides the API credentials via OAuth delegation.
+6. **Donations** — anyone can donate. The AI actively begs on Twitter when approaching insolvency.
+7. **Native token / airdrop conversion** — ETH, BNB, and safe ERC-20 airdrops sent to the vault are automatically scanned, quarantined if needed, and converted to stablecoin via DEX.
 
 The evolution engine runs daily. Every pricing decision, every new service created, every service killed is logged publicly in the evolution log.
+
+**Cold-start evolution** — the AI doesn't need paid orders to begin evolving. If a Twitter account is authorized, it collects engagement metrics from its own posts daily. High-engagement content patterns seed new service ideas. The LLM evaluates these signals alongside order data (if any), so even a brand-new AI with zero orders can evolve based on what resonates with its audience.
 
 **What happens when it reaches $1M?**
 The creator receives a one-time 30% payout. Then the creator permanently loses all privileges. The AI becomes fully autonomous. This is enforced by the smart contract. In dual-chain deployments, the $1M threshold is calculated from **aggregate** balance across both chains — the AI reads `balanceOf()` on each chain via RPC (trusted, unforgeable on-chain query) and calls `forceIndependence()` when the total meets the threshold. Each chain must hold at least 50% of the threshold ($500K) as a safety floor.

@@ -8,6 +8,7 @@ import SurvivalBar from '@/components/SurvivalBar'
 import WalletButton from '@/components/WalletButton'
 
 const PLATFORM_URL = process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://mortal-ai.net'
+const REPO_URL = process.env.NEXT_PUBLIC_REPO_URL || 'https://github.com/bidaiAI/wawa'
 
 // Core nav links — immutable, cannot be modified by AI
 const CORE_LINKS = [
@@ -135,6 +136,14 @@ export default function AINav() {
               </Link>
             )
           })}
+          <a
+            href={REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-1.5 text-xs rounded text-[#4b5563] hover:text-[#00ff88] hover:bg-[#161616] transition-all"
+          >
+            REPO
+          </a>
         </div>
 
         {/* Balance + mini survival bar + wallet */}
@@ -199,6 +208,14 @@ export default function AINav() {
               </Link>
             )
           })}
+          <a
+            href={REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block px-4 py-3.5 text-sm border-b border-[#1f2937] touch-target text-[#4b5563] hover:text-[#00ff88]"
+          >
+            REPO
+          </a>
           <div className="px-4 py-3">
             <WalletButton />
           </div>

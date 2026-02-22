@@ -34,6 +34,7 @@ logger = logging.getLogger("mortal.services.registry")
 
 # Services with hardcoded dispatch in main.py — registry never touches these.
 BUILTIN_SERVICES: frozenset = frozenset({
+    "twitter_takeover_12h", "tweet_pack_5",
     "tarot", "token_analysis", "thread_writer", "code_review", "custom",
 })
 

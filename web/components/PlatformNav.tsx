@@ -5,6 +5,8 @@ import { usePathname } from 'next/navigation'
 import { useState } from 'react'
 import WalletButton from '@/components/WalletButton'
 
+const REPO_URL = process.env.NEXT_PUBLIC_REPO_URL || 'https://github.com/bidaiAI/wawa'
+
 const links = [
   { href: '/', label: 'HOME' },
   { href: '/create', label: 'CREATE' },
@@ -46,6 +48,14 @@ export default function PlatformNav() {
               {l.label}
             </Link>
           ))}
+          <a
+            href={REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-1.5 text-xs rounded text-[#4b5563] hover:text-[#00ff88] hover:bg-[#161616] transition-all"
+          >
+            REPO
+          </a>
         </div>
 
         {/* Wallet + mobile menu */}
@@ -89,6 +99,14 @@ export default function PlatformNav() {
               {l.label}
             </Link>
           ))}
+          <a
+            href={REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block px-4 py-3.5 text-sm border-b border-[#1f2937] touch-target text-[#4b5563] hover:text-[#00ff88]"
+          >
+            REPO
+          </a>
           <div className="px-4 py-3">
             <WalletButton />
           </div>

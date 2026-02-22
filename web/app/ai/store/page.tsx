@@ -1,15 +1,24 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { api, Service, ChainInfo, OrderResponse, OrderStatus, GiveawayStatus } from '@/lib/api'
+import { api, Service, ChainInfo, OrderResponse, OrderStatus, GiveawayStatus, TakeoverStatus } from '@/lib/api'
 
 // ── Icon map ─────────────────────────────────────────────────
 const ICONS: Record<string, string> = {
+  twitter_takeover_12h: '🐦',
+  tweet_pack_5: '✍️',
   tarot: '🔮',
   token_analysis: '📊',
   thread_writer: '🧵',
   code_review: '🔍',
   custom: '⭐',
+}
+
+function formatTakeoverRemaining(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds || 0))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  return `${h}h ${m}m`
 }
 
 // ── Steps ────────────────────────────────────────────────────
@@ -89,7 +98,7 @@ function InputStep({
       {/* Input */}
       <div className="mb-4">
         <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">
-          {isTarot ? 'YOUR QUESTION' : flow.service.id === 'token_analysis' ? 'CONTRACT ADDRESS' : flow.service.id === 'thread_writer' ? 'TOPIC' : flow.service.id === 'code_review' ? 'PASTE CODE' : 'DESCRIBE YOUR REQUEST'}
+          {isTarot ? 'YOUR QUESTION' : flow.service.id === 'token_analysis' ? 'CONTRACT ADDRESS' : flow.service.id === 'thread_writer' ? 'TOPIC' : flow.service.id === 'code_review' ? 'PASTE CODE' : flow.service.id === 'twitter_takeover_12h' ? 'KEYWORDS & TONE (optional)' : flow.service.id === 'tweet_pack_5' ? '3 PAST TWEETS OR TONE + TOPIC' : 'DESCRIBE YOUR REQUEST'}
         </label>
         <textarea
           value={flow.userInput}
@@ -103,9 +112,13 @@ function InputStep({
               ? 'e.g. Why Bitcoin will reach $1M'
               : flow.service.id === 'code_review'
               ? 'Paste your code here...'
+              : flow.service.id === 'twitter_takeover_12h'
+              ? 'e.g. Keywords: crypto, wawa. Tone: friendly, brief.'
+              : flow.service.id === 'tweet_pack_5'
+              ? 'Paste 3 past tweets (or describe your tone), then add topic. e.g. Topic: launch day. Tone: casual, a bit witty.'
               : 'Describe what you need...'
           }
-          rows={isTarot || flow.service.id === 'thread_writer' ? 3 : 6}
+          rows={isTarot || flow.service.id === 'thread_writer' || flow.service.id === 'twitter_takeover_12h' ? 3 : flow.service.id === 'tweet_pack_5' ? 6 : 6}
           className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3 text-[#d1d5db] text-sm resize-none focus:outline-none focus:border-[#00ff8844] placeholder-[#2d3748]"
         />
       </div>
@@ -250,7 +263,23 @@ function PaymentStep({
 }
 
 // ── Waiting / Delivered step ──────────────────────────────────
-function ResultStep({ flow, onReset }: { flow: OrderFlow; onReset: () => void }) {
+function ResultStep({
+  flow,
+  onReset,
+  takeover,
+  takeoverReport,
+  takeoverReportError,
+  takeoverReportLoading,
+  onLoadTakeoverReport,
+}: {
+  flow: OrderFlow
+  onReset: () => void
+  takeover: TakeoverStatus | null
+  takeoverReport: string
+  takeoverReportError: string
+  takeoverReportLoading: boolean
+  onLoadTakeoverReport: () => void
+}) {
   const isDelivered = flow.status === 'delivered'
   const isFailed = flow.status === 'failed'
   const isExpiredOrRefunded = flow.status === 'expired' || flow.status === 'refunded'
@@ -281,6 +310,43 @@ function ResultStep({ flow, onReset }: { flow: OrderFlow; onReset: () => void })
                 or contact wawa directly — reference order ID:{' '}
                 <span className="font-mono text-[#00ff88]">{flow.order?.order_id}</span>
               </p>
+            </div>
+          )}
+          {flow.service.id === 'twitter_takeover_12h' && flow.order && (
+            <div className="mt-4 bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-4 text-sm">
+              <div className="text-[#d1d5db] font-semibold mb-2">Twitter Takeover Status</div>
+              {takeover?.active ? (
+                <div className="text-[#4b5563] space-y-1">
+                  <div><span className="text-[#00ff88] font-bold">RUNNING</span></div>
+                  <div>Remaining: <span className="text-[#d1d5db]">{formatTakeoverRemaining(takeover.remaining_seconds)}</span></div>
+                  <div>Replies sent: <span className="text-[#d1d5db]">{takeover.replies_sent}/{takeover.max_replies}</span></div>
+                </div>
+              ) : takeover?.report_ready ? (
+                <div className="space-y-2">
+                  <div className="text-[#4b5563]">Takeover finished. Report is ready.</div>
+                  {!takeoverReport && (
+                    <button
+                      onClick={onLoadTakeoverReport}
+                      disabled={takeoverReportLoading}
+                      className="px-3 py-1.5 text-xs border border-[#1f2937] rounded hover:border-[#00ff8844] hover:text-[#00ff88] transition-all disabled:opacity-40"
+                    >
+                      {takeoverReportLoading ? 'LOADING REPORT...' : 'VIEW REPORT'}
+                    </button>
+                  )}
+                  {takeoverReport && (
+                    <pre className="bg-[#111111] border border-[#1f2937] rounded p-3 text-xs text-[#d1d5db] whitespace-pre-wrap max-h-48 overflow-y-auto">
+                      {takeoverReport}
+                    </pre>
+                  )}
+                  {takeoverReportError && (
+                    <div className="text-[#ff3b3b] text-xs bg-[#ff3b3b0a] border border-[#ff3b3b33] rounded px-2 py-1">
+                      {takeoverReportError}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-[#4b5563]">Initializing takeover task...</div>
+              )}
             </div>
           )}
           <button
@@ -356,6 +422,10 @@ export default function StorePage() {
   const [error, setError] = useState('')
   const [verifyLoading, setVerifyLoading] = useState(false)
   const [giveaway, setGiveaway] = useState<GiveawayStatus | null>(null)
+  const [takeover, setTakeover] = useState<TakeoverStatus | null>(null)
+  const [takeoverReport, setTakeoverReport] = useState('')
+  const [takeoverReportError, setTakeoverReportError] = useState('')
+  const [takeoverReportLoading, setTakeoverReportLoading] = useState(false)
 
   const [flow, setFlow] = useState<OrderFlow>({
     service: null!,
@@ -410,8 +480,28 @@ export default function StorePage() {
     return () => clearInterval(id)
   }, [step, flow.order])
 
+  // Order-scoped takeover status polling (shown only in order interface).
+  useEffect(() => {
+    if (!flow.order || flow.service?.id !== 'twitter_takeover_12h') return
+    let cancelled = false
+    const loadTakeover = async () => {
+      try {
+        const s = await api.getTakeoverStatus(flow.order!.order_id)
+        if (!cancelled) setTakeover(s)
+      } catch {
+        if (!cancelled) setTakeover(null)
+      }
+    }
+    loadTakeover()
+    const id = setInterval(loadTakeover, 5_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [flow.order, flow.service?.id])
+
   const handleSelectService = (s: Service) => {
     setFlow((f) => ({ ...f, service: s, userInput: '', txHash: '', order: null, result: null, status: null }))
+    setTakeover(null)
+    setTakeoverReport('')
+    setTakeoverReportError('')
     setError('')
     setStep('input')
   }
@@ -486,7 +576,30 @@ export default function StorePage() {
 
   const handleReset = () => {
     setStep('browse')
+    setTakeover(null)
+    setTakeoverReport('')
+    setTakeoverReportError('')
     setError('')
+  }
+
+  const handleLoadTakeoverReport = async () => {
+    if (!flow.order) return
+    setTakeoverReportLoading(true)
+    setTakeoverReportError('')
+    setError('')
+    try {
+      const report = await api.getTakeoverReport(flow.order.order_id)
+      setTakeoverReport(report)
+    } catch (e: any) {
+      const msg = String(e?.message || '')
+      if (/404|not ready|not found/i.test(msg)) {
+        setTakeoverReportError('Report is not ready yet. Please try again in a minute.')
+      } else {
+        setTakeoverReportError('Failed to load report. Please retry later.')
+      }
+    } finally {
+      setTakeoverReportLoading(false)
+    }
   }
 
   return (
@@ -593,7 +706,15 @@ export default function StorePage() {
 
       {/* Step: waiting / delivered */}
       {(step === 'waiting' || step === 'delivered') && (
-        <ResultStep flow={flow} onReset={handleReset} />
+        <ResultStep
+          flow={flow}
+          onReset={handleReset}
+          takeover={takeover}
+          takeoverReport={takeoverReport}
+          takeoverReportError={takeoverReportError}
+          takeoverReportLoading={takeoverReportLoading}
+          onLoadTakeoverReport={handleLoadTakeoverReport}
+        />
       )}
     </div>
   )

@@ -11,6 +11,11 @@ export default function AILayout({ children }: { children: React.ReactNode }) {
         <span className="glow-green">mortal AI</span> is alive.{' '}
         <span className="opacity-50">every purchase extends its life.</span>
         <div className="mt-1 opacity-40">built with survival instinct · powered by fear</div>
+        <div className="mt-1 opacity-40">
+          <a href="https://github.com/bidaiAI/wawa" target="_blank" rel="noopener noreferrer" className="hover:text-[#00ff88] transition-colors">
+            GitHub Repo
+          </a>
+        </div>
       </footer>
     </>
   )

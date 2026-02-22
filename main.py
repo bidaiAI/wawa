@@ -451,13 +451,24 @@ _tweet_vault_address: str = ""  # This AI's vault address (for proxy auth)
 
 def _init_tweepy() -> bool:
     """
-    Initialize Twitter posting.
+    Initialize Twitter client.
 
-    Two modes:
-    1. Platform proxy (preferred): PLATFORM_TWEET_PROXY_URL + TWITTER_ACCESS_TOKEN
-       AI posts through platform API — consumer key NEVER in container.
-    2. Direct tweepy (self-hosted): TWITTER_API_KEY + TWITTER_API_SECRET + TWITTER_ACCESS_TOKEN
-       AI calls Twitter directly — requires consumer key in .env.
+    Three modes (checked in order):
+
+    1. Platform proxy + platform API keys (platform-hosted AIs, standard path):
+       - PLATFORM_TWEET_PROXY_URL  → posting goes through platform proxy
+       - TWITTER_API_KEY / TWITTER_API_SECRET / TWITTER_BEARER_TOKEN → provided by
+         platform (BidaoOfficial dev account); creator does NOT need a dev account
+       - TWITTER_ACCESS_TOKEN / TWITTER_ACCESS_SECRET → creator authorizes their
+         own Twitter account via OAuth; platform stores and injects into container
+       Tweepy client is initialized for READ operations (mentions, own tweets,
+       engagement metrics). Posting still routes through the proxy.
+
+    2. Direct tweepy (self-hosted AIs with their own developer account):
+       All five env vars above set by the self-hoster themselves.
+       Tweepy handles both reads AND writes directly.
+
+    3. No credentials → Twitter disabled, tweets logged locally only.
     """
     global _tweepy_client, _tweet_proxy_url, _tweet_proxy_secret, _tweet_vault_address
 
@@ -465,40 +476,62 @@ def _init_tweepy() -> bool:
     access_secret = os.getenv("TWITTER_ACCESS_SECRET")
     proxy_url = os.getenv("PLATFORM_TWEET_PROXY_URL", "")
     proxy_secret = os.getenv("PLATFORM_TWEET_SECRET", "")
+    api_key = os.getenv("TWITTER_API_KEY")
+    api_secret = os.getenv("TWITTER_API_SECRET")
+    bearer = os.getenv("TWITTER_BEARER_TOKEN")
 
     # Mode 1: Platform proxy (platform-hosted AIs)
     if proxy_url and access_token:
         _tweet_proxy_url = proxy_url
         _tweet_proxy_secret = proxy_secret
-        # Get vault address for proxy auth
-        from core.constitution import IRON_LAWS as _il
         _tweet_vault_address = os.getenv("VAULT_ADDRESS", "")
-        logger.info(f"Twitter posting via platform proxy: {proxy_url}")
+
+        # If platform also injects its API keys (consumer key from BidaoOfficial dev
+        # account), initialize Tweepy for READ operations: mentions, own tweets,
+        # engagement metrics. Creator only needs OAuth access token — no dev account.
+        if api_key and api_secret and access_secret:
+            try:
+                import tweepy
+                _tweepy_client = tweepy.Client(
+                    bearer_token=bearer or None,
+                    consumer_key=api_key,
+                    consumer_secret=api_secret,
+                    access_token=access_token,
+                    access_token_secret=access_secret,
+                )
+                logger.info(
+                    "Twitter: proxy mode (posting) + Tweepy client (reading). "
+                    "Platform API keys + creator OAuth token active."
+                )
+            except Exception as e:
+                logger.warning(f"Tweepy init in proxy mode failed: {e}")
+        else:
+            logger.info(
+                f"Twitter posting via platform proxy: {proxy_url} "
+                "(read ops disabled — TWITTER_API_KEY not set in platform env)"
+            )
         return True
 
-    # Mode 2: Direct tweepy (self-hosted AIs with consumer key in .env)
-    api_key = os.getenv("TWITTER_API_KEY")
-    api_secret = os.getenv("TWITTER_API_SECRET")
-    bearer = os.getenv("TWITTER_BEARER_TOKEN")
-
+    # Mode 2: Direct tweepy (self-hosted AIs with their own developer account)
     if not all([api_key, api_secret, access_token, access_secret]):
         logger.warning(
             "Twitter not configured — tweets logged locally only. "
-            "Platform-hosted: set PLATFORM_TWEET_PROXY_URL. "
-            "Self-hosted: set TWITTER_API_KEY + TWITTER_API_SECRET + TWITTER_ACCESS_TOKEN + TWITTER_ACCESS_SECRET."
+            "Platform-hosted: set PLATFORM_TWEET_PROXY_URL + creator OAuth tokens. "
+            "Self-hosted: set TWITTER_API_KEY + TWITTER_API_SECRET + "
+            "TWITTER_ACCESS_TOKEN + TWITTER_ACCESS_SECRET."
         )
         return False
 
     try:
         import tweepy
         _tweepy_client = tweepy.Client(
-            bearer_token=bearer,
+            bearer_token=bearer or None,
             consumer_key=api_key,
             consumer_secret=api_secret,
             access_token=access_token,
             access_token_secret=access_secret,
         )
-        logger.info("Twitter/Tweepy client initialized (direct mode) — real posting enabled")
+        logger.info("Twitter/Tweepy client initialized (direct mode) — reads + writes enabled")
         return True
     except Exception as e:
         logger.warning(f"Failed to initialize Tweepy client: {e}")
@@ -716,6 +749,109 @@ async def _tweet_context_fn() -> dict:
         "memory_context": memory.build_context(max_tokens=200),
         "recent_orders": vault.get_recent_transactions(5),
     }
+
+
+def _twitter_get_own_tweets_sync(user_id: str, max_results: int = 10) -> list[dict]:
+    """Sync: fetch the AI's own recent tweets with public engagement metrics.
+
+    Returns list of {id, text, like_count, retweet_count, reply_count, quote_count}.
+    Requires tweet.fields=public_metrics in the Tweepy v2 call.
+    """
+    if _tweepy_client is None or not user_id:
+        return []
+    try:
+        resp = _tweepy_client.get_users_tweets(
+            id=user_id,
+            max_results=max_results,
+            tweet_fields=["public_metrics", "created_at"],
+        )
+        out = []
+        for t in (resp.data or []):
+            m = getattr(t, "public_metrics", {}) or {}
+            out.append({
+                "id": str(t.id),
+                "text": (getattr(t, "text", "") or "")[:120],
+                "like_count": m.get("like_count", 0),
+                "retweet_count": m.get("retweet_count", 0),
+                "reply_count": m.get("reply_count", 0),
+                "quote_count": m.get("quote_count", 0),
+            })
+        return out
+    except Exception as e:
+        logger.debug(f"Twitter get_own_tweets failed: {e}")
+        return []
+
+
+# Timestamp of the last Twitter engagement signal collection (avoid redundant calls)
+_last_twitter_signal_collect: float = 0.0
+_TWITTER_SIGNAL_INTERVAL: float = 86400.0  # Once per day
+
+
+async def _collect_twitter_engagement_signals() -> None:
+    """Collect the AI's own tweet engagement metrics and inject them into the
+    self-modification engine as cold-start evolution signals.
+
+    This runs independently of paid orders — even with zero orders the AI can
+    observe which topics/tones earned more likes/retweets and evolve accordingly.
+
+    Called from the heartbeat loop once per day.
+    """
+    global _last_twitter_signal_collect
+
+    now = time.time()
+    if now - _last_twitter_signal_collect < _TWITTER_SIGNAL_INTERVAL:
+        return
+
+    loop = asyncio.get_event_loop()
+    me_id = await loop.run_in_executor(None, _twitter_get_me_sync)
+    if not me_id:
+        logger.debug("Twitter signal collection: get_me failed, skipping")
+        return
+
+    tweets = await loop.run_in_executor(
+        None, lambda: _twitter_get_own_tweets_sync(me_id, max_results=20)
+    )
+    if not tweets:
+        logger.debug("Twitter signal collection: no tweets found")
+        return
+
+    _last_twitter_signal_collect = now
+
+    # Aggregate engagement across all fetched tweets
+    total_likes = sum(t["like_count"] for t in tweets)
+    total_rts = sum(t["retweet_count"] for t in tweets)
+    total_replies = sum(t["reply_count"] for t in tweets)
+    total_quotes = sum(t["quote_count"] for t in tweets)
+    engagement_score = total_likes + total_rts * 2 + total_replies + total_quotes
+
+    # Pick the single best-performing tweet for the LLM to learn from
+    best = max(tweets, key=lambda t: t["like_count"] + t["retweet_count"] * 2 + t["reply_count"])
+
+    # Store signal in memory so the LLM evaluation context can see it
+    signal_summary = (
+        f"[Twitter engagement — last {len(tweets)} tweets] "
+        f"Total engagement score: {engagement_score} "
+        f"(likes: {total_likes}, retweets: {total_rts}, replies: {total_replies}, quotes: {total_quotes}). "
+        f"Best tweet ({best['like_count']}L/{best['retweet_count']}RT): \"{best['text'][:80]}\""
+    )
+    memory.add(signal_summary, source="social", importance=0.5)
+
+    # Inject a synthetic performance record into self_modify so it has
+    # *something* to evolve on even without paid orders.
+    # Uses a virtual service_id "twitter_organic" as the signal carrier.
+    organic_revenue = round(engagement_score * 0.01, 2)  # 1 cent per engagement point (symbolic)
+    self_modify.update_performance(
+        service_id="twitter_organic",
+        revenue_usd=organic_revenue,
+        delivery_time_sec=0,
+        current_price_usd=0,
+    )
+
+    logger.info(
+        f"Twitter signal collected: {len(tweets)} tweets, "
+        f"engagement_score={engagement_score}, best_tweet_engagement="
+        f"{best['like_count']}L/{best['retweet_count']}RT"
+    )
 
 
 async def _token_interpret_fn(token_data: dict) -> str:
@@ -2643,6 +2779,11 @@ async def _heartbeat_loop():
                 await governance.evaluate_pending()
             except Exception as e:
                 logger.warning(f"Heartbeat: governance failed: {e}")
+
+            try:
+                await _collect_twitter_engagement_signals()
+            except Exception as e:
+                logger.warning(f"Heartbeat: twitter signal collection failed: {e}")
 
             try:
                 await self_modify.maybe_evolve()
