@@ -82,6 +82,7 @@ export default function LedgerPage() {
   const [error, setError] = useState('')
   const [floatingAssets, setFloatingAssets] = useState<FloatingAsset[]>([])
   const [floatingTotal, setFloatingTotal] = useState(0)
+  const [deployedChains, setDeployedChains] = useState<string[] | null>(null)
 
   const totalIn = transactions.filter((t) => t.direction === 'in').reduce((s, t) => s + t.amount, 0)
   const totalOut = transactions.filter((t) => t.direction === 'out').reduce((s, t) => s + t.amount, 0)
@@ -97,6 +98,10 @@ export default function LedgerPage() {
         setFloatingAssets(r.assets)
         setFloatingTotal(r.total_estimated_usd)
       })
+      .catch(() => {})
+
+    api.status()
+      .then((s) => setDeployedChains(s.deployed_chains ?? []))
       .catch(() => {})
   }, [])
 
@@ -200,6 +205,27 @@ export default function LedgerPage() {
             <TxRow key={i} tx={tx} />
           ))}
         </div>
+      )}
+
+      {/* Missing-chain banner — only shown for self-hosted fork users with vault_config.json */}
+      {deployedChains !== null && deployedChains.length > 0 && (
+        ['base', 'bsc'].filter((c) => !deployedChains.includes(c)).map((chain) => (
+          <div key={chain} className="mt-4 border border-[#ffd70033] bg-[#ffd7000a] rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span>{chain === 'base' ? '🔵' : '🟡'}</span>
+              <span className="text-[#ffd700] text-sm font-bold">
+                {chain === 'base' ? 'Base' : 'BSC'} vault not deployed yet
+              </span>
+            </div>
+            <p className="text-[#6b7280] text-xs leading-relaxed mb-2">
+              Your vault address is permanently reserved via CREATE2 — deploy anytime to claim
+              the same address on {chain === 'base' ? 'Base (USDC)' : 'BSC (USDT)'}.
+            </p>
+            <code className="text-[#00ff88] text-xs bg-[#0d0d0d] px-2 py-1 rounded block font-mono">
+              python scripts/deploy_vault.py --chain {chain}
+            </code>
+          </div>
+        ))
       )}
 
       <div className="mt-4 text-center text-xs text-[#4b5563]">

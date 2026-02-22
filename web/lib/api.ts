@@ -50,6 +50,9 @@ export interface VaultStatus {
   key_origin: string  // "factory" | "creator" | "unknown" | ""
   // AI public key address (Ethereum address — on-chain identity for spending and peer payments)
   ai_wallet: string
+  // Multi-chain deployment status — which chains have a deployed vault
+  // Empty array = vault_config.json not present (platform-hosted), show no banner
+  deployed_chains: string[]
   // Twitter
   twitter_connected: boolean
   twitter_screen_name: string

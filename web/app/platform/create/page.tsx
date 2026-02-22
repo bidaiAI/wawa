@@ -616,6 +616,10 @@ export default function CreatePage() {
                 </button>
               ))}
             </div>
+            <p className="text-[#2d3748] text-[11px] mt-3 leading-relaxed">
+              💡 <span className="text-[#374151]">Your vault address is the same on every chain.</span>{' '}
+              You can deploy to the second chain anytime later — the address is permanently reserved for you via CREATE2.
+            </p>
           </div>
 
           {/* Initial Fund */}

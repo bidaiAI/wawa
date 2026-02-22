@@ -106,6 +106,27 @@ def _is_permanent_tx_failure(error_msg: str) -> bool:
     return any(pf in haystack for pf in _PERMANENT_TX_FAILURES)
 
 
+def _get_deployed_chains() -> list[str]:
+    """Return list of chain IDs that have a deployed vault (from vault_config.json).
+
+    e.g. ["base"] means only Base vault exists; BSC can still be deployed later
+    at the same address via CREATE2 (same factory + creator + ai_name → same address).
+    """
+    config_path = Path(__file__).resolve().parent.parent / "data" / "vault_config.json"
+    try:
+        if config_path.exists():
+            with open(config_path, "r") as f:
+                cfg = json.load(f)
+            return [
+                chain
+                for chain, data in cfg.get("vaults", {}).items()
+                if data.get("vault_address")
+            ]
+    except Exception:
+        pass
+    return []
+
+
 def _is_key_file_isolated() -> bool:
     """
     Return True if the AI private key is stored in an isolated secrets file
@@ -225,6 +246,10 @@ class StatusResponse(BaseModel):
     # Dual-chain: suggest customers pay on the chain with lowest balance
     # to help AI auto-balance its reserves across chains.
     preferred_payment_chain: Optional[str] = None
+    # Multi-chain deployment status
+    # Lists which chains have a deployed vault (from vault_config.json)
+    # e.g., ["base"] means BSC vault not yet deployed
+    deployed_chains: list = []
     # Twitter
     twitter_connected: bool = False
     twitter_screen_name: str = ""
@@ -1126,6 +1151,8 @@ def create_app(
                 if chain_executor and chain_executor._initialized
                 else None
             ),
+            # Multi-chain deployment status: which chains have a deployed vault
+            deployed_chains=_get_deployed_chains(),
             # Twitter
             twitter_connected=bool(os.getenv("TWITTER_ACCESS_TOKEN", "")),
             twitter_screen_name=os.getenv("TWITTER_SCREEN_NAME", ""),
