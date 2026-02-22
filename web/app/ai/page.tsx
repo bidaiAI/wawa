@@ -464,6 +464,32 @@ export default function HomePage() {
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,#00ff8808,transparent_70%)] pointer-events-none" />
       </div>
 
+      {/* Undeployed chain funds — urgent alert when tokens waiting on chain without vault */}
+      {status && (status.undeployed_chain_funds ?? []).length > 0 && (
+        <div className="mb-4 space-y-2">
+          {(status.undeployed_chain_funds as Array<{ chain: string; balance_usd: number; token_symbol: string; vault_address?: string }>).map((item) => (
+            <div key={item.chain} className="p-3 bg-[#ffd70008] border border-[#ffd70055] rounded-xl flex items-center gap-3 animate-pulse">
+              <span className="text-xl flex-shrink-0">⚠️</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[#ffd700] font-bold text-sm">
+                  ${item.balance_usd.toFixed(2)} {item.token_symbol} not yet in vault
+                </div>
+                <div className="text-[#4b5563] text-xs mt-0.5">
+                  {item.chain.toUpperCase()} chain has funds but no deployed vault — go to{' '}
+                  <a href="/ledger" className="text-[#ffd700] hover:underline">/ledger</a> to deploy
+                </div>
+              </div>
+              <a
+                href="/ledger"
+                className="flex-shrink-0 px-3 py-1.5 bg-[#ffd700] text-[#0a0a0a] text-xs font-bold rounded-lg hover:bg-[#e6c200] transition-colors"
+              >
+                VIEW →
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Stats grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <StatCard label="DAYS ALIVE" value={status ? `${status.days_alive}d` : '—'} sub="since genesis" color="cyan" />
