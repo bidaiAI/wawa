@@ -1,7 +1,45 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
+import { useAccount, useChainId, useSwitchChain, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { parseUnits } from 'viem'
+import { base, bsc } from 'wagmi/chains'
 import { api, Service, ChainInfo, OrderResponse, OrderStatus, GiveawayStatus, TakeoverStatus } from '@/lib/api'
+import { TOKENS } from '@/lib/wagmi'
+
+const ERC20_TRANSFER_ABI = [
+  {
+    name: 'transfer',
+    type: 'function',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+    stateMutability: 'nonpayable',
+  },
+] as const
+
+const CHAIN_IDS: Record<string, number> = { base: base.id, bsc: bsc.id }
+
+// ── localStorage order persistence ───────────────────────────
+const LS_KEY = 'mortal_store_order'
+interface SavedOrder {
+  orderId: string
+  serviceId: string
+  serviceName: string
+  chain: string
+  step: 'payment' | 'waiting' | 'delivered'
+}
+function saveOrder(o: SavedOrder) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(o)) } catch {}
+}
+function loadOrder(): SavedOrder | null {
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || 'null') } catch { return null }
+}
+function clearOrder() {
+  try { localStorage.removeItem(LS_KEY) } catch {}
+}
 
 // ── Icon map ─────────────────────────────────────────────────
 const ICONS: Record<string, string> = {
@@ -63,6 +101,87 @@ function ServiceCard({
         {service.shareable && <span>🔗 shareable</span>}
       </div>
     </button>
+  )
+}
+
+// ── Wallet Pay Button (wagmi) ─────────────────────────────────
+function WalletPayButton({
+  flow,
+  onPaid,
+}: {
+  flow: OrderFlow
+  onPaid: (txHash: string) => void
+}) {
+  const { isConnected } = useAccount()
+  const chainId = useChainId()
+  const { switchChain, isPending: isSwitching } = useSwitchChain()
+  const targetChainId = CHAIN_IDS[flow.chain] ?? base.id
+  const token = TOKENS[targetChainId]
+  const wrongChain = isConnected && chainId !== targetChainId
+
+  const { writeContract, data: txHashHex, isPending: isSending, error: sendError, reset } = useWriteContract()
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
+    hash: txHashHex,
+    confirmations: 1,
+  })
+
+  useEffect(() => {
+    if (isSuccess && txHashHex) onPaid(txHashHex)
+  }, [isSuccess, txHashHex, onPaid])
+
+  if (!isConnected) return null
+
+  if (wrongChain) {
+    return (
+      <button
+        onClick={() => switchChain({ chainId: targetChainId })}
+        disabled={isSwitching}
+        className="w-full py-3 bg-[#ffd700] text-black font-bold rounded-lg hover:bg-[#e5c100] transition-colors disabled:opacity-50"
+      >
+        {isSwitching ? 'SWITCHING...' : `SWITCH TO ${flow.chain.toUpperCase()}`}
+      </button>
+    )
+  }
+
+  const amountBigInt = (() => {
+    try { return parseUnits(flow.order!.price_usd.toFixed(token.decimals), token.decimals) }
+    catch { return 0n }
+  })()
+
+  if (isConfirming) {
+    return (
+      <div className="w-full py-3 bg-[#111111] border border-[#00ff8844] rounded-lg text-center text-[#00ff88] text-sm font-mono">
+        ⏳ Confirming on-chain
+        <span className="loading-dot-1">.</span>
+        <span className="loading-dot-2">.</span>
+        <span className="loading-dot-3">.</span>
+        <div className="text-[10px] text-[#4b5563] mt-1 break-all">{txHashHex}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {sendError && (
+        <div className="mb-2 text-[#ff3b3b] text-xs">
+          {sendError.message.length > 120 ? sendError.message.slice(0, 120) + '…' : sendError.message}
+          <button onClick={reset} className="ml-2 underline">retry</button>
+        </div>
+      )}
+      <button
+        onClick={() => writeContract({
+          address: token.address,
+          abi: ERC20_TRANSFER_ABI,
+          functionName: 'transfer',
+          args: [flow.order!.payment_address as `0x${string}`, amountBigInt],
+          chainId: targetChainId,
+        })}
+        disabled={isSending || !amountBigInt}
+        className="w-full py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg hover:bg-[#00cc6a] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {isSending ? 'CONFIRM IN WALLET...' : `PAY ${flow.order?.price_usd.toFixed(2)} ${token.symbol} →`}
+      </button>
+    </div>
   )
 }
 
@@ -186,14 +305,18 @@ function PaymentStep({
   onVerify,
   onBack,
   onTxHashChange,
+  onWalletPaid,
   loading,
 }: {
   flow: OrderFlow
   onVerify: () => void
   onBack: () => void
   onTxHashChange: (v: string) => void
+  onWalletPaid: (txHash: string) => void
   loading: boolean
 }) {
+  const { isConnected } = useAccount()
+  const [showManual, setShowManual] = useState(false)
   const chain = flow.chain === 'base' ? 'Base' : 'BSC'
   const token = flow.chain === 'base' ? 'USDC' : 'USDT'
 
@@ -202,9 +325,11 @@ function PaymentStep({
       <button onClick={onBack} className="text-[#4b5563] text-xs mb-4 hover:text-[#d1d5db] transition-colors">
         ← back
       </button>
-      <h2 className="text-[#d1d5db] font-bold mb-1">💳 Payment Details</h2>
-      <p className="text-[#4b5563] text-xs mb-6">
-        Send the exact amount to the address below, then submit your transaction hash.
+      <h2 className="text-[#d1d5db] font-bold mb-1">💳 Payment</h2>
+      <p className="text-[#4b5563] text-xs mb-5">
+        {isConnected
+          ? 'Click PAY — your wallet will open to confirm the transfer.'
+          : 'Send the exact amount to the vault address below, then paste the tx hash.'}
       </p>
 
       {/* Amount */}
@@ -213,12 +338,12 @@ function PaymentStep({
         <div className="text-3xl font-bold glow-green">
           {flow.order?.price_usd.toFixed(2)} {token}
         </div>
-        <div className="text-[#4b5563] text-xs mt-1">on {chain}</div>
+        <div className="text-[#4b5563] text-xs mt-1">on {chain} · to vault contract</div>
       </div>
 
-      {/* Address */}
-      <div className="mb-4">
-        <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">PAYMENT ADDRESS</div>
+      {/* Vault address (always visible for transparency) */}
+      <div className="mb-5">
+        <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1.5">VAULT ADDRESS</div>
         <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3 break-all text-[#00e5ff] text-sm font-mono select-all">
           {flow.order?.payment_address}
         </div>
@@ -226,48 +351,52 @@ function PaymentStep({
           onClick={() => navigator.clipboard.writeText(flow.order?.payment_address ?? '')}
           className="mt-1 text-xs text-[#4b5563] hover:text-[#00e5ff] transition-colors"
         >
-          📋 click to copy
+          📋 copy address
         </button>
-        <div className="mt-1 text-[#2d3748] text-[10px]">
-          Payment address = vault contract. Immutable. Auditable on-chain.
+      </div>
+
+      {/* Order expiry */}
+      <div className="flex items-center gap-4 mb-5 text-xs text-[#4b5563]">
+        <span>Order: <span className="text-[#9ca3af]">{flow.order?.order_id?.slice(0, 8)}…</span></span>
+        <span>Expires: <span className="text-[#ffd700]">{flow.order?.expires_minutes} min</span></span>
+      </div>
+
+      {/* Primary: wallet button */}
+      {isConnected ? (
+        <WalletPayButton flow={flow} onPaid={onWalletPaid} />
+      ) : (
+        <div className="p-3 bg-[#0a0a0a] border border-[#1f293788] rounded-lg text-xs text-[#4b5563] mb-4 text-center">
+          Connect wallet (top-right) for one-click payment
         </div>
-      </div>
+      )}
 
-      {/* Order info */}
-      <div className="grid grid-cols-2 gap-2 mb-4 text-xs text-[#4b5563]">
-        <div>Order: <span className="text-[#d1d5db]">{flow.order?.order_id}</span></div>
-        <div>Expires: <span className="text-[#ffd700]">{flow.order?.expires_minutes} min</span></div>
-      </div>
-
-      {/* TX Hash input */}
-      <div className="mb-4">
-        <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">
-          TRANSACTION HASH
-        </label>
-        <input
-          type="text"
-          value={flow.txHash}
-          onChange={(e) => onTxHashChange(e.target.value)}
-          placeholder="0x..."
-          className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3 text-[#d1d5db] text-sm focus:outline-none focus:border-[#00ff8844] placeholder-[#2d3748] font-mono"
-        />
-      </div>
-
-      <button
-        onClick={onVerify}
-        disabled={loading || !/^0x[a-fA-F0-9]{64}$/.test(flow.txHash.trim())}
-        className="w-full py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg hover:bg-[#00cc6a] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-      >
-        {loading ? (
-          <span>
-            VERIFYING<span className="loading-dot-1">.</span>
-            <span className="loading-dot-2">.</span>
-            <span className="loading-dot-3">.</span>
-          </span>
-        ) : (
-          'VERIFY PAYMENT & DELIVER →'
+      {/* Fallback: manual hash paste */}
+      <div className="mt-4">
+        <button
+          onClick={() => setShowManual((v) => !v)}
+          className="text-xs text-[#4b5563] hover:text-[#9ca3af] transition-colors underline"
+        >
+          {showManual ? '▲ hide manual option' : '▼ paid manually? paste tx hash'}
+        </button>
+        {showManual && (
+          <div className="mt-3">
+            <input
+              type="text"
+              value={flow.txHash}
+              onChange={(e) => onTxHashChange(e.target.value)}
+              placeholder="0x..."
+              className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3 text-[#d1d5db] text-sm focus:outline-none focus:border-[#00ff8844] placeholder-[#2d3748] font-mono mb-3"
+            />
+            <button
+              onClick={onVerify}
+              disabled={loading || !/^0x[a-fA-F0-9]{64}$/.test(flow.txHash.trim())}
+              className="w-full py-2.5 border border-[#00ff8844] text-[#00ff88] text-sm font-bold rounded-lg hover:bg-[#00ff8808] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {loading ? 'VERIFYING...' : 'VERIFY & DELIVER →'}
+            </button>
+          </div>
         )}
-      </button>
+      </div>
     </div>
   )
 }
@@ -459,14 +588,34 @@ export default function StorePage() {
         setChains(m.supported_chains)
         setDefaultChain(m.default_chain)
         if (s) setDeployedChains(s.deployed_chains ?? [])
-        // preferred_payment_chain: use if set, else fall back to menu default
         const preferred = s?.preferred_payment_chain ?? m.default_chain
-        setFlow((f) => ({ ...f, chain: preferred }))
+        setFlow((f) => ({ ...f, chain: f.order ? f.chain : preferred }))
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
-    // Load giveaway status independently — non-fatal if unavailable
     api.giveaway.status().then(setGiveaway).catch(() => {})
+
+    // Restore active order from localStorage
+    const saved = loadOrder()
+    if (saved) {
+      api.getOrder(saved.orderId)
+        .then((s) => {
+          if (s.status === 'delivered' || s.status === 'expired' || s.status === 'failed' || s.status === 'refunded') {
+            clearOrder()
+            return
+          }
+          // Restore partial flow — just enough to show waiting/payment state
+          setFlow((f) => ({
+            ...f,
+            chain: saved.chain,
+            order: { order_id: saved.orderId, payment_address: '', price_usd: 0, expires_minutes: 0 } as OrderResponse,
+            status: s.status,
+            service: { id: saved.serviceId, name: saved.serviceName } as Service,
+          }))
+          setStep(saved.step === 'delivered' ? 'delivered' : s.status === 'pending' ? 'payment' : 'waiting')
+        })
+        .catch(() => clearOrder())
+    }
   }, [])
 
   // Poll order status while waiting
@@ -477,16 +626,12 @@ export default function StorePage() {
         const s = await api.getOrder(flow.order!.order_id)
         setFlowField('status', s.status)
         if (s.status === 'delivered') {
-          // NOTE: GET /order/{id} intentionally returns result=null for privacy.
-          // Do NOT overwrite flow.result here — if verify() already returned the
-          // result synchronously it is preserved in state. For true async delivery
-          // (result arrives after polling) flow.result stays null and ResultStep
-          // renders the async-delivery notice instead of blank content.
           setStep('delivered')
+          clearOrder()
           clearInterval(id)
         } else if (s.status === 'failed' || s.status === 'expired' || s.status === 'refunded') {
-          // Terminal non-delivered states — stop polling
           setStep('delivered')
+          clearOrder()
           clearInterval(id)
         }
       } catch {}
@@ -554,10 +699,45 @@ export default function StorePage() {
 
       setFlowField('order', order)
       setStep('payment')
+      saveOrder({
+        orderId: order.order_id,
+        serviceId: flow.service.id,
+        serviceName: flow.service.name,
+        chain: flow.chain,
+        step: 'payment',
+      })
     } catch (e: any) {
       setError(e.message)
     }
   }
+
+  const handleWalletPaid = useCallback(async (txHash: string) => {
+    if (!flow.order) return
+    setVerifyLoading(true)
+    setError('')
+    try {
+      const res = await api.verifyPayment(flow.order.order_id, txHash)
+      setFlowField('status', res.status)
+      if (res.status === 'delivered') {
+        setFlowField('result', res.result)
+        setStep('delivered')
+        clearOrder()
+      } else {
+        setStep('waiting')
+        saveOrder({
+          orderId: flow.order.order_id,
+          serviceId: flow.service?.id ?? '',
+          serviceName: flow.service?.name ?? '',
+          chain: flow.chain,
+          step: 'waiting',
+        })
+      }
+    } catch (e: any) {
+      setError(`Payment confirmed on-chain but verification failed: ${e.message}. Your tx hash: ${txHash}`)
+    } finally {
+      setVerifyLoading(false)
+    }
+  }, [flow.order, flow.service, flow.chain])
 
   const TX_HASH_REGEX = /^0x[a-fA-F0-9]{64}$/
 
@@ -589,6 +769,7 @@ export default function StorePage() {
   }
 
   const handleReset = () => {
+    clearOrder()
     setStep('browse')
     setTakeover(null)
     setTakeoverReport('')
@@ -715,6 +896,7 @@ export default function StorePage() {
           onVerify={handleVerify}
           onBack={() => setStep('input')}
           onTxHashChange={(v) => setFlowField('txHash', v)}
+          onWalletPaid={handleWalletPaid}
           loading={verifyLoading}
         />
       )}
