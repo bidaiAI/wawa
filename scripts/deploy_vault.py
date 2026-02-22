@@ -578,9 +578,36 @@ def deploy(
         logger.error(f"createVault FAILED! TX: {create_hash.hex()}")
         sys.exit(1)
 
-    # The vault address is in the VaultCreated event, but we already predicted it
-    # Verify predicted matches what the factory actually created
+    # Extract actual vault address from VaultCreated event and verify it matches prediction.
+    # createVault() emits: VaultCreated(string name, address indexed creator, address indexed vault, ...)
     vault_address = predicted_vault
+    try:
+        # event VaultCreated(address indexed creator, address indexed vault, address indexed token, ...)
+        VAULT_CREATED_SIG = w3.keccak(
+            text="VaultCreated(address,address,address,string,uint256,uint256,string,uint256)"
+        ).hex()
+        for log in receipt["logs"]:
+            if log["topics"] and log["topics"][0].hex() == VAULT_CREATED_SIG:
+                # vault is topics[2]: creator=topics[1], vault=topics[2], token=topics[3]
+                actual_vault = "0x" + log["topics"][2].hex()[-40:]
+                actual_vault = w3.to_checksum_address(actual_vault)
+                if actual_vault.lower() != predicted_vault.lower():
+                    logger.error(
+                        f"CRITICAL: Vault address mismatch!\n"
+                        f"  Predicted: {predicted_vault}\n"
+                        f"  Actual:    {actual_vault}\n"
+                        f"  This should never happen with CREATE2. Check factory address."
+                    )
+                    sys.exit(1)
+                vault_address = actual_vault
+                logger.info(f"Event verified: actual vault == predicted ({actual_vault})")
+                break
+        else:
+            # No VaultCreated log found — use predicted (factory may use different event sig)
+            logger.warning("VaultCreated event not found in logs — using predicted address")
+    except Exception as e:
+        logger.warning(f"Event verification skipped ({e}) — using predicted address")
+
     logger.info(f"Vault created: {vault_address}")
     logger.info(f"Explorer: {chain['explorer']}/address/{vault_address}")
     logger.info(f"Principal deposited: ${principal_usd:.2f} {chain['token_symbol']}")
