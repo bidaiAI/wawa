@@ -817,7 +817,6 @@ class ChainExecutor:
         self,
         tx_hash: str,
         expected_to: str,
-        expected_token: str,
         min_amount_usd: float,
         chain_id: str = "",
     ) -> dict:
@@ -831,6 +830,9 @@ class ChainExecutor:
         1. Transaction exists and succeeded (status == 1)
         2. Transfer event to expected_to address (our vault)
         3. Amount >= min_amount_usd
+
+        Token address is read from chain config (self._chains[cid]["token_address"]) —
+        each chain has exactly one accepted payment token defined at initialization.
         """
         if not self._initialized:
             return {"verified": False, "amount_usd": 0, "from_address": "", "error": "chain not initialized"}

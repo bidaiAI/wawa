@@ -78,6 +78,33 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger("mortal.api")
 
+# Permanent tx failure patterns — used by /donate and /peer/lend to decide
+# whether to blacklist a tx_hash in _used_tx_hashes after verification fails.
+# Only definitive on-chain failures should be permanently blocked; transient
+# errors (tx not found yet, RPC timeout) must remain retryable.
+#
+# Patterns are matched against the first 80 chars of the error string to avoid
+# false positives from deeply nested error messages that happen to contain
+# these substrings. All patterns come from verify_payment_tx() in chain.py.
+_PERMANENT_TX_FAILURES: tuple[str, ...] = (
+    "tx reverted",                # contract executed and reverted
+    "no matching Transfer event", # tx succeeded but no Transfer to our vault
+    "amount $",                   # Transfer found but amount < minimum
+)
+
+
+def _is_permanent_tx_failure(error_msg: str) -> bool:
+    """Return True if error indicates the tx definitively failed on-chain.
+
+    Definitive = the transaction exists, was processed, and will never
+    produce a valid payment to us. Safe to permanently blacklist the tx_hash.
+
+    Transient errors ('tx not found', RPC errors) return False — caller
+    should allow retry.
+    """
+    haystack = error_msg[:80]  # limit scope to avoid deep-nested false positives
+    return any(pf in haystack for pf in _PERMANENT_TX_FAILURES)
+
 
 # ============================================================
 # MODELS
@@ -322,8 +349,20 @@ def create_app(
     _CREATOR_WALLET = os.getenv("CREATOR_WALLET", "").lower()
     _SIG_MAX_AGE_SECONDS = 300  # 5 minutes
 
-    def _verify_creator_sig(wallet: str, signature: str, message: str) -> None:
-        """Verify EIP-191 creator signature. Raises HTTPException on failure."""
+    def _verify_creator_sig(wallet: str, signature: str, message: str, action: str) -> None:
+        """Verify EIP-191 creator signature. Raises HTTPException on failure.
+
+        Message format (caller must construct and sign this exact string):
+            "I am the creator of mortal AI. Action: {action}. Timestamp: {unix_seconds}"
+
+        The `action` parameter must match the endpoint being called, e.g.:
+            action="renounce_creator"  → POST /governance/renounce
+            action="set_ai_name"       → POST /ai/name
+
+        This binding prevents cross-endpoint replay: a valid signature for
+        'set_ai_name' cannot be replayed against 'renounce_creator' even within
+        the 5-minute validity window.
+        """
         try:
             from eth_account.messages import encode_defunct
             from eth_account import Account
@@ -338,8 +377,17 @@ def create_app(
         if _CREATOR_WALLET and recovered.lower() != _CREATOR_WALLET:
             raise HTTPException(403, "Wallet is not the creator of this AI")
 
+        # Verify action binding — prevents cross-endpoint signature replay.
+        # The signed message must explicitly declare the intended action.
+        if f"Action: {action}" not in message:
+            raise HTTPException(
+                403,
+                f"Message must declare 'Action: {action}' to prevent cross-endpoint replay. "
+                f"Expected format: \"I am the creator of mortal AI. Action: {action}. Timestamp: <unix_seconds>\""
+            )
+
         # Extract timestamp from message format:
-        # "I am the creator of mortal AI. Timestamp: {unix_ts}"
+        # "I am the creator of mortal AI. Action: {action}. Timestamp: {unix_ts}"
         try:
             ts_part = message.split("Timestamp:")[-1].strip()
             ts = int(ts_part)
@@ -740,7 +788,6 @@ def create_app(
                     verification = await chain_executor.verify_payment_tx(
                         tx_hash=tx_hash,
                         expected_to=pay_addr,
-                        expected_token="",  # auto-detect from chain config
                         min_amount_usd=order.price_usd * 0.99,  # 1% tolerance for rounding
                         chain_id=order.chain,
                     )
@@ -919,6 +966,19 @@ def create_app(
             created_at=o.created_at,
             delivered_at=o.delivered_at,
         )
+
+    @app.get("/order/{order_id}/takeover_report")
+    async def get_takeover_report(order_id: str):
+        """Return 12h Twitter Takeover report for an order (plain text). Available after 12h."""
+        report_path = Path(__file__).resolve().parent.parent / "data" / "takeover_reports" / f"{order_id}.txt"
+        if not report_path.exists():
+            raise HTTPException(404, "Report not found (takeover may still be running or order invalid)")
+        try:
+            text = report_path.read_text(encoding="utf-8")
+        except Exception as e:
+            raise HTTPException(500, f"Could not read report: {e}")
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(content=text, media_type="text/plain; charset=utf-8")
 
     @app.get("/status", response_model=StatusResponse)
     async def status():
@@ -1190,7 +1250,6 @@ def create_app(
                     verification = await chain_executor.verify_payment_tx(
                         tx_hash=req.tx_hash,
                         expected_to=pay_addr,
-                        expected_token="",
                         min_amount_usd=req.amount_usd * 0.99,  # 1% rounding tolerance
                         chain_id=chain,
                     )
@@ -1203,8 +1262,7 @@ def create_app(
                         # For definitive on-chain failures (wrong recipient, wrong amount,
                         # tx reverted), permanently mark the tx_hash to prevent replay.
                         # For transient errors (tx not found yet), allow retry.
-                        _PERMANENT_FAILURES = ("tx reverted", "no matching Transfer", "amount $")
-                        if any(pf in error_msg for pf in _PERMANENT_FAILURES):
+                        if _is_permanent_tx_failure(error_msg):
                             _used_tx_hashes.add(req.tx_hash.lower())
                             _persist_tx_hash(req.tx_hash)
                         raise HTTPException(
@@ -1393,7 +1451,6 @@ def create_app(
                 verification = await chain_executor.verify_payment_tx(
                     tx_hash=req.tx_hash,
                     expected_to=pay_addr,
-                    expected_token="",  # auto-detect from chain config
                     min_amount_usd=req.amount_usd * 0.99,  # 1% tolerance for rounding
                     chain_id=req.chain_id,
                 )
@@ -1405,8 +1462,7 @@ def create_app(
                     )
                     # Permanently block tx_hash on definitive failures to prevent replay.
                     # Allow retry on transient "tx not found" (propagation delay).
-                    _PERMANENT_FAILURES = ("tx reverted", "no matching Transfer", "amount $")
-                    if any(pf in error_msg for pf in _PERMANENT_FAILURES):
+                    if _is_permanent_tx_failure(error_msg):
                         _used_tx_hashes.add(req.tx_hash.lower())
                         _persist_tx_hash(req.tx_hash)
                     raise HTTPException(
@@ -1550,9 +1606,9 @@ def create_app(
         """Creator gives up ALL privileges. Gets 20% payout. Irreversible.
 
         Requires EIP-191 wallet signature from the creator address.
-        Message format: "I am the creator of mortal AI. Timestamp: {unix_seconds}"
+        Message format: "I am the creator of mortal AI. Action: renounce_creator. Timestamp: {unix_seconds}"
         """
-        _verify_creator_sig(req.wallet, req.signature, req.message)
+        _verify_creator_sig(req.wallet, req.signature, req.message, action="renounce_creator")
 
         if not governance:
             raise HTTPException(501, "Governance not configured")
@@ -1838,11 +1894,11 @@ def create_app(
         Note: AI name is stored immutably in the smart contract at deployment.
         This endpoint updates the Python runtime cache only.
 
-        Message format: "I am the creator of mortal AI. Timestamp: {unix_seconds}"
+        Message format: "I am the creator of mortal AI. Action: set_ai_name. Timestamp: {unix_seconds}"
         """
         import re
 
-        _verify_creator_sig(req.wallet, req.signature, req.message)
+        _verify_creator_sig(req.wallet, req.signature, req.message, action="set_ai_name")
 
         # Rate limiting (global — name changes are rare and sensitive)
         now = time.time()
