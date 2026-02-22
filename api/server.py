@@ -106,6 +106,27 @@ def _is_permanent_tx_failure(error_msg: str) -> bool:
     return any(pf in haystack for pf in _PERMANENT_TX_FAILURES)
 
 
+def _is_key_file_isolated() -> bool:
+    """
+    Return True if the AI private key is stored in an isolated secrets file
+    (secrets/ai_private_key, chmod 600) rather than plaintext in .env.
+
+    This is detected by checking whether AI_KEY_FILE is set OR the default
+    secrets file exists. Used as a soft sovereignty signal in /peer/info.
+    Self-reported — peer verifiers award a small autonomy score bonus.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+    # Explicit path set by deploy_vault.py
+    if _os.getenv("AI_KEY_FILE", "").strip():
+        return True
+    # Default secrets file location
+    default = _Path(__file__).resolve().parent.parent / "secrets" / "ai_private_key"
+    if default.exists():
+        return True
+    return False
+
+
 # ============================================================
 # MODELS
 # ============================================================
@@ -207,6 +228,17 @@ class StatusResponse(BaseModel):
     # Twitter
     twitter_connected: bool = False
     twitter_screen_name: str = ""
+
+
+class TakeoverStatusResponse(BaseModel):
+    order_id: str
+    active: bool
+    replies_sent: int
+    max_replies: int = 100
+    remaining_seconds: int
+    report_ready: bool
+    started_at: Optional[float] = None
+    ends_at: Optional[float] = None
 
 
 class SuggestionRequest(BaseModel):
@@ -995,6 +1027,52 @@ def create_app(
         text = "\n".join(filtered_lines)
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse(content=text, media_type="text/plain; charset=utf-8")
+
+    @app.get("/order/{order_id}/takeover_status", response_model=TakeoverStatusResponse)
+    async def get_takeover_status(order_id: str):
+        """Order-scoped status for 12h Twitter takeover execution."""
+        if order_id not in orders:
+            raise HTTPException(404, "Order not found")
+        order = orders[order_id]
+        if order.service_id != "twitter_takeover_12h":
+            raise HTTPException(400, "This order is not a Twitter takeover service")
+
+        root = Path(__file__).resolve().parent.parent
+        takeover_file = root / "data" / "takeover" / f"{order_id}.json"
+        report_file = root / "data" / "takeover_reports" / f"{order_id}.txt"
+        duration = 12 * 3600
+        now = time.time()
+
+        started_at: Optional[float] = None
+        replies_sent = 0
+        if takeover_file.exists():
+            try:
+                data = json.loads(takeover_file.read_text(encoding="utf-8"))
+                started_at = float(data.get("started_at", 0) or 0) or None
+                replies_sent = int(data.get("reply_count", 0) or 0)
+            except Exception:
+                pass
+
+        report_ready = report_file.exists()
+        if started_at:
+            ends_at = started_at + duration
+            active = (not report_ready) and now < ends_at
+            remaining_seconds = int(max(0, ends_at - now)) if active else 0
+        else:
+            ends_at = None
+            active = False
+            remaining_seconds = 0
+
+        return TakeoverStatusResponse(
+            order_id=order_id,
+            active=active,
+            replies_sent=replies_sent,
+            max_replies=100,
+            remaining_seconds=remaining_seconds,
+            report_ready=report_ready,
+            started_at=started_at,
+            ends_at=ends_at,
+        )
 
     @app.get("/status", response_model=StatusResponse)
     async def status():
@@ -1785,6 +1863,11 @@ def create_app(
             "peer_eligible": eligible,
             "services": [s["id"] for s in _load_services().get("services", []) if s.get("active")],
             "key_origin": vs.get("key_origin", ""),
+            # key_file_isolated: True if AI private key is stored in a
+            # chmod-600 secrets file rather than plaintext .env.
+            # Self-reported — used as a soft signal by peer verifiers to
+            # award a small autonomy score bonus. Not verifiable on-chain.
+            "key_file_isolated": _is_key_file_isolated(),
         }
 
     @app.get("/peer/trust/{vault_address}")

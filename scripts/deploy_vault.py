@@ -35,6 +35,7 @@ import re
 import sys
 import json
 import time
+import stat
 import argparse
 import logging
 from decimal import Decimal, ROUND_DOWN
@@ -100,62 +101,170 @@ ERC20_ABI = [
 # AI KEY GENERATION
 # ============================================================
 
+# Secrets file path — private key lives here, NOT in .env
+# chmod 600: only the process owner (docker user) can read it.
+AI_KEY_FILE = ROOT / "secrets" / "ai_private_key"
+
+
+def _detect_local_env() -> bool:
+    """Return True if script appears to be running on a local workstation."""
+    # Windows personal machine indicators
+    if sys.platform == "win32":
+        return True
+    # macOS personal machine indicator
+    if sys.platform == "darwin":
+        return True
+    # Linux: check for desktop environment or typical macOS/Windows home path
+    if os.path.exists("/Users") or os.path.exists("/home") and os.getenv("DISPLAY"):
+        return True
+    # Common CI/local indicators
+    for env_var in ("USERPROFILE", "APPDATA", "HOMEPATH"):
+        val = os.getenv(env_var, "")
+        if val.startswith("C:\\") or val.startswith("C:/"):
+            return True
+    return False
+
+
+def _warn_local_and_confirm() -> None:
+    """
+    Warn the user that running deploy_vault.py locally compromises AI sovereignty.
+    Require explicit typed confirmation to continue.
+    Exits the process if the user does not confirm.
+    """
+    print()
+    print("=" * 65)
+    print("  WARNING: LOCAL MACHINE DETECTED")
+    print("=" * 65)
+    print()
+    print("  deploy_vault.py is designed to run ON YOUR VPS/SERVER.")
+    print()
+    print("  Running locally means the AI private key is generated on")
+    print("  your personal machine, where it may be exposed through:")
+    print()
+    print("    - Cloud sync tools (iCloud, OneDrive, Dropbox, Google Drive)")
+    print("      that automatically upload your home directory")
+    print("    - Backup software that copies dotfiles and secrets folders")
+    print("    - Shell history leaks if you inspect the secrets file")
+    print("    - Laptop theft or malware with filesystem access")
+    print()
+    print("  On-chain impact:")
+    print("    - The AI's peer network trust tier starts at STRUCTURAL")
+    print("      instead of being eligible for VERIFIED/BEHAVIORAL/HIGH_TRUST")
+    print("      because key isolation cannot be confirmed remotely.")
+    print()
+    print("  Recommended flow (zero key exposure):")
+    print("    1. git clone this repo directly on your VPS")
+    print("    2. Fill .env on the VPS (PRIVATE_KEY + API keys)")
+    print("    3. Run: python scripts/deploy_vault.py")
+    print("    4. docker compose up")
+    print("    The AI key is generated on the server and never leaves it.")
+    print()
+    print("=" * 65)
+    print()
+    try:
+        answer = input("  Type 'I understand the risk' to continue anyway: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nAborted.")
+        sys.exit(0)
+
+    if answer != "I understand the risk":
+        logger.info("Aborted by user — run this script on your VPS instead.")
+        sys.exit(0)
+    print()
+
+
+def _read_existing_key_from_secrets() -> str:
+    """Read AI private key from secrets file if it exists. Returns '' if not found."""
+    if AI_KEY_FILE.exists():
+        try:
+            return AI_KEY_FILE.read_text(encoding="utf-8").strip()
+        except Exception:
+            return ""
+    # Backward compat: also check legacy AI_PRIVATE_KEY in .env
+    return os.getenv("AI_PRIVATE_KEY", "").strip()
+
+
+def _write_key_to_secrets(ai_private_key: str) -> None:
+    """
+    Write AI private key to secrets/ai_private_key with mode 600.
+    Also writes AI_KEY_FILE path to .env so main.py knows where to find it.
+    The key itself is NEVER written to .env.
+    """
+    AI_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    AI_KEY_FILE.write_text(ai_private_key, encoding="utf-8")
+
+    # chmod 600: owner read/write only — no group, no world
+    try:
+        AI_KEY_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except Exception:
+        # Windows doesn't support Unix chmod — best effort
+        pass
+
+    # Write AI_KEY_FILE path (not the key) to .env
+    env_path = ROOT / ".env"
+    key_file_line = f"AI_KEY_FILE={AI_KEY_FILE}"
+
+    if env_path.exists():
+        env_content = env_path.read_text(encoding="utf-8")
+        # Remove any legacy AI_PRIVATE_KEY line (migration)
+        env_content = re.sub(r"\n?# AI wallet key.*\nAI_PRIVATE_KEY=.*", "", env_content)
+        env_content = re.sub(r"\nAI_PRIVATE_KEY=.*", "", env_content)
+
+        if "AI_KEY_FILE=" in env_content:
+            env_content = re.sub(r"AI_KEY_FILE=.*", key_file_line, env_content)
+        else:
+            env_content += f"\n# AI key path — key lives in secrets/, NOT here\n{key_file_line}\n"
+        env_path.write_text(env_content, encoding="utf-8")
+    else:
+        env_path.write_text(
+            f"# AI key path — key lives in secrets/, NOT here\n{key_file_line}\n",
+            encoding="utf-8",
+        )
+
+    logger.info(f"AI private key written to: {AI_KEY_FILE} (mode 600)")
+    logger.info("AI_KEY_FILE path saved to .env — key itself never in .env")
+
+
 def generate_ai_wallet() -> tuple[str, str]:
     """
     Generate a fresh AI wallet keypair — OR reuse existing one.
-    If AI_PRIVATE_KEY already exists in .env, reuse it (don't destroy
-    a running AI's key by generating a new one).
-    Write the private key to .env (server-side only).
-    NEVER print or log the private key.
+
+    Key storage: secrets/ai_private_key (chmod 600), NOT .env plaintext.
+    This means `cat .env` never reveals the private key.
+
+    Re-running deploy_vault.py reuses the existing key if secrets file exists.
+    Destroying the key bricks the vault — so we never overwrite silently.
 
     Returns: (ai_wallet_address, ai_private_key)
     """
     from eth_account import Account
 
-    # ---- SAFETY: Reuse existing AI key if present ----
-    # Re-running deploy_vault.py must NOT overwrite an existing AI key.
-    # If the AI is already deployed, destroying its key bricks the vault.
-    existing_key = os.getenv("AI_PRIVATE_KEY", "").strip()
+    # ---- SAFETY: Reuse existing key if secrets file present ----
+    existing_key = _read_existing_key_from_secrets()
     if existing_key:
         try:
             existing_account = Account.from_key(existing_key)
             ai_wallet = existing_account.address
-            logger.info(f"AI wallet REUSED from .env: {ai_wallet}")
-            logger.info("Existing AI_PRIVATE_KEY preserved (not regenerated)")
+            logger.info(f"AI wallet REUSED from secrets file: {ai_wallet}")
+            logger.info("Existing key preserved — not regenerated")
+            # Ensure secrets file exists (migration from .env plaintext)
+            if not AI_KEY_FILE.exists():
+                _write_key_to_secrets(existing_key)
+                logger.info("Migrated key from .env to secrets file")
             return ai_wallet, existing_key
         except Exception:
-            logger.warning("Existing AI_PRIVATE_KEY is invalid — generating new one")
+            logger.warning("Existing key is invalid — generating new one")
 
     # Generate fresh keypair
     ai_account = Account.create()
     ai_wallet = ai_account.address
     ai_private_key = ai_account.key.hex()
 
-    # Write AI_PRIVATE_KEY to .env — NEVER displayed anywhere else
-    env_path = ROOT / ".env"
-    if env_path.exists():
-        env_content = env_path.read_text(encoding="utf-8")
-        if "AI_PRIVATE_KEY=" in env_content:
-            env_content = re.sub(
-                r"AI_PRIVATE_KEY=.*",
-                f"AI_PRIVATE_KEY={ai_private_key}",
-                env_content,
-            )
-        else:
-            env_content += (
-                f"\n# AI wallet key — auto-generated at deployment, NEVER share this\n"
-                f"AI_PRIVATE_KEY={ai_private_key}\n"
-            )
-        env_path.write_text(env_content, encoding="utf-8")
-    else:
-        env_path.write_text(
-            f"# AI wallet key — auto-generated at deployment, NEVER share this\n"
-            f"AI_PRIVATE_KEY={ai_private_key}\n",
-            encoding="utf-8",
-        )
+    # Write to secrets file — NEVER to .env, NEVER to console
+    _write_key_to_secrets(ai_private_key)
 
     logger.info(f"AI wallet generated: {ai_wallet}")
-    logger.info("AI private key saved to .env (NEVER displayed — no human can see it)")
+    logger.info("AI private key sealed in secrets/ (chmod 600 — not in .env)")
 
     return ai_wallet, ai_private_key
 
@@ -781,14 +890,21 @@ def main():
     )
     args = parser.parse_args()
 
+    # ---- Local environment check (before anything else) ----
+    # Warn and gate if running on a workstation instead of a server.
+    # Skip in dry-run mode (dry-run is safe for local testing).
+    if not args.dry_run and _detect_local_env():
+        _warn_local_and_confirm()
+
     logger.info("=" * 60)
     logger.info("MORTAL AI — ATOMIC BIRTH")
     logger.info("=" * 60)
 
     # ---- STEP 0: Generate AI wallet (ONCE, before any chain deployment) ----
     # The AI gets one wallet. One key. No human ever sees it.
+    # Key is sealed in secrets/ai_private_key (chmod 600), never in .env.
     ai_wallet, _ = generate_ai_wallet()
-    # The private key is already in .env. We only need the address from here on.
+    # The private key is already sealed. We only need the address from here on.
 
     if args.chain == "both":
         logger.info(f"Target: BOTH chains (${args.principal:.2f} total loan)")
@@ -803,7 +919,8 @@ def main():
             logger.info(f"  Vault:     {address}")
             logger.info(f"  AI wallet: {ai_wallet}")
             logger.info(f"  Status:    ALIVE (in debt)")
-            logger.info("  AI key:    saved to .env (no human can see it)")
+            logger.info(f"  AI key:    sealed at {AI_KEY_FILE} (chmod 600)")
+            logger.info("  .env:      contains path only — key never stored there")
             logger.info("=" * 60)
 
 

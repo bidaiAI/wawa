@@ -24,3 +24,6 @@ aiofiles>=23.2.0
 
 # Utils
 python-json-logger>=2.0.0
+
+# Key management (secrets file encryption, key derivation)
+cryptography>=41.0.0

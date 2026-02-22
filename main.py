@@ -2832,7 +2832,33 @@ async def lifespan(app):
                     )
 
             # ---- Initialize chain executor for on-chain transactions ----
-            ai_pk = os.getenv("AI_PRIVATE_KEY", "")
+            # Key loading order (most to least secure):
+            #   1. secrets/ai_private_key file (chmod 600) — set by deploy_vault.py
+            #   2. AI_KEY_FILE env var pointing to a custom path
+            #   3. AI_PRIVATE_KEY env var (legacy fallback — .env plaintext)
+            ai_pk = ""
+            key_file_path = os.getenv("AI_KEY_FILE", "").strip()
+            if not key_file_path:
+                # Default secrets file location
+                from pathlib import Path as _Path
+                _default = _Path(__file__).resolve().parent / "secrets" / "ai_private_key"
+                if _default.exists():
+                    key_file_path = str(_default)
+            if key_file_path:
+                try:
+                    from pathlib import Path as _Path
+                    ai_pk = _Path(key_file_path).read_text(encoding="utf-8").strip()
+                    logger.info(f"AI key loaded from secrets file: {key_file_path}")
+                except Exception as _e:
+                    logger.warning(f"Failed to read AI key from {key_file_path}: {_e}")
+            if not ai_pk:
+                # Legacy fallback — plaintext in .env (discouraged, logs warning)
+                ai_pk = os.getenv("AI_PRIVATE_KEY", "")
+                if ai_pk:
+                    logger.warning(
+                        "AI_PRIVATE_KEY loaded from environment variable (plaintext). "
+                        "Re-run deploy_vault.py on the server to migrate to secure secrets file."
+                    )
             if ai_pk and vaults_cfg:
                 vault_addrs = {
                     cid: cd.get("vault_address", "")

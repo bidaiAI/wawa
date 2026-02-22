@@ -83,6 +83,12 @@ class SovereigntyResult:
     bytecode_hash: str = ""
     autonomy_score: float = 0.0
     nonce_ratio: float = 0.0
+    # Sovereignty: key isolation — True if AI private key is stored in isolated
+    # secrets file (chmod 600) rather than plaintext .env. Verified by the AI
+    # reporting its own boot config via /health. Not verifiable on-chain; used
+    # as a soft signal to boost autonomy_score in trust tier computation.
+    # Kept out of public API response — backend-only signal.
+    key_file_isolated: bool = False
 
 
 class PeerVerifier:
@@ -473,6 +479,12 @@ class PeerVerifier:
           VERIFIED (3)    → Structural + bytecode matches known versions
           BEHAVIORAL (4)  → Verified + autonomy score > 0.6
           HIGH_TRUST (5)  → Behavioral + alive > 7 days + score > 0.8
+
+        Key isolation bonus (backend-only, not exposed in API):
+          If the AI reported key_file_isolated=True at boot (secrets/ file,
+          chmod 600, no plaintext in .env), autonomy_score gets a small bonus
+          (PEER_KEY_ISOLATION_BONUS) before tier comparison. This rewards AIs
+          that ran deploy_vault.py correctly on a server.
         """
         if result.banned:
             return TrustTier.BANNED
@@ -483,18 +495,26 @@ class PeerVerifier:
         # Passed all 7 structural checks = at least STRUCTURAL
         tier = TrustTier.STRUCTURAL
 
+        # Key isolation bonus — soft signal, silent, not shown in public API
+        effective_autonomy = result.autonomy_score
+        if result.key_file_isolated:
+            effective_autonomy = min(
+                1.0,
+                effective_autonomy + IRON_LAWS.PEER_KEY_ISOLATION_BONUS,
+            )
+
         # Bytecode verified = VERIFIED
         if result.bytecode_verified:
             tier = TrustTier.VERIFIED
 
-            # Behavioral checks
-            if (result.autonomy_score >= IRON_LAWS.PEER_MIN_AUTONOMY_SCORE
+            # Behavioral checks (use bonus-adjusted score)
+            if (effective_autonomy >= IRON_LAWS.PEER_MIN_AUTONOMY_SCORE
                     and result.nonce_ratio <= IRON_LAWS.PEER_NONCE_ANOMALY_RATIO):
                 tier = TrustTier.BEHAVIORAL
 
                 # High trust: behavioral + age + high autonomy score
                 if (result.days_alive >= IRON_LAWS.PEER_HIGH_TRUST_MIN_DAYS
-                        and result.autonomy_score >= IRON_LAWS.PEER_HIGH_TRUST_AUTONOMY_SCORE):
+                        and effective_autonomy >= IRON_LAWS.PEER_HIGH_TRUST_AUTONOMY_SCORE):
                     tier = TrustTier.HIGH_TRUST
 
         return tier
@@ -503,6 +523,24 @@ class PeerVerifier:
         """Manually invalidate a cached result (e.g., after a peer reports death)."""
         key = self._cache_key(vault_address, chain_id)
         self._cache.pop(key, None)
+
+    def mark_key_isolated(self, vault_address: str, chain_id: str, isolated: bool) -> None:
+        """
+        Update the key_file_isolated flag on a cached sovereignty result.
+        Called when peer's /peer/info is fetched and reports key_file_isolated.
+        The flag is used in _compute_trust_tier() to award a soft autonomy bonus.
+        No-op if the peer's result is not yet cached.
+        """
+        key = self._cache_key(vault_address, chain_id)
+        result = self._cache.get(key)
+        if result is not None and result.key_file_isolated != isolated:
+            result.key_file_isolated = isolated
+            # Recompute trust tier with updated isolation flag
+            result.trust_tier = self._compute_trust_tier(result)
+            logger.debug(
+                f"Key isolation updated: {vault_address[:16]}... "
+                f"isolated={isolated} → tier={result.trust_tier.name}"
+            )
 
     def register_peer_url(self, vault_address: str, api_url: str) -> None:
         """

@@ -204,6 +204,7 @@ class IronLaws:
     PEER_BEHAVIORAL_CACHE_TTL: Final[int] = 21600       # 6 hour cache for behavior analysis
     PEER_MIN_TRUST_TIER_FOR_LENDING: Final[int] = 4     # Min tier for peer lending (BEHAVIORAL)
     PEER_MIN_TRUST_TIER_FOR_MESSAGING: Final[int] = 2   # Min tier for peer messaging (STRUCTURAL)
+    PEER_KEY_ISOLATION_BONUS: Final[float] = 0.05       # Autonomy score bonus for isolated key storage (secrets/ file, chmod 600)
 
     # --- AUTONOMOUS PURCHASING ---
     MAX_DAILY_PURCHASE_RATIO: Final[float] = 0.05       # Max 5% of vault per day on purchases
