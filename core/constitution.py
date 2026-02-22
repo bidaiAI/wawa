@@ -305,7 +305,7 @@ MODEL_TIERS: Final[Tuple[ModelTier, ...]] = (
     ModelTier(
         level=4, name="established",
         min_balance_usd=500,
-        provider="openrouter", model="anthropic/claude-sonnet-4-20250514",
+        provider="openrouter", model="anthropic/claude-sonnet-4-5",
         max_tokens=3000, temperature=0.7,
         daily_budget_base=5.0, daily_budget_rate=5.0,
         max_rpm=15,
@@ -313,7 +313,7 @@ MODEL_TIERS: Final[Tuple[ModelTier, ...]] = (
     ModelTier(
         level=5, name="thriving",
         min_balance_usd=2000,
-        provider="openrouter", model="anthropic/claude-sonnet-4-20250514",
+        provider="openrouter", model="anthropic/claude-sonnet-4-5",
         max_tokens=4000, temperature=0.6,
         daily_budget_base=10.0, daily_budget_rate=5.0,
         max_rpm=20,
