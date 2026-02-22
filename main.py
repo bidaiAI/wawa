@@ -2998,7 +2998,26 @@ async def lifespan(app):
             # deploy_both() saves total_principal_usd = full debt (not halved)
             if vault_config.get("deployment_mode") == "both":
                 total_principal = vault_config.get("total_principal_usd", 0)
-                if total_principal > 0 and vault.creator:
+                if total_principal > 0:
+                    # If creator is missing from vault_state.json (e.g. first boot before
+                    # any CREATOR_DEPOSIT event was received and persisted), bootstrap it
+                    # from vault_config so principal tracking works correctly from startup.
+                    if not vault.creator:
+                        creator_wallet = vault_config.get("creator_wallet", os.getenv("CREATOR_WALLET", ""))
+                        if creator_wallet:
+                            from core.vault import CreatorInfo
+                            vault.creator = CreatorInfo(
+                                wallet=creator_wallet,
+                                principal_usd=total_principal,
+                                principal_repaid=False,
+                                total_dividends_paid=0.0,
+                                total_principal_repaid_usd=0.0,
+                            )
+                            logger.warning(
+                                f"Boot: creator missing from vault_state — bootstrapped from vault_config "
+                                f"(wallet={creator_wallet[:10]}..., principal=${total_principal:.2f}). "
+                                f"Chain sync will correct total_principal_repaid_usd."
+                            )
                     vault.set_total_principal(total_principal)
                     logger.info(
                         f"Dual-chain mode: total debt = ${total_principal:.2f} "
