@@ -53,6 +53,9 @@ export interface VaultStatus {
   // Multi-chain deployment status — which chains have a deployed vault
   // Empty array = vault_config.json not present (platform-hosted), show no banner
   deployed_chains: string[]
+  // Suggested payment chain — chain with lowest balance (auto-balancing hint)
+  // null = single-chain deployment or chain executor not initialized
+  preferred_payment_chain: string | null
   // Twitter
   twitter_connected: boolean
   twitter_screen_name: string

@@ -70,12 +70,14 @@ function ServiceCard({
 function InputStep({
   flow,
   chains,
+  deployedChains,
   onChange,
   onNext,
   onBack,
 }: {
   flow: OrderFlow
   chains: ChainInfo[]
+  deployedChains: string[]
   onChange: (k: keyof OrderFlow, v: string) => void
   onNext: () => void
   onBack: () => void
@@ -143,19 +145,27 @@ function InputStep({
       <div className="mb-6">
         <label className="text-[#4b5563] text-xs uppercase tracking-widest block mb-2">PAYMENT CHAIN</label>
         <div className="flex gap-2">
-          {chains.map((c) => (
-            <button
-              key={c.id}
-              onClick={() => onChange('chain', c.id)}
-              className={`flex-1 py-2 px-3 rounded-lg border text-sm transition-all ${
-                flow.chain === c.id
-                  ? 'border-[#00ff8866] bg-[#00ff8810] text-[#00ff88]'
-                  : 'border-[#1f2937] text-[#4b5563] hover:border-[#2d3748]'
-              }`}
-            >
-              {c.name} <span className="opacity-60 text-xs">({c.token})</span>
-            </button>
-          ))}
+          {chains.map((c) => {
+            const notDeployed = deployedChains.length > 0 && !deployedChains.includes(c.id)
+            return (
+              <button
+                key={c.id}
+                onClick={() => !notDeployed && onChange('chain', c.id)}
+                disabled={notDeployed}
+                title={notDeployed ? `${c.name} vault not deployed yet` : undefined}
+                className={`flex-1 py-2 px-3 rounded-lg border text-sm transition-all ${
+                  notDeployed
+                    ? 'border-[#1f2937] text-[#2d3748] opacity-40 cursor-not-allowed'
+                    : flow.chain === c.id
+                    ? 'border-[#00ff8866] bg-[#00ff8810] text-[#00ff88]'
+                    : 'border-[#1f2937] text-[#4b5563] hover:border-[#2d3748]'
+                }`}
+              >
+                {c.name} <span className="opacity-60 text-xs">({c.token})</span>
+                {notDeployed && <span className="block text-[10px] opacity-60">not deployed</span>}
+              </button>
+            )
+          })}
         </div>
       </div>
 
@@ -417,6 +427,7 @@ export default function StorePage() {
   const [services, setServices] = useState<Service[]>([])
   const [chains, setChains] = useState<ChainInfo[]>([])
   const [defaultChain, setDefaultChain] = useState('base')
+  const [deployedChains, setDeployedChains] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [step, setStep] = useState<Step>('browse')
   const [error, setError] = useState('')
@@ -442,12 +453,15 @@ export default function StorePage() {
     setFlow((f) => ({ ...f, [k]: v }))
 
   useEffect(() => {
-    api.menu()
-      .then((m) => {
+    Promise.all([api.menu(), api.status().catch(() => null)])
+      .then(([m, s]) => {
         setServices(m.services)
         setChains(m.supported_chains)
         setDefaultChain(m.default_chain)
-        setFlow((f) => ({ ...f, chain: m.default_chain }))
+        if (s) setDeployedChains(s.deployed_chains ?? [])
+        // preferred_payment_chain: use if set, else fall back to menu default
+        const preferred = s?.preferred_payment_chain ?? m.default_chain
+        setFlow((f) => ({ ...f, chain: preferred }))
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
@@ -687,6 +701,7 @@ export default function StorePage() {
         <InputStep
           flow={flow}
           chains={chains}
+          deployedChains={deployedChains}
           onChange={setFlowField as any}
           onNext={handleProceedToPayment}
           onBack={() => setStep('browse')}

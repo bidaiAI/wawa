@@ -131,9 +131,16 @@ export default function DonatePage() {
       try {
         const [s, menu] = await Promise.all([api.status(), api.menu()])
         setStatus(s)
-        setChains(menu.supported_chains)
-        if (!selectedChain && menu.supported_chains.length > 0) {
-          setSelectedChain(menu.default_chain || menu.supported_chains[0].id)
+        // Only show chains that have a deployed vault (when deployed_chains is available)
+        const deployed = s.deployed_chains ?? []
+        const available = deployed.length > 0
+          ? menu.supported_chains.filter((c) => deployed.includes(c.id))
+          : menu.supported_chains
+        setChains(available)
+        if (!selectedChain && available.length > 0) {
+          // Prefer the chain with lowest balance (auto-balancing); fall back to menu default
+          const preferred = s.preferred_payment_chain ?? menu.default_chain ?? available[0].id
+          setSelectedChain(preferred)
         }
       } catch {}
       try {

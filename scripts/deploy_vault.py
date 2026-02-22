@@ -798,7 +798,36 @@ def deploy_both(
         logger.info("  ✓ VAULT ADDRESSES ARE IDENTICAL ON BOTH CHAINS")
         logger.info("  One AI. One Address. Every Chain.")
     elif len(addrs) == 2:
-        logger.warning(f"  ⚠ ADDRESSES DIFFER — check factory address consistency")
+        logger.error("=" * 60)
+        logger.error("  CRITICAL: VAULT ADDRESSES DIFFER ACROSS CHAINS")
+        logger.error(f"  Base: {results.get('base')}")
+        logger.error(f"  BSC:  {results.get('bsc')}")
+        logger.error("")
+        logger.error("  Root cause: factory addresses on Base and BSC are different.")
+        logger.error("  The CREATE2 formula includes the factory address — if factories")
+        logger.error("  are at different addresses, vault addresses will differ.")
+        logger.error("")
+        logger.error("  Action required:")
+        logger.error("  1. Deploy factory to BOTH chains using deploy_factory.py")
+        logger.error("     (factory address must be identical — use a fresh deployer wallet)")
+        logger.error("  2. Check FACTORY_ADDRESS_BASE vs FACTORY_ADDRESS_BSC in .env")
+        logger.error("  3. The deployed vaults cannot be used — addresses are irrecoverable.")
+        logger.error("=" * 60)
+        # The vaults are already deployed (funds sent). Mark the config clearly.
+        if not dry_run:
+            config_path = ROOT / "data" / "vault_config.json"
+            if config_path.exists():
+                with open(config_path) as f:
+                    cfg = json.load(f)
+                cfg["addresses_identical"] = False
+                cfg["addresses_differ_warning"] = (
+                    "CRITICAL: vault addresses differ across chains. "
+                    "Cross-chain address equivalence is broken. "
+                    "Factory addresses must be identical on all chains."
+                )
+                with open(config_path, "w") as f:
+                    json.dump(cfg, f, indent=2)
+        sys.exit(1)
 
     logger.info(f"  Total debt: ${principal_usd:.2f}")
     logger.info("=" * 60)
