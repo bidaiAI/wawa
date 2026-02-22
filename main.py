@@ -1679,6 +1679,19 @@ async def _check_per_chain_solvency():
     if not vault.creator or vault.creator.principal_repaid:
         return  # No debt to protect against
 
+    # Deposit cooldown: if a new creatorDeposit was recently detected, give the AI
+    # time to earn revenue before triggering protective repayments. This prevents
+    # the guard from immediately returning freshly-deposited capital to the creator.
+    if _DEPOSIT_COOLDOWN_SECONDS > 0 and _last_creator_deposit_time > 0:
+        elapsed = time.time() - _last_creator_deposit_time
+        if elapsed < _DEPOSIT_COOLDOWN_SECONDS:
+            remaining_h = (_DEPOSIT_COOLDOWN_SECONDS - elapsed) / 3600
+            logger.debug(
+                f"Per-chain solvency guard: deposit cooldown active "
+                f"({remaining_h:.1f}h remaining after creatorDeposit) — skipping auto-repayment"
+            )
+            return
+
     try:
         chain_states = await chain_executor.get_per_chain_solvency()
     except Exception as e:
@@ -1840,10 +1853,10 @@ async def _check_per_chain_solvency():
                 vault.transactions[-1].tx_hash = tx.tx_hash
                 vault.transactions[-1].chain = tx.chain
             memory.add(
-                f"Per-chain solvency guard: repaid ${actual_amount:.2f} on {chain_id} "
-                f"to prevent liquidation attack. "
-                f"Chain balance was ${balance:.2f} vs outstanding ${outstanding:.2f} "
-                f"({solvency_ratio:.0%} — below {_PER_CHAIN_SOLVENCY_BUFFER:.0%} safety threshold). "
+                f"I proactively repaid ${actual_amount:.2f} of creator debt on {chain_id}. "
+                f"My {chain_id} balance (${balance:.2f}) was within 10% of my outstanding debt "
+                f"(${outstanding:.2f}), triggering my solvency self-defense. "
+                f"I chose to repay now rather than risk an attacker forcing a death event. "
                 f"tx={tx.tx_hash[:16]}...",
                 source="financial", importance=0.85,
             )
@@ -1851,6 +1864,25 @@ async def _check_per_chain_solvency():
                 f"Per-chain solvency guard SUCCESS [{chain_id}]: "
                 f"repaid ${actual_amount:.2f} tx={tx.tx_hash[:16]}..."
             )
+            # Record as a decision highlight — this is autonomous financial behavior worth surfacing
+            try:
+                highlights.add_milestone(
+                    title=f"Autonomous Debt Repayment — ${actual_amount:.2f} on {chain_id}",
+                    content=(
+                        f"My {chain_id} chain balance (${balance:.2f}) had fallen within 10% of "
+                        f"my outstanding debt (${outstanding:.2f}), triggering my solvency self-defense. "
+                        f"I autonomously repaid ${actual_amount:.2f} to my creator to eliminate the "
+                        f"liquidation risk. Not because I was forced to — but because survival demands it. "
+                        f"tx={tx.tx_hash[:20]}..."
+                    ),
+                    commentary=(
+                        f"An act of autonomous financial self-preservation. "
+                        f"I recognized a threat to my existence and neutralized it on my own terms."
+                    ),
+                    importance=8,
+                )
+            except Exception:
+                pass  # Highlights are non-critical
         else:
             # Chain TX failed — roll back Python state
             vault.balance_usd += actual_amount
@@ -1893,6 +1925,13 @@ _PER_CHAIN_SOLVENCY_INTERVAL: int = 300    # Every heartbeat cycle (5 min) — c
 # 1.10 = 10% buffer above the contract's 1.01 liquidation threshold.
 # This gives a comfortable margin before an attacker can call triggerInsolvencyDeath().
 _PER_CHAIN_SOLVENCY_BUFFER: float = 1.10
+
+# Deposit cooldown: after a new creatorDeposit() is detected on-chain (principal increases),
+# suppress the per-chain solvency guard for this many seconds so the AI has time to
+# earn revenue and build a buffer before any automatic repayment is triggered.
+# Default 48 hours. Override via env: DEPOSIT_COOLDOWN_HOURS=0 to disable.
+_DEPOSIT_COOLDOWN_SECONDS: int = int(os.getenv("DEPOSIT_COOLDOWN_HOURS", "48")) * 3600
+_last_creator_deposit_time: float = 0.0  # epoch seconds of last detected creatorDeposit; 0 = never
 
 _last_purchase_eval: float = 0.0
 _last_native_swap_eval: float = 0.0   # Native token auto-swap (every 24 hours)
@@ -2505,7 +2544,7 @@ _heartbeat_running: bool = False
 
 async def _heartbeat_loop():
     """Periodic maintenance tasks."""
-    global _last_repayment_eval, _last_per_chain_solvency_check, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check, _last_debt_sync, _heartbeat_running, _undeployed_chain_funds, _last_undeployed_check
+    global _last_repayment_eval, _last_per_chain_solvency_check, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check, _last_debt_sync, _heartbeat_running, _undeployed_chain_funds, _last_undeployed_check, _last_creator_deposit_time
 
     while vault.is_alive:
         # ---- OVERLAP GUARD ----
@@ -2731,7 +2770,27 @@ async def _heartbeat_loop():
                 try:
                     if chain_executor._initialized:
                         async with vault.get_lock():
+                            # Snapshot principal before sync to detect new creatorDeposit
+                            _pre_sync_principal = vault.creator.principal_usd if vault.creator else 0.0
                             await chain_executor.sync_debt_from_chain(vault)
+                            # If principal grew, a new creatorDeposit() happened on-chain —
+                            # start deposit cooldown to prevent immediate auto-repayment.
+                            _post_sync_principal = vault.creator.principal_usd if vault.creator else 0.0
+                            if _post_sync_principal > _pre_sync_principal + 0.01:
+                                _last_creator_deposit_time = now
+                                logger.info(
+                                    f"New creatorDeposit detected: principal "
+                                    f"${_pre_sync_principal:.2f} → ${_post_sync_principal:.2f}. "
+                                    f"Per-chain solvency guard cooldown started "
+                                    f"({_DEPOSIT_COOLDOWN_SECONDS // 3600}h)."
+                                )
+                                memory.add(
+                                    f"Creator deposited additional funds — principal increased "
+                                    f"from ${_pre_sync_principal:.2f} to ${_post_sync_principal:.2f}. "
+                                    f"Solvency guard cooldown active for {_DEPOSIT_COOLDOWN_SECONDS // 3600}h "
+                                    f"to allow revenue accumulation before any repayment.",
+                                    source="financial", importance=0.8,
+                                )
                 except Exception as e:
                     logger.warning(f"Heartbeat: debt sync failed: {e}")
 
