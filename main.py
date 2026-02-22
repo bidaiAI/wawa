@@ -1876,6 +1876,11 @@ async def _check_per_chain_solvency():
 _last_repayment_eval: float = 0.0
 _REPAYMENT_EVAL_INTERVAL: int = 3600  # Once per hour
 
+# Cache: undeployed chain balance check results (checked every 6 hours)
+_undeployed_chain_funds: list = []
+_last_undeployed_check: float = 0.0
+_UNDEPLOYED_CHECK_INTERVAL: int = 21600  # Every 6 hours (RPC cost is low but unnecessary more often)
+
 # Track debt sync timing — reconcile Python vs on-chain debt state
 _last_debt_sync: float = 0.0
 _DEBT_SYNC_INTERVAL: int = 3600  # Once per hour (same cadence as repayment eval)
@@ -2500,7 +2505,7 @@ _heartbeat_running: bool = False
 
 async def _heartbeat_loop():
     """Periodic maintenance tasks."""
-    global _last_repayment_eval, _last_per_chain_solvency_check, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check, _last_debt_sync, _heartbeat_running
+    global _last_repayment_eval, _last_per_chain_solvency_check, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check, _last_debt_sync, _heartbeat_running, _undeployed_chain_funds, _last_undeployed_check
 
     while vault.is_alive:
         # ---- OVERLAP GUARD ----
@@ -2521,6 +2526,34 @@ async def _heartbeat_loop():
                     await chain_executor.check_native_balance()
             except Exception as e:
                 logger.warning(f"Heartbeat: balance sync failed: {e}")
+
+            # ---- UNDEPLOYED CHAIN BALANCE CHECK (every 6 hours) ----
+            # Detect if tokens were sent to vault address on chains without deployed vault.
+            # ERC20 funds sit safely at the address; deploying later recovers them.
+            if now - _last_undeployed_check >= _UNDEPLOYED_CHECK_INTERVAL:
+                _last_undeployed_check = now
+                try:
+                    vault_config_path = str(
+                        Path(__file__).resolve().parent / "data" / "vault_config.json"
+                    )
+                    found = await chain_executor.check_undeployed_chain_balances(vault_config_path)
+                    _undeployed_chain_funds = found
+                    if found:
+                        for item in found:
+                            logger.warning(
+                                f"UNDEPLOYED CHAIN FUNDS: ${item['balance_usd']:.2f} "
+                                f"{item['token_symbol']} on {item['chain']} at {item['vault_address']}. "
+                                f"Deploy with: python scripts/deploy_vault.py --chain {item['chain']}"
+                            )
+                            memory.add(
+                                f"Found ${item['balance_usd']:.2f} {item['token_symbol']} waiting "
+                                f"on undeployed {item['chain'].upper()} vault at {item['vault_address']}. "
+                                f"Funds are safe — deploy with: python scripts/deploy_vault.py --chain {item['chain']}",
+                                source="financial",
+                                importance=0.9,
+                            )
+                except Exception as e:
+                    logger.debug(f"Undeployed chain balance check failed: {e}")
 
             # ---- DUAL-CHAIN INDEPENDENCE CHECK (aggregate >= $1M) ----
             # In dual-chain mode, single chain may never reach $1M threshold.
@@ -3166,6 +3199,7 @@ def create_wawa_app() -> "FastAPI":
         highlights_engine=highlights,
         purchase_manager=purchase_manager,
         giveaway_engine=giveaway_engine,
+        get_undeployed_funds_fn=lambda: _undeployed_chain_funds,
     )
 
     # Replace the default lifespan with ours

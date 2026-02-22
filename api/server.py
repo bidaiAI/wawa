@@ -250,6 +250,9 @@ class StatusResponse(BaseModel):
     # Lists which chains have a deployed vault (from vault_config.json)
     # e.g., ["base"] means BSC vault not yet deployed
     deployed_chains: list = []
+    # Undeployed chains that already have token balance waiting
+    # e.g., [{"chain":"bsc","balance_usd":50.0,"token_symbol":"USDT","vault_address":"0x..."}]
+    undeployed_chain_funds: list = []
     # Twitter
     twitter_connected: bool = False
     twitter_screen_name: str = ""
@@ -376,6 +379,7 @@ def create_app(
     highlights_engine=None,
     purchase_manager=None,
     giveaway_engine=None,
+    get_undeployed_funds_fn=None,
 ) -> FastAPI:
     """
     Create FastAPI app wired to all mortal modules.
@@ -1153,6 +1157,8 @@ def create_app(
             ),
             # Multi-chain deployment status: which chains have a deployed vault
             deployed_chains=_get_deployed_chains(),
+            # Undeployed chains with funds waiting (cached from heartbeat)
+            undeployed_chain_funds=get_undeployed_funds_fn() if get_undeployed_funds_fn else [],
             # Twitter
             twitter_connected=bool(os.getenv("TWITTER_ACCESS_TOKEN", "")),
             twitter_screen_name=os.getenv("TWITTER_SCREEN_NAME", ""),

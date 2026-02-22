@@ -53,6 +53,15 @@ export interface VaultStatus {
   // Multi-chain deployment status — which chains have a deployed vault
   // Empty array = vault_config.json not present (platform-hosted), show no banner
   deployed_chains: string[]
+  // Undeployed chains that already have token balance waiting at vault address
+  // e.g. [{chain:"bsc", balance_usd:50.0, token_symbol:"USDT", vault_address:"0x..."}]
+  undeployed_chain_funds: Array<{
+    chain: string
+    balance_usd: number
+    token_symbol: string
+    vault_address: string
+    explorer: string
+  }>
   // Suggested payment chain — chain with lowest balance (auto-balancing hint)
   // null = single-chain deployment or chain executor not initialized
   preferred_payment_chain: string | null

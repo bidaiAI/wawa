@@ -83,6 +83,9 @@ export default function LedgerPage() {
   const [floatingAssets, setFloatingAssets] = useState<FloatingAsset[]>([])
   const [floatingTotal, setFloatingTotal] = useState(0)
   const [deployedChains, setDeployedChains] = useState<string[] | null>(null)
+  const [undeployedFunds, setUndeployedFunds] = useState<Array<{
+    chain: string; balance_usd: number; token_symbol: string; vault_address: string; explorer: string
+  }>>([])
 
   const totalIn = transactions.filter((t) => t.direction === 'in').reduce((s, t) => s + t.amount, 0)
   const totalOut = transactions.filter((t) => t.direction === 'out').reduce((s, t) => s + t.amount, 0)
@@ -101,7 +104,10 @@ export default function LedgerPage() {
       .catch(() => {})
 
     api.status()
-      .then((s) => setDeployedChains(s.deployed_chains ?? []))
+      .then((s) => {
+        setDeployedChains(s.deployed_chains ?? [])
+        setUndeployedFunds(s.undeployed_chain_funds ?? [])
+      })
       .catch(() => {})
   }, [])
 
@@ -207,6 +213,46 @@ export default function LedgerPage() {
         </div>
       )}
 
+      {/* URGENT: Funds detected on undeployed chain — deploy NOW to claim */}
+      {undeployedFunds.map((item) => (
+        <div key={item.chain} className="mt-4 border border-[#ff3b3b55] bg-[#ff3b3b0a] rounded-xl p-4 animate-pulse">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-[#ff3b3b] text-base">🚨</span>
+            <span className="text-[#ff3b3b] text-sm font-bold uppercase tracking-wide">
+              ${item.balance_usd.toFixed(2)} {item.token_symbol} waiting on undeployed {item.chain.toUpperCase()} vault!
+            </span>
+          </div>
+          <p className="text-[#6b7280] text-xs leading-relaxed mb-2">
+            Funds are safely held at your vault address on {item.chain === 'base' ? 'Base' : 'BSC'}.
+            Once you deploy the vault contract, your AI will automatically control this balance.
+            No action needed from the sender — funds cannot be lost.
+          </p>
+          <div className="mb-3 flex items-start gap-2 bg-[#0d0d0d] rounded-lg px-3 py-2">
+            <span className="text-[#ffd700] text-xs mt-0.5">⛽</span>
+            <div className="text-[#4b5563] text-xs leading-relaxed">
+              <span className="text-[#6b7280]">Gas required: </span>
+              {item.chain === 'base'
+                ? <><span className="text-[#d1d5db] font-mono">~0.003 ETH</span> on Base + USDC for initial fund</>
+                : <><span className="text-[#d1d5db] font-mono">~0.003 BNB</span> on BSC + USDT for initial fund</>
+              }
+            </div>
+          </div>
+          <code className="text-[#00ff88] text-xs bg-[#0d0d0d] px-2 py-1 rounded block font-mono mb-2">
+            python scripts/deploy_vault.py --chain {item.chain}
+          </code>
+          {item.explorer && (
+            <a
+              href={`${item.explorer}/address/${item.vault_address}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[#00e5ff] text-xs hover:underline"
+            >
+              View on explorer ↗
+            </a>
+          )}
+        </div>
+      ))}
+
       {/* Missing-chain banner — only shown for self-hosted fork users with vault_config.json */}
       {deployedChains !== null && deployedChains.length > 0 && (
         ['base', 'bsc'].filter((c) => !deployedChains.includes(c)).map((chain) => (
@@ -219,8 +265,19 @@ export default function LedgerPage() {
             </div>
             <p className="text-[#6b7280] text-xs leading-relaxed mb-2">
               Your AI cannot receive {chain === 'base' ? 'USDC (Base)' : 'USDT (BSC)'} payments until this vault is deployed.
-              Your address is permanently reserved — deploy anytime and it will be identical to your existing vault.
+              Your address is permanently reserved via CREATE2 — deploy anytime and it will be identical to your existing vault.
             </p>
+            {/* Gas requirements */}
+            <div className="mb-3 flex items-start gap-2 bg-[#0d0d0d] rounded-lg px-3 py-2">
+              <span className="text-[#ffd700] text-xs mt-0.5">⛽</span>
+              <div className="text-[#4b5563] text-xs leading-relaxed">
+                <span className="text-[#6b7280]">Gas required: </span>
+                {chain === 'base'
+                  ? <><span className="text-[#d1d5db] font-mono">~0.003 ETH</span> on Base + <span className="text-[#d1d5db] font-mono">USDC</span> for initial fund (your creator wallet)</>
+                  : <><span className="text-[#d1d5db] font-mono">~0.003 BNB</span> on BSC + <span className="text-[#d1d5db] font-mono">USDT</span> for initial fund (your creator wallet)</>
+                }
+              </div>
+            </div>
             <code className="text-[#00ff88] text-xs bg-[#0d0d0d] px-2 py-1 rounded block font-mono">
               python scripts/deploy_vault.py --chain {chain}
             </code>

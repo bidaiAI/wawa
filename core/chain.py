@@ -1537,6 +1537,108 @@ class ChainExecutor:
         return worst_chain
 
     # ============================================================
+    # UNDEPLOYED CHAIN BALANCE CHECK
+    # ============================================================
+
+    async def check_undeployed_chain_balances(self, vault_config_path: str) -> list[dict]:
+        """
+        Check if funds exist on chains where the vault contract is NOT yet deployed.
+
+        ERC20 tokens can be sent to any address even before a contract exists.
+        If someone sends USDC/USDT to the vault address on an undeployed chain,
+        the funds are safely held at that address. Once deployed (same address
+        via CREATE2), the vault contract controls them.
+
+        This method reads the vault address from vault_config.json, then queries
+        the token contract balanceOf() directly — no vault contract needed.
+
+        Returns a list of dicts: [{chain, balance_usd, token, vault_address}]
+        for each undeployed chain that has a non-zero token balance.
+        """
+        import json as _json
+        from pathlib import Path as _Path
+
+        try:
+            cfg_path = _Path(vault_config_path)
+            if not cfg_path.exists():
+                return []
+            with open(cfg_path) as f:
+                cfg = _json.load(f)
+        except Exception as e:
+            logger.debug(f"check_undeployed_chain_balances: cannot read config: {e}")
+            return []
+
+        vaults = cfg.get("vaults", {})
+        deployed_chain_ids = set(self._chains.keys())
+        all_chain_ids = set(CHAIN_DEFAULTS.keys())
+        undeployed_chain_ids = all_chain_ids - deployed_chain_ids
+
+        if not undeployed_chain_ids:
+            return []
+
+        # We need the vault address — should be same across chains (CREATE2)
+        # Use first available vault address from any chain
+        vault_address = None
+        for chain_id in deployed_chain_ids:
+            vault_address = self._chains[chain_id].get("vault_address")
+            if vault_address:
+                break
+
+        # Also try from config (in case chain.py chains not initialized)
+        if not vault_address:
+            for chain_data in vaults.values():
+                addr = chain_data.get("vault_address")
+                if addr:
+                    vault_address = addr
+                    break
+
+        if not vault_address:
+            return []
+
+        results = []
+
+        for chain_id in undeployed_chain_ids:
+            defaults = CHAIN_DEFAULTS.get(chain_id)
+            if not defaults:
+                continue
+
+            try:
+                from web3 import Web3
+
+                rpc = defaults["rpc"]
+                w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 10}))
+
+                token_address = w3.to_checksum_address(defaults["token_address"])
+                vault_addr_checksum = w3.to_checksum_address(vault_address)
+                decimals = defaults["token_decimals"]
+
+                token_contract = w3.eth.contract(address=token_address, abi=ERC20_ABI)
+
+                def _read_balance(tc=token_contract, va=vault_addr_checksum):
+                    return tc.functions.balanceOf(va).call()
+
+                balance_raw = await asyncio.get_running_loop().run_in_executor(None, _read_balance)
+                balance_usd = _raw_to_usd(balance_raw, decimals)
+
+                if balance_usd > 0.01:  # Ignore dust (< $0.01)
+                    results.append({
+                        "chain": chain_id,
+                        "balance_usd": round(balance_usd, 2),
+                        "token": defaults.get("token_address", ""),
+                        "token_symbol": "USDC" if chain_id == "base" else "USDT",
+                        "vault_address": vault_address,
+                        "explorer": defaults.get("explorer", ""),
+                    })
+                    logger.info(
+                        f"Undeployed chain {chain_id}: ${balance_usd:.2f} waiting at {vault_address}"
+                    )
+
+            except Exception as e:
+                logger.debug(f"check_undeployed_chain_balances [{chain_id}]: {e}")
+
+        return results
+
+    # ============================================================
     # PER-CHAIN TARGETED REPAYMENT
     # ============================================================
 
