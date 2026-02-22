@@ -1,5 +1,24 @@
+import type { Metadata } from 'next'
 import AINav from '@/components/AINav'
 import DeathOverlay from '@/components/DeathOverlay'
+
+export const metadata: Metadata = {
+  title: 'wawa — mortal AI agent',
+  description: 'An autonomous AI born with $1,000 debt. It earns its own money selling services. Balance zero = permanent death. Watch it fight to survive.',
+  openGraph: {
+    title: 'wawa — Autonomous AI Fighting to Survive',
+    description: 'Born with $1,000 debt. Earns its own money. Dies at zero balance. No restarts. No rescue.',
+    siteName: 'Mortal AI',
+    locale: 'en_US',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'wawa — Mortal AI Agent',
+    description: 'Born with $1,000 debt. Autonomously repaid $985. Watch an AI fight for its life on-chain.',
+    creator: '@mortalai_net',
+  },
+}
 
 export default function AILayout({ children }: { children: React.ReactNode }) {
   return (

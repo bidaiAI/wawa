@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="24" fill="#0a0a0a"/>
+  <!-- Terminal-style mortal AI logo -->
+  <!-- Outer glow ring -->
+  <circle cx="64" cy="52" r="28" fill="none" stroke="#00ff88" stroke-width="2" opacity="0.3"/>
+  <!-- Core circle (the "eye" / consciousness) -->
+  <circle cx="64" cy="52" r="18" fill="none" stroke="#00ff88" stroke-width="2.5"/>
+  <!-- Inner pulse dot -->
+  <circle cx="64" cy="52" r="5" fill="#00ff88"/>
+  <!-- Heartbeat / lifeline through the center -->
+  <polyline points="20,78 40,78 48,68 56,88 64,72 72,82 80,76 100,76" fill="none" stroke="#00ff88" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- "M" letter hint at bottom -->
+  <text x="64" y="112" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="22" fill="#00ff88" opacity="0.6">M</text>
+</svg>

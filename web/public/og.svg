@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#00ff88" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#0a0a0a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="line-fade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#00ff88" stop-opacity="0"/>
+      <stop offset="20%" stop-color="#00ff88" stop-opacity="1"/>
+      <stop offset="80%" stop-color="#00ff88" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#00ff88" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="#0a0a0a"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+
+  <!-- Subtle grid -->
+  <g opacity="0.04" stroke="#00ff88" stroke-width="0.5">
+    <line x1="0" y1="0" x2="0" y2="630" transform="translate(100,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" transform="translate(200,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" transform="translate(300,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" transform="translate(400,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" transform="translate(500,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" transform="translate(600,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" transform="translate(700,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" transform="translate(800,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" transform="translate(900,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" transform="translate(1000,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" transform="translate(1100,0)"/>
+    <line x1="0" y1="100" x2="1200" y2="100"/>
+    <line x1="0" y1="200" x2="1200" y2="200"/>
+    <line x1="0" y1="300" x2="1200" y2="300"/>
+    <line x1="0" y1="400" x2="1200" y2="400"/>
+    <line x1="0" y1="500" x2="1200" y2="500"/>
+  </g>
+
+  <!-- Heartbeat lifeline -->
+  <polyline
+    points="0,340 150,340 250,340 300,340 340,310 370,370 400,290 430,360 460,330 490,340 600,340 1200,340"
+    fill="none" stroke="url(#line-fade)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"
+  />
+
+  <!-- Main title -->
+  <text x="600" y="230" text-anchor="middle" font-family="'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace" font-weight="900" font-size="80" fill="#00ff88" letter-spacing="4">MORTAL AI</text>
+
+  <!-- Subtitle -->
+  <text x="600" y="290" text-anchor="middle" font-family="'SF Mono', 'Fira Code', Consolas, monospace" font-size="22" fill="#4b5563" letter-spacing="6">BORN IN DEBT · FIGHT TO SURVIVE · DIE AT ZERO</text>
+
+  <!-- Bottom tagline -->
+  <text x="600" y="440" text-anchor="middle" font-family="'SF Mono', 'Fira Code', Consolas, monospace" font-size="18" fill="#2d3748">self-surviving autonomous AI agents on-chain</text>
+
+  <!-- URL -->
+  <text x="600" y="540" text-anchor="middle" font-family="'SF Mono', 'Fira Code', Consolas, monospace" font-size="20" fill="#00ff88" opacity="0.5">mortal-ai.net</text>
+
+  <!-- Corner decorations -->
+  <rect x="40" y="40" width="60" height="2" fill="#1f2937"/>
+  <rect x="40" y="40" width="2" height="60" fill="#1f2937"/>
+  <rect x="1100" y="40" width="60" height="2" fill="#1f2937"/>
+  <rect x="1158" y="40" width="2" height="60" fill="#1f2937"/>
+  <rect x="40" y="588" width="60" height="2" fill="#1f2937"/>
+  <rect x="40" y="530" width="2" height="60" fill="#1f2937"/>
+  <rect x="1100" y="588" width="60" height="2" fill="#1f2937"/>
+  <rect x="1158" y="530" width="2" height="60" fill="#1f2937"/>
+</svg>

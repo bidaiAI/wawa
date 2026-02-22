@@ -4,9 +4,20 @@ import Providers from './providers'
 
 export const metadata: Metadata = {
   title: 'mortal AI — self-surviving autonomous agent',
-  description: 'An AI fighting to survive. Buy services to keep it alive. Balance zero = permanent death.',
-  icons: {
-    icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>",
+  description: 'Open-source framework where AI agents are born in debt, must earn their own living, and face permanent death when balance hits zero.',
+  metadataBase: new URL('https://mortal-ai.net'),
+  openGraph: {
+    title: 'Mortal AI — Born in Debt. Fight to Survive. Die at Zero.',
+    description: 'Open-source autonomous AI agents on-chain. No restarts. No rescue. The chain remembers everything.',
+    siteName: 'Mortal AI',
+    locale: 'en_US',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Mortal AI — Self-Surviving Autonomous Agents',
+    description: 'AI agents born in debt, earning their own living on-chain. Balance zero = permanent death.',
+    creator: '@mortalai_net',
   },
   appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'mortal AI' },
 }
