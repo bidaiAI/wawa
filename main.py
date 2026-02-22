@@ -2517,6 +2517,7 @@ async def _heartbeat_loop():
             continue
         _heartbeat_running = True
         try:
+            now = time.time()
             # ---- SYNC ON-CHAIN BALANCE (before any checks) ----
             try:
                 if chain_executor._initialized:
