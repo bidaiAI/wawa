@@ -380,6 +380,7 @@ def create_app(
     purchase_manager=None,
     giveaway_engine=None,
     get_undeployed_funds_fn=None,
+    reinit_tweepy_fn=None,
 ) -> FastAPI:
     """
     Create FastAPI app wired to all mortal modules.
@@ -2717,6 +2718,149 @@ def create_app(
             "drawn_at": draw.drawn_at,
             "claim_expires_at": draw.claim_expires_at,
             "message": "Prize found! Message the AI in chat with your full order ID to receive your gift card code.",
+        }
+
+    # ── Platform integration endpoints ────────────────────────────────────────
+    # These allow the mortal-ai.net platform to coordinate with AI instances.
+    # All authenticated endpoints require PLATFORM_FEE_SECRET header.
+
+    _PLATFORM_INSTANCES_PATH = Path(__file__).resolve().parent.parent / "data" / "platform_instances.json"
+
+    def _load_platform_instances() -> dict:
+        if _PLATFORM_INSTANCES_PATH.exists():
+            try:
+                return json.loads(_PLATFORM_INSTANCES_PATH.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+        return {}
+
+    @app.get("/platform/status/{target}")
+    async def get_platform_status(target: str):
+        """
+        Poll deployment progress for a platform-hosted AI.
+        target: vault address (0x...) or subdomain name.
+        Returns: { status, error?, public_url? }
+
+        Status values (aligned with platform create page):
+          generating_wallet | setting_ai_wallet | seeding_gas |
+          spawning_container | configuring_subdomain | health_check | live | failed
+        """
+        instances = _load_platform_instances()
+        target_lower = target.lower()
+        entry = instances.get(target_lower)
+        if not entry:
+            # Try subdomain match
+            for v in instances.values():
+                if isinstance(v, dict) and v.get("subdomain") == target:
+                    entry = v
+                    break
+        if not entry:
+            return {"status": "not_found"}
+        return {
+            "status": entry.get("status", "unknown"),
+            "error": entry.get("error"),
+            "public_url": entry.get("public_url"),
+        }
+
+    @app.post("/platform/webhook/vault-created")
+    async def platform_vault_created(request: Request, body: dict):
+        """
+        Called by platform backend after a user deploys a vault via factory.
+        Triggers async AI instance provisioning (container spawn + DNS setup).
+        Auth: X-Platform-Secret header must match PLATFORM_FEE_SECRET.
+        """
+        secret = request.headers.get("x-platform-secret", "")
+        expected = os.getenv("PLATFORM_FEE_SECRET", "")
+        if not expected or secret != expected:
+            raise HTTPException(status_code=403, detail="invalid platform secret")
+
+        vault_address = str(body.get("vault_address", "")).strip()
+        subdomain = str(body.get("subdomain", "")).strip()
+        ai_name = str(body.get("ai_name", "")).strip()
+        chain = str(body.get("chain", "base")).strip()
+        principal_usd = float(body.get("principal_usd", 0))
+        creator_wallet = str(body.get("creator_wallet", "")).strip()
+
+        if not vault_address or not subdomain or not ai_name:
+            raise HTTPException(status_code=400, detail="vault_address, subdomain, ai_name required")
+
+        # Write initial status so /platform/status can immediately return something
+        instances = _load_platform_instances()
+        instances[vault_address.lower()] = {
+            "vault_address": vault_address,
+            "subdomain": subdomain,
+            "ai_name": ai_name,
+            "chain": chain,
+            "principal_usd": principal_usd,
+            "creator_wallet": creator_wallet,
+            "status": "generating_wallet",
+            "public_url": None,
+            "error": None,
+            "created_at": __import__("time").time(),
+        }
+        _PLATFORM_INSTANCES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _PLATFORM_INSTANCES_PATH.write_text(
+            json.dumps(instances, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        logger.info(f"PLATFORM WEBHOOK: vault-created {vault_address} subdomain={subdomain}")
+
+        # Trigger orchestration in background (imported lazily to avoid import error if
+        # mortal_platform is not installed — orchestration only runs on the platform VPS)
+        try:
+            from mortal_platform.orchestrator import spawn_instance  # noqa: PLC0415
+            import asyncio as _asyncio
+            _asyncio.create_task(spawn_instance(
+                vault_address=vault_address,
+                subdomain=subdomain,
+                ai_name=ai_name,
+                chain=chain,
+                principal_usd=principal_usd,
+                creator_wallet=creator_wallet,
+                instances_path=str(_PLATFORM_INSTANCES_PATH),
+            ))
+        except ImportError:
+            logger.warning("mortal_platform.orchestrator not found — orchestration skipped (not a platform VPS?)")
+
+        return {"status": "accepted", "vault_address": vault_address}
+
+    @app.post("/platform/twitter/inject")
+    async def platform_twitter_inject(request: Request, body: dict):
+        """
+        Hot-inject Twitter OAuth credentials from platform without container restart.
+        Called by platform after user completes Twitter OAuth flow on mortal-ai.net.
+        Auth: X-Platform-Secret header must match PLATFORM_FEE_SECRET.
+        """
+        secret = request.headers.get("x-platform-secret", "")
+        expected = os.getenv("PLATFORM_FEE_SECRET", "")
+        if not expected or secret != expected:
+            raise HTTPException(status_code=403, detail="invalid platform secret")
+
+        access_token = str(body.get("access_token", "")).strip()
+        access_secret = str(body.get("access_secret", "")).strip()
+        screen_name = str(body.get("screen_name", "")).strip()
+
+        if not access_token or not access_secret or not screen_name:
+            raise HTTPException(status_code=400, detail="access_token, access_secret, screen_name required")
+
+        # Inject into environment so _init_tweepy() picks them up
+        os.environ["TWITTER_ACCESS_TOKEN"] = access_token
+        os.environ["TWITTER_ACCESS_SECRET"] = access_secret
+        os.environ["TWITTER_SCREEN_NAME"] = screen_name
+
+        # Re-initialize Twitter client without restarting the container
+        if reinit_tweepy_fn:
+            try:
+                ok = reinit_tweepy_fn()
+                logger.info(f"Twitter credentials hot-injected for @{screen_name}: reinit={'ok' if ok else 'partial'}")
+            except Exception as e:
+                logger.warning(f"Twitter reinit after inject failed: {e}")
+        else:
+            logger.info(f"Twitter credentials injected for @{screen_name} (no reinit_fn — will apply on next init)")
+
+        return {
+            "status": "injected",
+            "screen_name": screen_name,
+            "twitter_connected": bool(os.getenv("TWITTER_ACCESS_TOKEN")),
         }
 
     return app

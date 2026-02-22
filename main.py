@@ -3200,6 +3200,7 @@ def create_wawa_app() -> "FastAPI":
         purchase_manager=purchase_manager,
         giveaway_engine=giveaway_engine,
         get_undeployed_funds_fn=lambda: _undeployed_chain_funds,
+        reinit_tweepy_fn=_init_tweepy,
     )
 
     # Replace the default lifespan with ours

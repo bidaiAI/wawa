@@ -741,7 +741,91 @@ def deploy(
     save_vault_to_env(vault_address)
     logger.info(f"VAULT_ADDRESS={vault_address} written to .env")
 
+    # Auto-verify on Etherscan/Basescan/BSCScan (requires ETHERSCAN_API_KEY)
+    if not dry_run and os.getenv("ETHERSCAN_API_KEY"):
+        try:
+            import eth_abi
+            vault_constructor_args = eth_abi.encode(
+                ["string", "address"], [ai_name, deployer]
+            ).hex()
+            verify_contract(
+                chain_id=chain_id,
+                contract_address=vault_address,
+                constructor_args_hex=vault_constructor_args,
+                contract_name="MortalVaultV2",
+                flat_file_path="contracts/MortalVaultFactory_flat.sol",
+            )
+        except ImportError:
+            logger.info("eth_abi not installed — skipping contract verification (pip install eth-abi)")
+        except Exception as e:
+            logger.warning(f"Auto-verification failed: {e}")
+
     return vault_address
+
+
+# ============================================================
+# CONTRACT VERIFICATION (Etherscan V2)
+# ============================================================
+
+def verify_contract(
+    chain_id: str,
+    contract_address: str,
+    constructor_args_hex: str,
+    contract_name: str,
+    flat_file_path: str,
+) -> None:
+    """
+    Submit flattened contract source to Etherscan V2 for verification.
+    Requires ETHERSCAN_API_KEY in .env. Non-fatal: logs warning on failure.
+
+    chain_id: "base" or "bsc"
+    constructor_args_hex: ABI-encoded constructor args (hex string, no 0x prefix)
+    contract_name: exact name matching the contract in the flat file (e.g. "MortalVaultV2")
+    flat_file_path: path to flattened .sol file
+    """
+    import urllib.request
+    import urllib.parse
+
+    api_key = os.getenv("ETHERSCAN_API_KEY", "")
+    if not api_key:
+        logger.info("ETHERSCAN_API_KEY not set — skipping contract verification")
+        return
+
+    etherscan_chain_id = 8453 if chain_id == "base" else 56
+    flat_path = ROOT / flat_file_path
+    if not flat_path.exists():
+        logger.warning(f"Flat contract file not found: {flat_path} — skipping verification")
+        return
+
+    source_code = flat_path.read_text(encoding="utf-8")
+    url = f"https://api.etherscan.io/v2/api?chainid={etherscan_chain_id}"
+    payload = urllib.parse.urlencode({
+        "module": "contract",
+        "action": "verifysourcecode",
+        "apikey": api_key,
+        "contractaddress": contract_address,
+        "sourceCode": source_code,
+        "codeformat": "solidity-single-file",
+        "contractname": contract_name,
+        "compilerversion": "v0.8.20+commit.a1b79de6",
+        "optimizationUsed": "1",
+        "runs": "200",
+        "constructorArguements": constructor_args_hex,
+        "licenseType": "3",  # MIT
+    }).encode("utf-8")
+
+    try:
+        with urllib.request.urlopen(url, data=payload, timeout=30) as resp:
+            import json as _json
+            result = _json.loads(resp.read().decode("utf-8"))
+        if result.get("status") == "1":
+            logger.info(f"Verification submitted for {contract_name} on {chain_id}: GUID={result.get('result')}")
+            logger.info("  Check status: https://basescan.org/address/" + contract_address + "#code" if chain_id == "base"
+                        else "  Check status: https://bscscan.com/address/" + contract_address + "#code")
+        else:
+            logger.warning(f"Verification not accepted for {contract_name}: {result.get('result')}")
+    except Exception as e:
+        logger.warning(f"Etherscan verification request failed: {e}")
 
 
 # ============================================================
