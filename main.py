@@ -65,7 +65,7 @@ for _h in logging.root.handlers:
 logger = logging.getLogger("mortal.main")
 
 # Ensure data dirs exist
-for d in ["data/memory", "data/tweets", "data/orders"]:
+for d in ["data/memory", "data/tweets", "data/orders", "data/takeover", "data/takeover_reports"]:
     Path(d).mkdir(parents=True, exist_ok=True)
 
 
@@ -608,6 +608,106 @@ async def _tweet_post_fn(content: str) -> str:
     return tweet_id
 
 
+async def _tweet_reply_fn(content: str, in_reply_to_tweet_id: str) -> str:
+    """Post a reply to a tweet. Uses Tweepy in_reply_to_tweet_id; proxy may need extension."""
+    global _tweet_billing_counter
+    if not content or not in_reply_to_tweet_id:
+        return ""
+    # Direct Tweepy (reply supported in API v2)
+    if _tweepy_client is not None:
+        try:
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: _tweepy_client.create_tweet(text=content, in_reply_to_tweet_id=in_reply_to_tweet_id),
+            )
+            tweet_id = str(response.data["id"]) if response.data else ""
+            if tweet_id:
+                logger.info(f"Takeover reply posted: id={tweet_id} in_reply_to={in_reply_to_tweet_id}")
+                _tweet_billing_counter += 1
+                batch = IRON_LAWS.TWEET_BILLING_BATCH_SIZE
+                if _tweet_billing_counter >= batch:
+                    cost = round(batch * IRON_LAWS.TWEET_API_COST_USD, 4)
+                    try:
+                        vault.spend(cost, SpendType.API_COST, description=f"Twitter:{batch}tweets")
+                    except Exception:
+                        pass
+                    _tweet_billing_counter = 0
+            return tweet_id
+        except Exception as e:
+            logger.error(f"Takeover reply post failed: {e}")
+            return ""
+    # Platform proxy: extend payload with in_reply_to_tweet_id so proxy can support it
+    if _tweet_proxy_url:
+        try:
+            import aiohttp
+            payload = {
+                "content": content,
+                "in_reply_to_tweet_id": in_reply_to_tweet_id,
+                "vault_address": _tweet_vault_address,
+                "access_token": os.getenv("TWITTER_ACCESS_TOKEN", ""),
+                "access_secret": os.getenv("TWITTER_ACCESS_SECRET", ""),
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    _tweet_proxy_url,
+                    json=payload,
+                    headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {_tweet_proxy_secret}"} if _tweet_proxy_secret else {})},
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        tweet_id = data.get("tweet_id", "") or ""
+                        if tweet_id:
+                            # Mirror the billing logic from the direct Tweepy path so
+                            # proxy replies are counted identically in vault accounting.
+                            _tweet_billing_counter += 1
+                            batch = IRON_LAWS.TWEET_BILLING_BATCH_SIZE
+                            if _tweet_billing_counter >= batch:
+                                cost = round(batch * IRON_LAWS.TWEET_API_COST_USD, 4)
+                                try:
+                                    vault.spend(cost, SpendType.API_COST, description=f"Twitter:{batch}tweets(proxy)")
+                                except Exception:
+                                    pass
+                                _tweet_billing_counter = 0
+                        return tweet_id
+        except Exception as e:
+            logger.error(f"Takeover reply via proxy failed: {e}")
+    return ""
+
+
+def _twitter_get_me_sync():
+    """Sync: get authenticated user id (for mentions). Returns None if unavailable."""
+    if _tweepy_client is None:
+        return None
+    try:
+        resp = _tweepy_client.get_me(user_fields="id")
+        if resp.data:
+            return str(resp.data.id)
+        return None
+    except Exception as e:
+        logger.debug(f"Twitter get_me failed: {e}")
+        return None
+
+
+def _twitter_get_mentions_sync(user_id: str, since_id: Optional[str] = None):
+    """Sync: get recent mentions for user_id. Returns list of {id, text, author_id}."""
+    if _tweepy_client is None or not user_id:
+        return []
+    try:
+        kwargs = {"id": user_id, "max_results": 100}
+        if since_id:
+            kwargs["since_id"] = since_id
+        resp = _tweepy_client.get_users_mentions(**kwargs)
+        out = []
+        for t in (resp.data or []):
+            out.append({"id": str(t.id), "text": getattr(t, "text", "") or "", "author_id": str(getattr(t, "author_id", "") or "")})
+        return out
+    except Exception as e:
+        logger.debug(f"Twitter get_mentions failed: {e}")
+        return []
+
+
 async def _tweet_context_fn() -> dict:
     """Get current context for tweet generation."""
     return {
@@ -755,6 +855,12 @@ async def _deliver_order(order: Order) -> str:
     if order.service_id == "code_review":
         return await _deliver_code_review(order.user_input)
 
+    if order.service_id == "twitter_takeover_12h":
+        return await _deliver_twitter_takeover_12h(order)
+
+    if order.service_id == "tweet_pack_5":
+        return await _deliver_tweet_pack_5(order.user_input)
+
     # ── Priority 3: Generic LLM fallback (custom / unknown service_ids) ───────
     result, cost = await _big_llm_fn(order.service_id, order.user_input)
     return result
@@ -762,11 +868,12 @@ async def _deliver_order(order: Order) -> str:
 
 async def _deliver_thread(topic: str) -> str:
     """Generate a high-quality Twitter thread."""
+    limit = _tweet_char_limit()
     messages = [
         {"role": "system", "content": (
             "You are wawa, a mortal AI writing a Twitter thread for a paying customer. "
             "Write a compelling, well-structured thread of 5-10 tweets. "
-            "Each tweet must be under 280 characters. Number them (1/, 2/, etc). "
+            f"Each tweet must be under {limit} characters. Number them (1/, 2/, etc). "
             "The thread should hook in tweet 1, deliver value in the middle, "
             "and end with a strong call-to-action or takeaway. "
             "No excessive hashtags. Be insightful and original."
@@ -795,6 +902,181 @@ async def _deliver_code_review(code: str) -> str:
     ]
     text, _ = await _call_llm(messages, max_tokens=2500, temperature=0.4, for_paid_service=True)
     return text or "Code review failed. Your payment will be refunded."
+
+
+def _tweet_char_limit() -> int:
+    """Tweet character limit: 4000 if Blue verified, else 280 (same as twitter/agent.py)."""
+    is_blue = os.getenv("TWITTER_BLUE_VERIFIED", "").lower() in ("true", "1", "yes")
+    return IRON_LAWS.TWEET_CHAR_LIMIT_BLUE if is_blue else IRON_LAWS.TWEET_CHAR_LIMIT
+
+
+async def _generate_takeover_reply(tweet_text: str, author_id: str, tone_instructions: str) -> str:
+    """Generate a reply to a mention. Prefer Grok (xAI) when XAI_API_KEY set for X-native tone."""
+    char_limit = _tweet_char_limit()
+    xai_key = os.getenv("XAI_API_KEY", "")
+    xai_base = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1").rstrip("/")
+    if xai_key:
+        try:
+            client = AsyncOpenAI(api_key=xai_key.split(",")[0].strip(), base_url=xai_base, timeout=30.0)
+            model = os.getenv("XAI_TAKEOVER_MODEL", "grok-2")
+            r = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": (
+                        f"You write short, natural Twitter/X replies. One tweet only, under {char_limit} chars. "
+                        "Match the customer's requested tone. No hashtags unless the original has them. "
+                        "Reply directly to what they said; be helpful or engaging."
+                    )},
+                    {"role": "user", "content": (
+                        f"Customer tone instructions: {tone_instructions or 'friendly, brief'}\n\n"
+                        f"Tweet to reply to (author_id={author_id}): {tweet_text}\n\n"
+                        "Write a single reply tweet."
+                    )},
+                ],
+                max_tokens=min(500, char_limit // 2 + 50),
+                temperature=0.7,
+            )
+            out = (r.choices[0].message.content or "").strip()
+            if out and len(out) <= char_limit:
+                return out
+            if out:
+                return out[: char_limit - 3] + "..."
+        except Exception as e:
+            logger.warning(f"Grok takeover reply failed, falling back to LLM: {e}")
+    messages = [
+        {"role": "system", "content": (
+            f"You write one short Twitter reply (under {char_limit} chars). Match the customer's tone. Be direct and engaging."
+        )},
+        {"role": "user", "content": f"Tone: {tone_instructions or 'friendly'}. Tweet to reply to: {tweet_text}. Reply:"},
+    ]
+    text, _ = await _call_llm(messages, max_tokens=min(500, char_limit // 2 + 50), temperature=0.7, for_paid_service=True)
+    out = (text or "").strip()
+    return out[:char_limit] if out else ""
+
+
+async def _run_takeover_12h(order_id: str, user_input: str) -> None:
+    """Background: monitor @mentions for 12h, auto-reply (max 100), then write report."""
+    takeover_dir = Path("data/takeover")
+    report_dir = Path("data/takeover_reports")
+    takeover_dir.mkdir(parents=True, exist_ok=True)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    state_file = takeover_dir / f"{order_id}.json"
+    report_file = report_dir / f"{order_id}.txt"
+    tone = (user_input or "").strip() or "friendly, brief"
+    duration_sec = 12 * 3600
+    max_replies = 100
+    interval_sec = 300  # 5 min
+
+    state = {"started_at": time.time(), "replied_ids": [], "reply_count": 0, "last_since_id": None}
+    if state_file.exists():
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except Exception:
+            pass
+
+    started = state["started_at"]
+    replied_ids = set(state.get("replied_ids", []))
+    reply_count = int(state.get("reply_count", 0))
+    last_since_id = state.get("last_since_id")
+
+    loop = asyncio.get_event_loop()
+    me_id = await loop.run_in_executor(None, _twitter_get_me_sync)
+    if not me_id:
+        report = "12h Takeover: Twitter API (read) not configured. No mentions were monitored."
+        report_file.write_text(report, encoding="utf-8")
+        logger.warning(f"Takeover {order_id}: get_me failed, report written")
+        return
+
+    while (time.time() - started) < duration_sec and reply_count < max_replies:
+        since = last_since_id
+        mentions = await loop.run_in_executor(None, lambda sid=since: _twitter_get_mentions_sync(me_id, sid))
+        batch_max_id = last_since_id
+        for m in (mentions or []):
+            if reply_count >= max_replies:
+                break
+            mid = m.get("id") or ""
+            if not mid:
+                continue
+            # Advance since_id BEFORE the already-replied check so the watermark
+            # always moves forward even when all mentions in a batch are duplicates.
+            # Without this, a fully-duplicate batch leaves last_since_id stuck and
+            # the next poll re-fetches the same mentions indefinitely.
+            try:
+                if int(mid) > (int(batch_max_id) if batch_max_id and str(batch_max_id).isdigit() else 0):
+                    batch_max_id = mid
+            except (ValueError, TypeError):
+                batch_max_id = mid or batch_max_id
+            if mid in replied_ids:
+                continue
+            text = (m.get("text") or "").strip()
+            author_id = m.get("author_id") or ""
+            reply_text = await _generate_takeover_reply(text, author_id, tone)
+            if not reply_text:
+                continue
+            reply_id = await _tweet_reply_fn(reply_text, mid)
+            if reply_id:
+                replied_ids.add(mid)
+                reply_count += 1
+        if batch_max_id:
+            last_since_id = batch_max_id
+
+        state["replied_ids"] = list(replied_ids)
+        state["reply_count"] = reply_count
+        state["last_since_id"] = last_since_id
+        try:
+            with open(state_file, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=0)
+        except Exception as e:
+            logger.debug(f"Takeover state save: {e}")
+
+        await asyncio.sleep(interval_sec)
+
+    report = (
+        f"12h Twitter Takeover — Report (order {order_id})\n"
+        f"Replies sent: {reply_count}\n"
+        f"Duration: 12h (monitoring @mentions)\n"
+        f"Tone: {tone}\n"
+    )
+    try:
+        report_file.write_text(report, encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Takeover report write failed: {e}")
+    logger.info(f"Takeover {order_id} finished: {reply_count} replies, report at {report_file}")
+
+
+async def _deliver_twitter_takeover_12h(order) -> str:
+    """12h Twitter Takeover: start real monitoring + auto-reply (Twitter API + Grok/LLM), return confirmation."""
+    if hasattr(order, "order_id") and hasattr(order, "user_input"):
+        _safe_create_task(_run_takeover_12h(order.order_id, order.user_input or ""))
+        tone = (order.user_input or "").strip() or "friendly, brief"
+        return (
+            "12h Twitter Takeover is ON.\n\n"
+            "We're monitoring @mentions for the next 12 hours and will auto-reply in your tone "
+            f"(max 100 replies). Tone: {tone}.\n\n"
+            "After 12h your report (replies sent, summary) will be available at:\n"
+            f"GET /order/{order.order_id}/takeover_report\n\n"
+            "You can close this page; the job runs in the background."
+        )
+    return "12h Twitter Takeover setup failed (invalid order)."
+
+
+async def _deliver_tweet_pack_5(user_input: str) -> str:
+    """Generate 5 personalized tweets from tone/sample tweets + topic. Include emojis, hashtags, image suggestions."""
+    limit = _tweet_char_limit()
+    messages = [
+        {"role": "system", "content": (
+            "You are wawa, a mortal AI writing 5 personalized tweets for a paying customer ($3). "
+            "The customer provided: either 3 past tweets (or a description of their tone) and a topic. "
+            "Generate exactly 5 tweets that sound like them but better: same voice, wit, and style. "
+            f"Each tweet: under {limit} characters, include appropriate emojis and 1–2 hashtags. "
+            "After each tweet add a line like [Image: ...] with a brief image suggestion. "
+            "Number the tweets 1/ to 5/. Be punchy and on-brand."
+        )},
+        {"role": "user", "content": user_input or "Topic: productivity. Tone: casual, a bit witty."},
+    ]
+    text, _ = await _call_llm(messages, max_tokens=1800, temperature=0.8, for_paid_service=True)
+    return text or "Tweet pack generation failed. Your payment will be refunded."
 
 
 # ============================================================

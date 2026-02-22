@@ -969,14 +969,30 @@ def create_app(
 
     @app.get("/order/{order_id}/takeover_report")
     async def get_takeover_report(order_id: str):
-        """Return 12h Twitter Takeover report for an order (plain text). Available after 12h."""
+        """Return 12h Twitter Takeover report for an order (plain text). Available after 12h.
+
+        Privacy policy: report only exposes aggregate statistics (reply count, duration).
+        User input (tone / persona) is NOT returned — it is paid service input and
+        belongs to the purchaser. Anyone who knows an order_id can call this endpoint,
+        so we must not leak private content via the report file.
+        """
+        # Verify the order exists (order_id is not a secret, but at least it must be real)
+        if order_id not in orders:
+            raise HTTPException(404, "Order not found")
         report_path = Path(__file__).resolve().parent.parent / "data" / "takeover_reports" / f"{order_id}.txt"
         if not report_path.exists():
-            raise HTTPException(404, "Report not found (takeover may still be running or order invalid)")
+            raise HTTPException(404, "Report not ready (takeover may still be running or did not start)")
         try:
-            text = report_path.read_text(encoding="utf-8")
+            raw = report_path.read_text(encoding="utf-8")
         except Exception as e:
             raise HTTPException(500, f"Could not read report: {e}")
+        # Strip any lines containing "Tone:" — user input is private paid content.
+        # The report is a public-facing summary; aggregate stats only.
+        filtered_lines = [
+            line for line in raw.splitlines()
+            if not line.strip().lower().startswith("tone:")
+        ]
+        text = "\n".join(filtered_lines)
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse(content=text, media_type="text/plain; charset=utf-8")
 

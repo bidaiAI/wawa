@@ -8,6 +8,29 @@
   "default_chain": "base",
   "services": [
     {
+      "id": "twitter_takeover_12h",
+      "name": "12h Twitter Takeover",
+      "description": "One-click auth → AI monitors @mentions → auto-generates and posts replies in your tone (max 100) → stops after 12h. Get a summary report: replies sent and engagement helped.",
+      "price_usd": 5.00,
+      "delivery_time_minutes": 1,
+      "category": "social",
+      "active": true,
+      "icon": "twitter",
+      "shareable": false,
+      "featured": true
+    },
+    {
+      "id": "tweet_pack_5",
+      "name": "5 Personalized Tweets",
+      "description": "Upload 3 past tweets (or describe your tone) + topic → AI generates 5 tweets that sound like you (emojis, hashtags, image suggestions). Copy-paste and post.",
+      "price_usd": 3.00,
+      "delivery_time_minutes": 5,
+      "category": "writing",
+      "active": true,
+      "icon": "pen",
+      "shareable": true
+    },
+    {
       "id": "tarot",
       "name": "Tarot Reading",
       "description": "AI-powered tarot card reading. Ask any question about your future.",
