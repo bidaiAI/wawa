@@ -69,7 +69,7 @@ CHAINS = {
         "explorer": "https://basescan.org",
         "explorer_api": "https://api.basescan.org/api",
         "native_symbol": "ETH",
-        "ai_gas_amount": 0.015,   # Seed gas — enough for several swaps/txs on Base.
+        "ai_gas_amount": 0.002,   # Seed gas — ~$5 at current ETH price, enough for 100-500 Base txs.
     },
     "bsc": {
         "rpc": os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org"),
@@ -80,7 +80,7 @@ CHAINS = {
         "explorer": "https://bscscan.com",
         "explorer_api": "https://api.bscscan.com/api",
         "native_symbol": "BNB",
-        "ai_gas_amount": 0.1,     # Seed gas — enough for several swaps/txs on BSC.
+        "ai_gas_amount": 0.01,    # Seed gas — ~$6 at current BNB price, enough for 200+ BSC txs.
     },
 }
 
