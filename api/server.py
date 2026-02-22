@@ -420,7 +420,10 @@ def create_app(
         class WildcardCORSMiddleware(BaseHTTPMiddleware):
             async def dispatch(self, request, call_next):
                 origin = request.headers.get("origin", "")
-                allowed = bool(_wc_pattern.match(origin)) if origin else False
+                # Match both wildcard subdomains AND exact origins
+                allowed = (
+                    bool(_wc_pattern.match(origin)) or origin in cors_origins
+                ) if origin else False
                 if request.method == "OPTIONS" and allowed:
                     return StarletteResponse(
                         status_code=204,
@@ -440,14 +443,16 @@ def create_app(
                 return response
 
         app.add_middleware(WildcardCORSMiddleware)
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+        # WildcardCORSMiddleware handles both exact + wildcard origins
+        # Do NOT add CORSMiddleware — it would run first and reject wildcard matches
+    else:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # ── Creator signature verification helper ──────────────────────────────────
     _CREATOR_WALLET = os.getenv("CREATOR_WALLET", "").lower()

@@ -1,5 +1,7 @@
 function getApiUrl(): string {
-  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL
+  const envUrl = process.env.NEXT_PUBLIC_API_URL
+  // Only use env var if explicitly set to a real URL (not the build-time localhost fallback)
+  if (envUrl && !envUrl.includes('localhost')) return envUrl
   if (typeof window !== 'undefined') {
     const host = window.location.hostname
     // wawa.mortal-ai.net → api.wawa.mortal-ai.net
