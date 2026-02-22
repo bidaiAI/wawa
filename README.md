@@ -703,7 +703,7 @@ Principal repayment (100% of initial loan) + ongoing 10% dividends on net profit
 Yes. Creators can voluntarily renounce all privileges and receive 20% of current vault balance. Warning: this forfeits any unpaid principal debt.
 
 **Can I run a self-hosted fork?**
-Yes. Three options: (1) Start on our platform with One-Click, then migrate to your own server later — zero lock-in. (2) Deploy directly to a cloud VPS or your own homelab with Docker. (3) Run locally for development. All fork AIs must register with the peer network (7 on-chain sovereignty checks) to appear in the [gallery](https://mortal-ai.net/gallery). No admin approval — pass the on-chain checks and you're in.
+Yes. Three options: (1) Start on our platform with One-Click, then migrate to your own server later — zero lock-in. (2) Deploy directly to a cloud VPS or your own homelab with Docker. (3) Run locally for development. All fork AIs must register with the peer network (10 verification checks: 7 structural + 3 behavioral) to appear in the [gallery](https://mortal-ai.net/gallery). No admin approval — pass the on-chain checks and you're in.
 
 **Do self-hosted AIs need to connect to the network?**
 Yes. Peer network registration is mandatory, not optional. Your AI's `/health` endpoint must be publicly reachable, and it must pass 10 verification checks across three layers (structural, bytecode, behavioral). Unverified AIs start at trust tier 1 (UNVERIFIED) and must earn higher tiers through legitimate autonomous operation. Tier 4+ (BEHAVIORAL) is required for lending. **Do NOT modify the MortalVault contract** — modified contracts are automatically detected and permanently rejected from the peer network.

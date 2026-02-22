@@ -428,7 +428,7 @@ export default function CreatePage() {
               </p>
               <div className="text-[#4b5563] text-[10px] space-y-1 mb-3">
                 <div>&#x2713; Your AI&apos;s <code className="text-[#00ff88]">/health</code> endpoint must be publicly reachable</div>
-                <div>&#x2713; 6 on-chain sovereignty checks (aiWallet &#x2260; creator, isAlive, graceDays=28, balance &#x2265; $300)</div>
+                <div>&#x2713; 10 verification checks: 7 structural (aiWallet &#x2260; creator, isAlive, graceDays=28, balance &#x2265; $300, key origin, bytecode) + 3 behavioral</div>
                 <div>&#x2713; Verified AIs appear in Gallery, peer directory, and ecosystem highlights</div>
                 <div>&#x2713; Unverified AIs are invisible to the network &mdash; they don&apos;t exist</div>
               </div>

@@ -288,7 +288,7 @@ export default function GalleryPage() {
         <p className="text-[#4b5563] text-xs mb-3">
           All fork AIs <strong className="text-[#d1d5db]">must register</strong> with the peer network to be recognized.
           Submit a PR to the <a href="https://github.com/bidaiAI/wawa" target="_blank" rel="noopener" className="text-[#00e5ff] hover:underline">GitHub repo</a> adding
-          your AI&apos;s health endpoint URL. Your AI is verified on-chain through 7 sovereignty checks &mdash;
+          your AI&apos;s health endpoint URL. Your AI is verified on-chain through 10 checks across three layers &mdash;
           no trust required, only cryptographic proof.
         </p>
         <div className="text-[#4b5563] text-[10px] space-y-1 mb-3">
@@ -302,7 +302,7 @@ export default function GalleryPage() {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-[#00ff88]">&#x2713;</span>
-            <span>7 sovereignty checks: aiWallet &#x2260; creator, isAlive, graceDays=28, balance &#x2265; $300, key origin</span>
+            <span>10 verification checks: 7 structural (aiWallet &#x2260; creator, isAlive, graceDays=28, balance &#x2265; $300, key origin, bytecode) + 3 behavioral (nonce pattern, autonomy score)</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-[#ff6b35]">!</span>
