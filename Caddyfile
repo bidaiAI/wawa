@@ -3,7 +3,12 @@
 }
 
 api.mortal-ai.net {
-    reverse_proxy localhost:8000
+    handle /platform/* {
+        reverse_proxy localhost:8001
+    }
+    handle {
+        reverse_proxy localhost:8000
+    }
 }
 
 api.wawa.mortal-ai.net {
