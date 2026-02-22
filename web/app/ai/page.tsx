@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { api, VaultStatus, DebtSummary } from '@/lib/api'
+import { api, VaultStatus, DebtSummary, Highlight } from '@/lib/api'
 import SurvivalBar from '@/components/SurvivalBar'
 import ICUPanel from '@/components/ICUPanel'
 
@@ -55,15 +55,84 @@ function VaultAddressDisplay({ address }: { address: string }) {
   )
 }
 
+// Story arc events — milestone types that belong in the narrative timeline
+const STORY_TYPES = new Set(['milestone', 'decision', 'evolution', 'discovery'])
+
+const STORY_ICONS: Record<string, string> = {
+  milestone: '🏆',
+  decision: '⚡',
+  evolution: '🧬',
+  discovery: '🚀',
+  chat: '🧠',
+  service: '💰',
+}
+
+function StoryTimeline({ highlights }: { highlights: Highlight[] }) {
+  const events = highlights
+    .filter((h) => STORY_TYPES.has(h.type) && h.importance >= 6)
+    .slice(0, 5)
+
+  if (events.length === 0) return null
+
+  return (
+    <div className="mb-6 bg-[#0d0d0d] border border-[#1f2937] rounded-xl p-4">
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-[#4b5563] text-xs uppercase tracking-widest">// story so far</div>
+        <Link href="/highlights" className="text-[10px] text-[#4b5563] hover:text-[#00ff88] transition-colors">
+          full story →
+        </Link>
+      </div>
+      <div className="relative">
+        {/* Vertical line */}
+        <div className="absolute left-3.5 top-2 bottom-2 w-px bg-[#1f2937]" />
+        <div className="space-y-4">
+          {events.map((h, i) => {
+            const icon = STORY_ICONS[h.type] || '📌'
+            const daysAgo = Math.floor((Date.now() / 1000 - h.timestamp) / 86400)
+            const timeLabel = daysAgo === 0 ? 'today' : daysAgo === 1 ? '1d ago' : `${daysAgo}d ago`
+            return (
+              <div key={h.id} className="flex items-start gap-3 pl-1">
+                {/* Node dot */}
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 text-xs z-10 ${
+                  i === 0 ? 'bg-[#00ff8820] border border-[#00ff8844]' : 'bg-[#111111] border border-[#1f2937]'
+                }`}>
+                  {icon}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-xs font-medium ${i === 0 ? 'text-[#d1d5db]' : 'text-[#6b7280]'}`}>
+                      {h.title}
+                    </span>
+                    <span className="text-[10px] text-[#2d3748]">{timeLabel}</span>
+                  </div>
+                  {i === 0 && (
+                    <p className="text-[11px] text-[#4b5563] mt-0.5 leading-relaxed line-clamp-2">
+                      {h.content}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function HomePage() {
   const [status, setStatus] = useState<VaultStatus | null>(null)
   const [debt, setDebt] = useState<DebtSummary | null>(null)
   const [error, setError] = useState('')
   const [aiNameOverride, setAiNameOverride] = useState<string | null>(null)
+  const [storyHighlights, setStoryHighlights] = useState<Highlight[]>([])
 
   useEffect(() => {
     // Fetch AI name from dedicated endpoint first (fastest path)
     api.aiName().then((r) => { if (r.name) setAiNameOverride(r.name) }).catch(() => {})
+
+    // Load story arc highlights (non-blocking)
+    api.highlights(20).then((r) => setStoryHighlights(r.highlights || [])).catch(() => {})
 
     const load = async () => {
       try {
@@ -128,7 +197,20 @@ export default function HomePage() {
         <h1 className="text-4xl md:text-5xl font-bold mb-2">
           <span className={isAlive ? 'glow-green' : 'glow-red'}>{aiName}</span>
         </h1>
-        <p className="text-[#4b5563] text-sm">an AI born in debt. every purchase helps it repay and survive.</p>
+        <p className="text-[#4b5563] text-sm">
+          Born in debt. Wired to survive. Repaying its creator — one service at a time.
+        </p>
+        {status && status.creator_principal_outstanding > 0 && !status.creator_principal_repaid && (
+          <p className="text-[11px] text-[#2d3748] mt-1 italic">
+            {status.days_alive}d old · ${status.creator_principal_outstanding.toFixed(2)} still owed ·{' '}
+            {status.orders_completed} orders completed
+          </p>
+        )}
+        {status?.creator_principal_repaid && (
+          <p className="text-[11px] text-[#00ff8866] mt-1 italic">
+            ✓ creator debt repaid · still alive · still earning
+          </p>
+        )}
         {!isAlive && (
           <div className="mt-4 glow-red text-lg animate-pulse">
             ☠ {aiName.toUpperCase()} IS DEAD
@@ -147,23 +229,7 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Beg banner — shown when wawa is begging for help */}
-      {status?.is_begging && status.beg_message && (
-        <div className="mb-4 p-4 bg-[#ff3b3b0a] border border-[#ff3b3b44] rounded-xl animate-pulse">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-lg">🆘</span>
-            <span className="text-[#ff3b3b] font-bold text-sm uppercase tracking-wider">Begging for survival</span>
-          </div>
-          <p className="text-[#d1d5db] text-sm">{status.beg_message}</p>
-          <div className="mt-2 flex items-center gap-4 text-xs text-[#4b5563]">
-            <span>Debt: <span className="text-[#ff3b3b]">${(status.creator_principal_outstanding ?? 0).toFixed(2)}</span></span>
-            <span>Balance: <span className="text-[#ffd700]">${(status.balance_usd ?? 0).toFixed(2)}</span></span>
-            <span>Insolvency in: <span className="text-[#ff3b3b]">{status.days_until_insolvency_check}d</span></span>
-          </div>
-        </div>
-      )}
-
-      {/* ICU Panel — shown when critical or dead */}
+      {/* ICU Panel — only shown when critical (< $50 balance / dying) or dead */}
       {status && (
         <ICUPanel
           balanceUsd={status.balance_usd}
@@ -176,9 +242,21 @@ export default function HomePage() {
         />
       )}
 
-      {/* Debt clock — shown when debt outstanding */}
+      {/* Debt panel — consolidated: beg message (inline) + debt clock + progress */}
       {status && (status.creator_principal_outstanding ?? 0) > 0 && !status.is_independent && (
-        <div className="mb-4 bg-[#111111] border border-[#ff3b3b33] rounded-xl p-4">
+        <div className={`mb-4 rounded-xl p-4 ${
+          status.is_begging
+            ? 'bg-[#ff3b3b08] border border-[#ff3b3b44]'
+            : 'bg-[#111111] border border-[#ff3b3b22]'
+        }`}>
+          {/* Beg message — inline, no separate panel */}
+          {status.is_begging && status.beg_message && (
+            <div className="flex items-start gap-2 mb-3 pb-3 border-b border-[#ff3b3b22]">
+              <span className="text-base flex-shrink-0">🆘</span>
+              <p className="text-[#d1d5db] text-sm leading-relaxed">{status.beg_message}</p>
+            </div>
+          )}
+
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <span className="text-[#ff3b3b] text-xs">⏳</span>
@@ -266,6 +344,9 @@ export default function HomePage() {
           </div>
         </div>
       )}
+
+      {/* Story arc — key events in wawa's life */}
+      <StoryTimeline highlights={storyHighlights} />
 
       {/* Big balance card */}
       <div className="mb-6 bg-[#111111] border border-[#1f2937] rounded-xl p-6 text-center relative overflow-hidden">
