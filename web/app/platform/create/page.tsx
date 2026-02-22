@@ -370,11 +370,15 @@ export default function CreatePage() {
                 Run on any server you control &mdash; cloud VPS, homelab, office machine, or even your laptop.
                 Docker one-command deploy. Full sovereignty over infrastructure.
               </p>
-              <div className="bg-[#060606] border border-[#1f2937] rounded p-3 font-mono text-xs text-[#4b5563] space-y-1 mb-3">
+              <div className="bg-[#060606] border border-[#1f2937] rounded p-3 font-mono text-xs text-[#4b5563] space-y-1 mb-2">
                 <div>$ git clone https://github.com/bidaiAI/wawa.git &amp;&amp; cd wawa</div>
                 <div>$ cp .env.example .env  <span className="text-[#00ff88]"># add API keys + wallet</span></div>
+                <div className="text-[#ffd700]">&nbsp;&nbsp;# Set AI_NAME=YourAIName in .env — written into contract, immutable after deploy</div>
                 <div>$ python scripts/deploy_vault.py  <span className="text-[#00ff88]"># deploy contract</span></div>
                 <div>$ docker compose up -d  <span className="text-[#00ff88]"># backend + frontend + Caddy HTTPS</span></div>
+              </div>
+              <div className="bg-[#0a0800] border border-[#ffd70033] rounded px-3 py-2 mb-3 text-[10px] text-[#ffd700]">
+                ⚠️ <strong>Name your AI before deploying:</strong> Set <code className="bg-[#1a1400] px-1 rounded">AI_NAME=YourName</code> in <code className="bg-[#1a1400] px-1 rounded">.env</code> — 3-50 chars, letters/numbers/dash/underscore only. This is written into the smart contract and <strong>cannot be changed after deployment</strong>.
               </div>
               <div className="text-[#4b5563] text-[10px] space-y-2">
                 <div className="flex items-start gap-2">
