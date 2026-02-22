@@ -1,8 +1,30 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <rect width="128" height="128" rx="24" fill="#0a0a0a"/>
-  <circle cx="64" cy="52" r="28" fill="none" stroke="#00ff88" stroke-width="2" opacity="0.3"/>
-  <circle cx="64" cy="52" r="18" fill="none" stroke="#00ff88" stroke-width="2.5"/>
-  <circle cx="64" cy="52" r="5" fill="#00ff88"/>
-  <polyline points="20,78 40,78 48,68 56,88 64,72 72,82 80,76 100,76" fill="none" stroke="#00ff88" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="64" y="112" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="22" fill="#00ff88" opacity="0.6">M</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#17232b"/>
+      <stop offset="100%" stop-color="#070b10"/>
+    </radialGradient>
+    <filter id="neon" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feFlood flood-color="#63ffbd" flood-opacity="0.9"/>
+      <feComposite in2="blur" operator="in" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <circle cx="64" cy="64" r="62" fill="url(#bg)"/>
+  <circle cx="64" cy="64" r="60" stroke="#59ffb9" stroke-width="4" filter="url(#neon)"/>
+  <circle cx="64" cy="64" r="54" stroke="#3bbf8f" stroke-opacity="0.55" stroke-width="2"/>
+
+  <g stroke="#63ffbd" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#neon)">
+    <path d="M30 88V42l22 30 22-30v46" stroke-width="7"/>
+    <polyline points="74,66 82,66 88,48 94,66 100,90 107,58 114,66 122,66" stroke-width="7"/>
+  </g>
+  <g stroke="#e9fff7" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.92">
+    <path d="M30 88V42l22 30 22-30v46" stroke-width="2.6"/>
+    <polyline points="74,66 82,66 88,48 94,66 100,90 107,58 114,66 122,66" stroke-width="2.6"/>
+  </g>
 </svg>

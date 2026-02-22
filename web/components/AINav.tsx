@@ -126,7 +126,7 @@ export default function AINav() {
         <div className="flex items-center gap-2">
           <Link href="/" className="flex items-center gap-2 group">
             <Image
-              src="/favicon.png"
+              src="/logo.svg"
               alt={aiName}
               width={28}
               height={28}
