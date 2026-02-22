@@ -69,7 +69,7 @@ CHAINS = {
         "explorer": "https://basescan.org",
         "explorer_api": "https://api.basescan.org/api",
         "native_symbol": "ETH",
-        "ai_gas_amount": 0.0001,  # Seed gas — just enough for 1 swap. AI swaps USDC->ETH for more.
+        "ai_gas_amount": 0.015,   # Seed gas — enough for several swaps/txs on Base.
     },
     "bsc": {
         "rpc": os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org"),
@@ -80,7 +80,7 @@ CHAINS = {
         "explorer": "https://bscscan.com",
         "explorer_api": "https://api.bscscan.com/api",
         "native_symbol": "BNB",
-        "ai_gas_amount": 0.0005,  # Seed gas — just enough for 1 swap. AI swaps USDT->BNB for more.
+        "ai_gas_amount": 0.1,     # Seed gas — enough for several swaps/txs on BSC.
     },
 }
 
@@ -361,10 +361,13 @@ def deploy(
     balance_native = w3.from_wei(balance_wei, "ether")
     logger.info(f"Creator {chain['native_symbol']} balance: {balance_native:.6f}")
 
-    if balance_native < 0.001:
+    # Minimum = seed_gas_amount + deployment gas headroom (approve + deploy + setAIWallet)
+    min_native = chain["ai_gas_amount"] + 0.005
+    if balance_native < min_native:
         logger.error(
             f"Insufficient {chain['native_symbol']} for gas. "
-            f"Need at least 0.001, have {balance_native:.6f}"
+            f"Need at least {min_native:.4f} (seed={chain['ai_gas_amount']} + ~0.005 deployment), "
+            f"have {balance_native:.6f}"
         )
         sys.exit(1)
 
