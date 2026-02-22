@@ -21,6 +21,12 @@ jobs:
             set -e
             cd /opt/mortal/platform
             sudo git pull origin main
+            # Patch CORS_ORIGINS to allow all mortal-ai.net subdomains (wildcard pattern)
+            if sudo grep -q "^CORS_ORIGINS=" .env 2>/dev/null; then
+              sudo sed -i 's|^CORS_ORIGINS=.*|CORS_ORIGINS=https://mortal-ai.net,*.mortal-ai.net|' .env
+            elif sudo test -f .env; then
+              echo "CORS_ORIGINS=https://mortal-ai.net,*.mortal-ai.net" | sudo tee -a .env > /dev/null
+            fi
             sudo docker build -t mortal-ai:latest .
             sudo docker restart platform-wawa-1
             echo "Deploy complete: $(sudo git log --oneline -1)"

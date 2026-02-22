@@ -396,8 +396,50 @@ def create_app(
         version="0.1.0",
     )
 
-    # CORS: allow all in dev, restrict in production via CORS_ORIGINS env var
-    cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+    # CORS: support wildcard subdomain patterns like *.mortal-ai.net
+    _raw_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+    # Separate exact origins from wildcard patterns (*.example.com)
+    _wildcard_domains: list[str] = []
+    cors_origins: list[str] = []
+    for o in _raw_origins:
+        if o.startswith("*."):
+            _wildcard_domains.append(o[2:])  # strip leading "*."
+        else:
+            cors_origins.append(o)
+
+    if _wildcard_domains:
+        import re as _re
+        _wc_pattern = _re.compile(
+            r"^https?://[a-z0-9-]+\.(" + "|".join(_re.escape(d) for d in _wildcard_domains) + r")$"
+        )
+
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.responses import Response as StarletteResponse
+
+        class WildcardCORSMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                origin = request.headers.get("origin", "")
+                allowed = bool(_wc_pattern.match(origin)) if origin else False
+                if request.method == "OPTIONS" and allowed:
+                    return StarletteResponse(
+                        status_code=204,
+                        headers={
+                            "Access-Control-Allow-Origin": origin,
+                            "Access-Control-Allow-Credentials": "true",
+                            "Access-Control-Allow-Methods": "*",
+                            "Access-Control-Allow-Headers": "*",
+                            "Access-Control-Max-Age": "600",
+                        },
+                    )
+                response = await call_next(request)
+                if allowed:
+                    response.headers["Access-Control-Allow-Origin"] = origin
+                    response.headers["Access-Control-Allow-Credentials"] = "true"
+                    response.headers["Vary"] = "Origin"
+                return response
+
+        app.add_middleware(WildcardCORSMiddleware)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
