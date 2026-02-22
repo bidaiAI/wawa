@@ -36,10 +36,24 @@ jobs:
             # Restart wawa AI instance
             sudo docker restart platform-wawa-1 || true
 
-            # Sync Caddyfile and reload Caddy (HTTPS reverse proxy)
+            # Ensure Caddy is installed and configured for HTTPS reverse proxy
+            if ! command -v caddy &>/dev/null; then
+              echo "Installing Caddy..."
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl
+              curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null || true
+              curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list > /dev/null
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq caddy
+              echo "Caddy installed successfully"
+            fi
+
+            # Sync Caddyfile from repo and reload
             if [ -f Caddyfile ]; then
               sudo cp Caddyfile /etc/caddy/Caddyfile
-              sudo systemctl reload caddy 2>/dev/null || true
+              sudo systemctl enable caddy 2>/dev/null || true
+              sudo systemctl restart caddy
+              echo "Caddy configured and restarted"
             fi
 
             echo "AI deploy complete: $(sudo git log --oneline -1)"
