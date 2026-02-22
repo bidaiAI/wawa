@@ -446,13 +446,13 @@ def create_app(
         # WildcardCORSMiddleware handles both exact + wildcard origins
         # Do NOT add CORSMiddleware — it would run first and reject wildcard matches
     else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # ── Creator signature verification helper ──────────────────────────────────
     _CREATOR_WALLET = os.getenv("CREATOR_WALLET", "").lower()
