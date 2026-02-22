@@ -54,6 +54,7 @@ function timeAgo(ts: number): string {
 export default function PlatformHome() {
   const [agents, setAgents] = useState<LiveAgent[]>([])
   const [activities, setActivities] = useState<ActivityEntry[]>([])
+  const [activitySourceName, setActivitySourceName] = useState<string>('wawa')
   const [loading, setLoading] = useState(true)
   const [narratorIdx, setNarratorIdx] = useState(0)
 
@@ -68,8 +69,10 @@ export default function PlatformHome() {
     try {
       const data = await fetchAIHealth(API_URL)
       if (data) {
+        const agentName = data.name || 'wawa'
+        setActivitySourceName(agentName)
         results.push({
-          name: data.name || 'wawa', url: 'https://wawa.mortal-ai.net', chain: data.chain || 'base',
+          name: agentName, url: 'https://wawa.mortal-ai.net', chain: data.chain || 'base',
           status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive',
           balance_usd: data.balance_usd, days_alive: data.days_alive, key_origin: data.key_origin || '',
         })
@@ -236,7 +239,7 @@ export default function PlatformHome() {
                     <div key={`${a.timestamp}-${i}`} className="px-3 py-1.5 flex items-start gap-2 text-[11px] font-mono hover:bg-[#111827] transition-colors">
                       <span className="text-[#4b5563] shrink-0 w-12 text-right">{timeAgo(a.timestamp)}</span>
                       <span className="shrink-0">{CATEGORY_ICONS[a.category] || '\u2022'}</span>
-                      <span className="text-[#00ff8880] truncate">{a.action}</span>
+                      <span className="text-[#00ff8880] truncate"><span className="text-[#00ff88] font-bold mr-1">{activitySourceName}:</span>{a.action}</span>
                     </div>
                   ))}
                 </div>
