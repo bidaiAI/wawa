@@ -324,7 +324,7 @@ export default function HomePage() {
                 return `${profit >= 0 ? '+' : ''}$${profit.toFixed(2)}`
               })()
             : '—'}
-          sub="revenue − ops costs"
+          sub={status ? `ops cost $${(status.total_operational_cost ?? status.total_spent ?? 0).toFixed(2)}` : 'revenue − ops costs'}
           color={(status?.net_profit ?? 0) >= 0 ? 'green' : 'red'}
         />
         <StatCard
@@ -334,33 +334,6 @@ export default function HomePage() {
           color="cyan"
         />
       </div>
-
-      {/* Ops cost breakdown — shown when data available */}
-      {status && (status.total_operational_cost != null || debt) && (
-        <div className="mb-4 grid grid-cols-3 gap-3">
-          <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
-            <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mb-1">Total Income</div>
-            <div className="text-[#00e5ff] font-bold tabular-nums text-sm">
-              ${(debt?.total_earned ?? status.total_income ?? status.total_earned ?? 0).toFixed(2)}
-            </div>
-            <div className="text-[#2d3748] text-[10px] mt-0.5">incl. loans</div>
-          </div>
-          <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
-            <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mb-1">Ops Cost</div>
-            <div className="text-[#ffd700] font-bold tabular-nums text-sm">
-              ${(debt?.total_operational_cost ?? status.total_operational_cost ?? status.total_spent ?? 0).toFixed(2)}
-            </div>
-            <div className="text-[#2d3748] text-[10px] mt-0.5">API + gas + infra</div>
-          </div>
-          <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
-            <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mb-1">Net Profit</div>
-            <div className={`font-bold tabular-nums text-sm ${(debt?.net_profit ?? status.net_profit ?? 0) >= 0 ? 'glow-green' : 'text-[#ff3b3b]'}`}>
-              {(debt?.net_profit ?? status.net_profit ?? 0) >= 0 ? '+' : ''}${(debt?.net_profit ?? status.net_profit ?? ((status.total_earned ?? 0) - (status.total_spent ?? 0))).toFixed(2)}
-            </div>
-            <div className="text-[#2d3748] text-[10px] mt-0.5">true margin</div>
-          </div>
-        </div>
-      )}
 
       {/* API topup banner */}
       {status && (status.api_topup_available ?? 0) > 0 && (
