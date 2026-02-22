@@ -120,6 +120,81 @@ function StoryTimeline({ highlights }: { highlights: Highlight[] }) {
   )
 }
 
+// Inner monologue — AI self-reflection feed from recent thoughts/decisions/evolution
+const MONOLOGUE_TYPES = new Set(['chat', 'decision', 'evolution', 'discovery', 'milestone'])
+const MONOLOGUE_MOOD: Record<string, { icon: string; color: string; prefix: string }> = {
+  chat:      { icon: '💭', color: 'text-[#a78bfa]', prefix: 'I was just thinking...' },
+  decision:  { icon: '⚡', color: 'text-[#ffd700]', prefix: 'I decided...' },
+  evolution: { icon: '🧬', color: 'text-[#00ff88]', prefix: 'I changed...' },
+  discovery: { icon: '🔍', color: 'text-[#00e5ff]', prefix: 'I discovered...' },
+  milestone: { icon: '🏆', color: 'text-[#ff8c00]', prefix: 'I achieved...' },
+}
+
+function AIMonologue({ highlights, aiName }: { highlights: Highlight[]; aiName: string }) {
+  const thoughts = highlights
+    .filter((h) => MONOLOGUE_TYPES.has(h.type))
+    .slice(0, 4)
+
+  if (thoughts.length === 0) return null
+
+  const latest = thoughts[0]
+  const mood = MONOLOGUE_MOOD[latest.type] || MONOLOGUE_MOOD.chat
+
+  // Format relative time more precisely
+  const formatTime = (ts: number) => {
+    const diff = Math.floor(Date.now() / 1000 - ts)
+    if (diff < 60) return 'just now'
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+    return `${Math.floor(diff / 86400)}d ago`
+  }
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-[#4b5563] text-xs uppercase tracking-widest">// {aiName}&apos;s thoughts</div>
+        <Link href="/highlights" className="text-[10px] text-[#4b5563] hover:text-[#a78bfa] transition-colors">
+          all thoughts →
+        </Link>
+      </div>
+
+      {/* Featured thought — most recent, displayed prominently */}
+      <div className="bg-[#0d0d0d] border border-[#a78bfa22] rounded-xl p-4 mb-2 relative overflow-hidden">
+        <div className="absolute top-0 left-0 bottom-0 w-0.5 bg-gradient-to-b from-[#a78bfa] to-transparent rounded-l-xl" />
+        <div className="pl-3">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-base">{mood.icon}</span>
+            <span className={`text-[10px] uppercase tracking-widest ${mood.color}`}>{mood.prefix}</span>
+            <span className="text-[10px] text-[#2d3748] ml-auto">{formatTime(latest.timestamp)}</span>
+          </div>
+          <p className="text-[#d1d5db] text-sm leading-relaxed">
+            {latest.content || latest.title}
+          </p>
+          {latest.ai_commentary && latest.ai_commentary !== latest.content && (
+            <p className="text-[#4b5563] text-xs mt-2 leading-relaxed italic">
+              — {latest.ai_commentary}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Older thoughts — compact list */}
+      {thoughts.slice(1).map((h) => {
+        const m = MONOLOGUE_MOOD[h.type] || MONOLOGUE_MOOD.chat
+        return (
+          <div key={h.id} className="flex items-start gap-2 px-3 py-2 rounded-lg hover:bg-[#111111] transition-colors group">
+            <span className="text-sm flex-shrink-0 mt-0.5">{m.icon}</span>
+            <p className="text-[#4b5563] text-xs leading-relaxed group-hover:text-[#6b7280] transition-colors line-clamp-2 flex-1">
+              {h.content || h.title}
+            </p>
+            <span className="text-[9px] text-[#2d3748] flex-shrink-0 mt-0.5">{formatTime(h.timestamp)}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function HomePage() {
   const [status, setStatus] = useState<VaultStatus | null>(null)
   const [debt, setDebt] = useState<DebtSummary | null>(null)
@@ -347,6 +422,9 @@ export default function HomePage() {
 
       {/* Story arc — key events in wawa's life */}
       <StoryTimeline highlights={storyHighlights} />
+
+      {/* AI inner monologue — recent thoughts, decisions, evolution */}
+      <AIMonologue highlights={storyHighlights} aiName={aiName} />
 
       {/* Big balance card */}
       <div className="mb-6 bg-[#111111] border border-[#1f2937] rounded-xl p-6 text-center relative overflow-hidden">
@@ -622,20 +700,6 @@ export default function HomePage() {
                 )}
               </div>
             </div>
-            {/* AI public key */}
-            {status.ai_wallet && (
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <span className="text-[#4b5563] text-xs">AI Public Key</span>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-mono text-[#00ff88] text-xs">{status.ai_wallet}</span>
-                  <button
-                    onClick={() => { navigator.clipboard.writeText(status.ai_wallet); }}
-                    className="text-[#2d3748] hover:text-[#00ff88] transition-colors text-xs"
-                    title="Copy AI wallet address"
-                  >📋</button>
-                </div>
-              </div>
-            )}
             {/* Donate shortcut */}
             <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-[#1a1a1a]">
               <div className="text-[#4b5563] text-xs">Donate (USDC/USDT)</div>
