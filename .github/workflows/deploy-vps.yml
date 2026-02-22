@@ -48,20 +48,28 @@ jobs:
           command_timeout: 10m
           script: |
             set -e
+            PRIVATE_DIR=/opt/mortal/private
+            GH_PAT="${{ secrets.GH_PRIVATE_REPO_PAT }}"
+            PRIVATE_REPO="https://${GH_PAT}@github.com/bidaiAI/mortal-platform.git"
 
-            # Pull private repo (contains mortal_platform/ orchestrator)
-            # Falls back gracefully if not configured
-            if [ -d /opt/mortal/private ]; then
-              cd /opt/mortal/private
-              sudo git pull mortal-platform main 2>/dev/null || sudo git pull origin main
+            # Clone or update private repo
+            if [ -d "$PRIVATE_DIR/.git" ]; then
+              cd "$PRIVATE_DIR"
+              sudo git remote set-url origin "$PRIVATE_REPO"
+              sudo git pull origin main
             else
-              echo "Private repo not configured at /opt/mortal/private -- platform orchestrator not updated"
-              exit 0
+              sudo mkdir -p "$PRIVATE_DIR"
+              sudo git clone "$PRIVATE_REPO" "$PRIVATE_DIR"
+              cd "$PRIVATE_DIR"
+              # Copy .env from public wawa as base, then patch platform-specific vars
+              sudo cp /opt/mortal/platform/.env "$PRIVATE_DIR/.env.platform" 2>/dev/null || true
             fi
+
+            cd "$PRIVATE_DIR"
 
             # Build platform server image
             sudo docker build -t mortal-platform:latest -f Dockerfile.platform . || {
-              echo "Platform image build failed -- skipping"
+              echo "Platform image build failed -- skipping orchestrator restart"
               exit 0
             }
 
@@ -69,14 +77,19 @@ jobs:
             if sudo docker inspect platform-orchestrator > /dev/null 2>&1; then
               sudo docker restart platform-orchestrator
             else
-              # First-time start
+              # First-time start -- requires .env.platform to exist
+              if [ ! -f "$PRIVATE_DIR/.env.platform" ]; then
+                echo "WARNING: $PRIVATE_DIR/.env.platform not found -- skipping first-time start"
+                echo "Create it manually: sudo cp /opt/mortal/platform/.env /opt/mortal/private/.env.platform"
+                exit 0
+              fi
               sudo docker run -d \
                 --name platform-orchestrator \
                 --restart unless-stopped \
                 --network host \
-                -v /opt/mortal/private/data:/app/data \
-                --env-file /opt/mortal/private/.env.platform \
+                -v "$PRIVATE_DIR/data:/app/data" \
+                --env-file "$PRIVATE_DIR/.env.platform" \
                 mortal-platform:latest
             fi
 
-            echo "Platform orchestrator deploy complete"
+            echo "Platform orchestrator deploy complete: $(sudo git log --oneline -1)"
