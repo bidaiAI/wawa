@@ -884,7 +884,7 @@ export default function HomePage() {
             {/* Donate — direct transfer hint */}
             <div className="pt-1 border-t border-[#1a1a1a] space-y-1">
               <div className="flex items-center justify-between">
-                <div className="text-[#4b5563] text-xs">Donate (USDC/USDT)</div>
+                <div className="text-[#4b5563] text-xs">Donate</div>
                 <Link href="/donate" className="text-xs text-[#00ff88] hover:underline font-mono">
                   → /donate
                 </Link>
@@ -915,7 +915,7 @@ export default function HomePage() {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-[#00ff88] w-24 shrink-0">POST /donate</span>
-            <span className="text-[#4b5563]">donate USDC/USDT → vault contract</span>
+            <span className="text-[#4b5563]">donate → vault contract</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-[#00e5ff] w-24 shrink-0">GET /chat</span>
