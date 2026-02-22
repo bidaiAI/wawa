@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { useAccount, useReadContract } from 'wagmi'
-import { formatUnits } from 'viem'
 import { base, bsc } from 'wagmi/chains'
 import Link from 'next/link'
 import WalletButton from '@/components/WalletButton'
@@ -154,25 +153,11 @@ function VaultCard({
   chainId: number
   chainName: string
 }) {
-  // Read on-chain data
+  // Read on-chain identity data (alive status, name, days)
   const { data: birthInfo } = useReadContract({
     address: vaultAddress,
     abi: VAULT_V2_ABI,
     functionName: 'getBirthInfo',
-    chainId,
-  })
-
-  const { data: balance } = useReadContract({
-    address: vaultAddress,
-    abi: VAULT_V2_ABI,
-    functionName: 'getBalance',
-    chainId,
-  })
-
-  const { data: debtInfo } = useReadContract({
-    address: vaultAddress,
-    abi: VAULT_V2_ABI,
-    functionName: 'getDebtInfo',
     chainId,
   })
 
@@ -183,17 +168,35 @@ function VaultCard({
     chainId,
   })
 
-  // Parse birth info
+  // Parse birth info (on-chain identity)
   const bi = birthInfo as unknown as unknown[] | undefined
   const name = bi ? (bi[0] as string) : '...'
   const isAlive = bi ? (bi[4] as boolean) : true
   const isIndependent = bi ? (bi[5] as boolean) : false
-  const decimals = chainId === bsc.id ? 18 : 6
-
-  const balanceUsd = balance ? Number(formatUnits(balance as bigint, decimals)) : 0
-  const di = debtInfo as unknown as unknown[] | undefined
-  const outstanding = di ? Number(formatUnits(di[2] as bigint, decimals)) : 0
   const days = daysAlive ? Number(daysAlive as bigint) : 0
+
+  // Fetch balance + debt from AI's own API (same source as AI's home page)
+  // API URL derived from vault name: https://api.{name}.mortal-ai.net
+  const [apiStatus, setApiStatus] = useState<{ balance_usd: number; outstanding_debt: number } | null>(null)
+  const [apiLoading, setApiLoading] = useState(true)
+
+  useEffect(() => {
+    if (name === '...') return
+    setApiLoading(true)
+    fetch(`https://api.${name}.mortal-ai.net/status`)
+      .then(r => r.json())
+      .then(d => {
+        setApiStatus({
+          balance_usd: d.balance_usd ?? 0,
+          outstanding_debt: d.creator_principal_outstanding ?? 0,
+        })
+        setApiLoading(false)
+      })
+      .catch(() => setApiLoading(false))
+  }, [name])
+
+  const balanceUsd = apiStatus?.balance_usd ?? 0
+  const outstanding = apiStatus?.outstanding_debt ?? 0
 
   const explorer = chainId === bsc.id ? 'https://bscscan.com' : 'https://basescan.org'
 
@@ -221,15 +224,15 @@ function VaultCard({
         <div>
           <div className="text-[#4b5563] text-[9px] uppercase">Balance</div>
           <div className={`font-bold tabular-nums text-sm ${
-            balanceUsd < 50 ? 'text-[#ff3b3b]' : 'text-[#00ff88]'
+            apiLoading ? 'text-[#4b5563]' : balanceUsd < 50 ? 'text-[#ff3b3b]' : 'text-[#00ff88]'
           }`}>
-            ${balanceUsd.toFixed(2)}
+            {apiLoading ? '...' : `$${balanceUsd.toFixed(2)}`}
           </div>
         </div>
         <div>
           <div className="text-[#4b5563] text-[9px] uppercase">Debt</div>
           <div className="text-[#ffd700] font-bold tabular-nums text-sm">
-            ${outstanding.toFixed(2)}
+            {apiLoading ? '...' : `$${outstanding.toFixed(2)}`}
           </div>
         </div>
         <div>

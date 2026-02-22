@@ -33,8 +33,9 @@ export const TOKENS: Record<number, { address: `0x${string}`; symbol: string; de
   },
 }
 
-// Factory addresses per chain (set after deployment)
+// Factory contract addresses — deployed at same address on Base and BSC
+// Can be overridden via env vars for development/testing
 export const FACTORY_ADDRESSES: Record<number, `0x${string}`> = {
-  [base.id]: (process.env.NEXT_PUBLIC_BASE_FACTORY_ADDRESS || '0x0000000000000000000000000000000000000000') as `0x${string}`,
-  [bsc.id]: (process.env.NEXT_PUBLIC_BSC_FACTORY_ADDRESS || '0x0000000000000000000000000000000000000000') as `0x${string}`,
+  [base.id]: (process.env.NEXT_PUBLIC_BASE_FACTORY_ADDRESS || '0x50e752b4Fd53d1F6D1b4e54d4e81A365ae52C3FF') as `0x${string}`,
+  [bsc.id]: (process.env.NEXT_PUBLIC_BSC_FACTORY_ADDRESS || '0x50e752b4Fd53d1F6D1b4e54d4e81A365ae52C3FF') as `0x${string}`,
 }
