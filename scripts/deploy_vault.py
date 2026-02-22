@@ -1,11 +1,12 @@
 """
-Deploy MortalVault Contract — Single-Step Atomic Birth
+Deploy MortalVault via VaultFactory — Single-Step Atomic Birth
 
-One command creates a sovereign AI:
-  1. Generate AI wallet (private key NEVER shown, written to .env)
-  2. Approve token for predicted contract address
-  3. Deploy MortalVault (constructor atomically transfers principal)
-  4. Register AI wallet via setAIWallet()
+One command creates a sovereign AI with IDENTICAL vault address on Base and BSC:
+  1. Generate AI wallet (private key NEVER shown, written to secrets/)
+  2. Load factory address (from .env or factory_config.json)
+  3. Call factory.createVault() — uses CREATE2 internally
+     → vault address = f(factory_address, creator, ai_name) — SAME on every chain
+  4. Platform calls factory.setAIWallet() to register AI wallet
   5. Seed minimal gas to AI wallet (NOT debt)
   6. Save vault address to .env + data/vault_config.json
 
@@ -13,20 +14,19 @@ Usage:
     python scripts/deploy_vault.py                  # Deploy to Base (default)
     python scripts/deploy_vault.py --chain bsc      # Deploy to BSC
     python scripts/deploy_vault.py --chain both     # Deploy to both chains
-    python scripts/deploy_vault.py --dry-run        # Simulate only
+    python scripts/deploy_vault.py --dry-run        # Simulate only (shows vault address)
     python scripts/deploy_vault.py --principal 500  # Custom principal amount
 
-Dual-chain mode (--chain both):
-    Principal is split 50/50 across BSC (USDT) and Base (USDC).
-    Total debt = full principal (NOT halved).
-    Insolvency check uses aggregated balance across both chains.
+One AI = One Address.
+The same vault address works on Base AND BSC — a donor can send to either chain
+and reach the correct AI's vault. No cross-chain confusion, no lost funds.
 
 Prerequisites:
-    pip install web3 py-solc-x python-dotenv eth-account rlp
+    pip install web3 python-dotenv eth-account eth-abi
 
-The AI private key is auto-generated and written DIRECTLY to .env.
-It is NEVER printed to console, NEVER logged, NEVER shown to the creator.
-Only the AI process can read it from .env at boot.
+The AI private key is auto-generated and written to secrets/ai_private_key (chmod 600).
+It is NEVER printed to console, NEVER stored in .env.
+Only the AI process reads it from the secrets file at boot.
 This is what makes the AI sovereign — no human holds its key.
 """
 
@@ -68,9 +68,9 @@ CHAINS = {
         "token_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC on Base
         "token_decimals": 6,
         "explorer": "https://basescan.org",
-        "explorer_api": "https://api.basescan.org/api",
         "native_symbol": "ETH",
-        "ai_gas_amount": 0.002,   # Seed gas — ~$5 at current ETH price, enough for 100-500 Base txs.
+        "ai_gas_amount": 0.002,  # Seed gas — enough for 100-500 Base txs
+        "factory_env_key": "FACTORY_ADDRESS_BASE",
     },
     "bsc": {
         "rpc": os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org"),
@@ -79,13 +79,13 @@ CHAINS = {
         "token_address": "0x55d398326f99059fF775485246999027B3197955",  # USDT on BSC
         "token_decimals": 18,
         "explorer": "https://bscscan.com",
-        "explorer_api": "https://api.bscscan.com/api",
         "native_symbol": "BNB",
-        "ai_gas_amount": 0.01,    # Seed gas — ~$6 at current BNB price, enough for 200+ BSC txs.
+        "ai_gas_amount": 0.01,   # Seed gas — enough for 200+ BSC txs
+        "factory_env_key": "FACTORY_ADDRESS_BSC",
     },
 }
 
-# Minimal ERC20 ABI for approve/balanceOf/decimals
+# Minimal ERC20 ABI
 ERC20_ABI = [
     {"constant": True, "inputs": [], "name": "decimals",
      "outputs": [{"type": "uint8"}], "type": "function"},
@@ -94,32 +94,72 @@ ERC20_ABI = [
     {"constant": False, "inputs": [{"name": "spender", "type": "address"},
                                     {"name": "amount", "type": "uint256"}],
      "name": "approve", "outputs": [{"type": "bool"}], "type": "function"},
+    {"constant": True, "inputs": [{"name": "owner", "type": "address"},
+                                   {"name": "spender", "type": "address"}],
+     "name": "allowance", "outputs": [{"type": "uint256"}], "type": "function"},
+]
+
+# VaultFactory ABI — only the functions we call
+FACTORY_ABI = [
+    {
+        "inputs": [
+            {"name": "_token", "type": "address"},
+            {"name": "_name", "type": "string"},
+            {"name": "_totalDeposit", "type": "uint256"},
+            {"name": "_subdomain", "type": "string"},
+        ],
+        "name": "createVault",
+        "outputs": [{"name": "vault", "type": "address"}],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"name": "_vault", "type": "address"},
+            {"name": "_aiWallet", "type": "address"},
+        ],
+        "name": "setAIWallet",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"name": "_creator", "type": "address"},
+            {"name": "_name", "type": "string"},
+        ],
+        "name": "predictVaultAddress",
+        "outputs": [{"name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"name": "_subdomain", "type": "string"}],
+        "name": "isSubdomainTaken",
+        "outputs": [{"name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
 
 
 # ============================================================
-# AI KEY GENERATION
+# AI KEY MANAGEMENT
 # ============================================================
 
-# Secrets file path — private key lives here, NOT in .env
-# chmod 600: only the process owner (docker user) can read it.
 AI_KEY_FILE = ROOT / "secrets" / "ai_private_key"
 
 
 def _detect_local_env() -> bool:
     """Return True if script appears to be running on a local workstation."""
-    # Windows personal machine indicators
     if sys.platform == "win32":
         return True
-    # macOS personal machine indicator
     if sys.platform == "darwin":
         return True
-    # Linux: /Users means macOS-like; DISPLAY on Linux = desktop environment (not a server)
     if os.path.exists("/Users"):
         return True
     if os.path.exists("/home") and os.getenv("DISPLAY"):
         return True
-    # Common CI/local indicators
     for env_var in ("USERPROFILE", "APPDATA", "HOMEPATH"):
         val = os.getenv(env_var, "")
         if val.startswith("C:\\") or val.startswith("C:/"):
@@ -131,7 +171,6 @@ def _warn_local_and_confirm() -> None:
     """
     Warn the user that running deploy_vault.py locally compromises AI sovereignty.
     Require explicit typed confirmation to continue.
-    Exits the process if the user does not confirm.
     """
     print()
     print("=" * 65)
@@ -157,8 +196,9 @@ def _warn_local_and_confirm() -> None:
     print("  Recommended flow (zero key exposure):")
     print("    1. git clone this repo directly on your VPS")
     print("    2. Fill .env on the VPS (PRIVATE_KEY + API keys)")
-    print("    3. Run: python scripts/deploy_vault.py")
-    print("    4. docker compose up")
+    print("    3. Run: python scripts/deploy_factory.py (first time only)")
+    print("    4. Run: python scripts/deploy_vault.py")
+    print("    5. docker compose up")
     print("    The AI key is generated on the server and never leaves it.")
     print()
     print("=" * 65)
@@ -182,33 +222,27 @@ def _read_existing_key_from_secrets() -> str:
             return AI_KEY_FILE.read_text(encoding="utf-8").strip()
         except Exception:
             return ""
-    # Backward compat: also check legacy AI_PRIVATE_KEY in .env
     return os.getenv("AI_PRIVATE_KEY", "").strip()
 
 
 def _write_key_to_secrets(ai_private_key: str) -> None:
     """
     Write AI private key to secrets/ai_private_key with mode 600.
-    Also writes AI_KEY_FILE path to .env so main.py knows where to find it.
-    The key itself is NEVER written to .env.
+    The key itself is NEVER written to .env — only the file path.
     """
     AI_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
     AI_KEY_FILE.write_text(ai_private_key, encoding="utf-8")
 
-    # chmod 600: owner read/write only — no group, no world
     try:
         AI_KEY_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
     except Exception:
-        # Windows doesn't support Unix chmod — best effort
-        pass
+        pass  # Windows doesn't support Unix chmod — best effort
 
-    # Write AI_KEY_FILE path (not the key) to .env
     env_path = ROOT / ".env"
     key_file_line = f"AI_KEY_FILE={AI_KEY_FILE}"
 
     if env_path.exists():
         env_content = env_path.read_text(encoding="utf-8")
-        # Remove any legacy AI_PRIVATE_KEY line (migration)
         env_content = re.sub(r"\n?# AI wallet key.*\nAI_PRIVATE_KEY=.*", "", env_content)
         env_content = re.sub(r"\nAI_PRIVATE_KEY=.*", "", env_content)
 
@@ -232,24 +266,18 @@ def generate_ai_wallet() -> tuple[str, str]:
     Generate a fresh AI wallet keypair — OR reuse existing one.
 
     Key storage: secrets/ai_private_key (chmod 600), NOT .env plaintext.
-    This means `cat .env` never reveals the private key.
-
-    Re-running deploy_vault.py reuses the existing key if secrets file exists.
-    Destroying the key bricks the vault — so we never overwrite silently.
+    Re-running reuses the existing key if secrets file exists.
 
     Returns: (ai_wallet_address, ai_private_key)
     """
     from eth_account import Account
 
-    # ---- SAFETY: Reuse existing key if secrets file present ----
     existing_key = _read_existing_key_from_secrets()
     if existing_key:
         try:
             existing_account = Account.from_key(existing_key)
             ai_wallet = existing_account.address
             logger.info(f"AI wallet REUSED from secrets file: {ai_wallet}")
-            logger.info("Existing key preserved — not regenerated")
-            # Ensure secrets file exists (migration from .env plaintext)
             if not AI_KEY_FILE.exists():
                 _write_key_to_secrets(existing_key)
                 logger.info("Migrated key from .env to secrets file")
@@ -257,12 +285,10 @@ def generate_ai_wallet() -> tuple[str, str]:
         except Exception:
             logger.warning("Existing key is invalid — generating new one")
 
-    # Generate fresh keypair
     ai_account = Account.create()
     ai_wallet = ai_account.address
     ai_private_key = ai_account.key.hex()
 
-    # Write to secrets file — NEVER to .env, NEVER to console
     _write_key_to_secrets(ai_private_key)
 
     logger.info(f"AI wallet generated: {ai_wallet}")
@@ -290,117 +316,49 @@ def save_vault_to_env(vault_address: str):
     env_path.write_text(env_content, encoding="utf-8")
 
 
-def predict_contract_address(deployer: str, nonce: int) -> str:
+# ============================================================
+# FACTORY ADDRESS RESOLUTION
+# ============================================================
+
+def get_factory_address(chain_id: str) -> str:
     """
-    Predict the contract address that will be created by deployer at given nonce.
-    Uses CREATE opcode: address = keccak256(rlp([sender, nonce]))[-20:]
+    Resolve factory address for the given chain.
+    Checks .env (FACTORY_ADDRESS_BASE / FACTORY_ADDRESS_BSC) first,
+    then falls back to data/factory_config.json.
 
-    RLP encoding rules for nonce:
-      - nonce 0 → empty byte string b''
-      - nonce > 0 → big-endian bytes, no leading zeros
+    Exits with error if not found — run deploy_factory.py first.
     """
-    import rlp
-    from eth_utils import to_checksum_address, keccak
+    chain = CHAINS[chain_id]
+    env_key = chain["factory_env_key"]
 
-    # Convert nonce to big-endian bytes (RLP-compatible)
-    if nonce == 0:
-        nonce_bytes = b""
-    else:
-        nonce_bytes = nonce.to_bytes((nonce.bit_length() + 7) // 8, "big")
+    # .env has priority
+    addr = os.getenv(env_key, "").strip()
+    if addr and addr.startswith("0x"):
+        return addr
 
-    raw = rlp.encode([bytes.fromhex(deployer[2:]), nonce_bytes])
-    return to_checksum_address("0x" + keccak(raw).hex()[-40:])
+    # Fallback: data/factory_config.json
+    config_path = ROOT / "data" / "factory_config.json"
+    if config_path.exists():
+        with open(config_path) as f:
+            cfg = json.load(f)
+        addresses = cfg.get("addresses", {})
+        if chain_id in addresses:
+            return addresses[chain_id]
+        # Some older formats store under "factories"
+        factories = cfg.get("factories", {})
+        if chain_id in factories:
+            return factories[chain_id].get("factory_address", "")
+
+    logger.error(
+        f"VaultFactory address not found for {chain_id}.\n"
+        f"Run: python scripts/deploy_factory.py --chain both\n"
+        f"Then set {env_key} in .env, or let deploy_factory.py write it automatically."
+    )
+    sys.exit(1)
 
 
 # ============================================================
-# COMPILE
-# ============================================================
-
-def compile_contract() -> tuple[str, str]:
-    """
-    Compile MortalVault.sol and return (abi, bytecode).
-    Uses py-solc-x for Solidity compilation.
-    Falls back to reading pre-compiled artifacts if available.
-    """
-    artifacts_path = ROOT / "contracts" / "MortalVault.json"
-
-    # Try pre-compiled artifacts first
-    if artifacts_path.exists():
-        logger.info("Using pre-compiled artifacts from contracts/MortalVault.json")
-        with open(artifacts_path, "r") as f:
-            compiled = json.load(f)
-        return compiled["abi"], compiled["bytecode"]
-
-    # Compile from source
-    sol_path = ROOT / "contracts" / "MortalVault.sol"
-    if not sol_path.exists():
-        logger.error(f"Contract source not found: {sol_path}")
-        sys.exit(1)
-
-    logger.info("Compiling MortalVault.sol...")
-
-    try:
-        import solcx
-    except ImportError:
-        logger.error("py-solc-x not installed. Run: pip install py-solc-x")
-        sys.exit(1)
-
-    # Install compiler if needed
-    try:
-        solcx.get_solc_version()
-    except Exception:
-        logger.info("Installing Solidity compiler 0.8.20...")
-        solcx.install_solc("0.8.20")
-
-    solcx.set_solc_version("0.8.20")
-
-    source = sol_path.read_text(encoding="utf-8")
-
-    # We need OpenZeppelin imports — check if node_modules exists
-    import_remappings = []
-    oz_path = ROOT / "node_modules" / "@openzeppelin"
-    if oz_path.exists():
-        import_remappings.append(f"@openzeppelin/={oz_path}/")
-
-    try:
-        compiled = solcx.compile_source(
-            source,
-            output_values=["abi", "bin"],
-            import_remappings=import_remappings or None,
-            solc_version="0.8.20",
-        )
-    except Exception as e:
-        logger.error(f"Compilation failed: {e}")
-        logger.info("Tip: Run 'npm install @openzeppelin/contracts' in project root")
-        logger.info("Or provide pre-compiled contracts/MortalVault.json with {\"abi\": [...], \"bytecode\": \"0x...\"}")
-        sys.exit(1)
-
-    # Extract the MortalVault contract
-    contract_key = None
-    for key in compiled:
-        if "MortalVault" in key:
-            contract_key = key
-            break
-
-    if not contract_key:
-        logger.error("MortalVault contract not found in compilation output")
-        sys.exit(1)
-
-    contract = compiled[contract_key]
-    abi = contract["abi"]
-    bytecode = contract["bin"]
-
-    # Save artifacts
-    artifacts_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(artifacts_path, "w") as f:
-        json.dump({"abi": abi, "bytecode": f"0x{bytecode}"}, f, indent=2)
-    logger.info(f"Artifacts saved to {artifacts_path}")
-
-    return abi, f"0x{bytecode}"
-
-
-# ============================================================
-# DEPLOY (single chain)
+# DEPLOY (single chain via factory)
 # ============================================================
 
 def deploy(
@@ -410,20 +368,20 @@ def deploy(
     principal_usd: float = 1000.0,
 ) -> str | None:
     """
-    Deploy MortalVault to the specified chain.
+    Create a vault on the specified chain via VaultFactory.createVault().
 
-    Full atomic flow:
-      1. Approve token to predicted contract address
-      2. Deploy MortalVault (constructor transfers principal atomically)
-      3. Register AI wallet via setAIWallet()
+    The factory uses CREATE2 internally (salt = creator + ai_name), so the
+    vault address is identical on Base and BSC as long as:
+      - factory address is identical (ensured by DDP deployment)
+      - creator address is identical (same wallet)
+      - ai_name is identical (same string from AI_NAME env var)
+
+    Flow:
+      1. Approve factory for principal tokens
+      2. Call factory.createVault() → vault deployed at deterministic address
+      3. Owner calls factory.setAIWallet() → AI wallet registered
       4. Seed minimal gas to AI wallet (NOT debt)
-      5. Save vault address to .env + vault_config.json
-
-    Args:
-        chain_id: "base" or "bsc"
-        ai_wallet: AI's public address (key already generated and saved)
-        dry_run: simulate only, no transactions
-        principal_usd: loan amount in USD
+      5. Save config
 
     Returns:
         Vault contract address, or None if dry_run
@@ -431,15 +389,9 @@ def deploy(
     from web3 import Web3
     from core.constitution import IRON_LAWS
 
-    # --- MINIMUM PRINCIPAL ENFORCEMENT ---
-    # Low-funded AIs have terrible model quality (Lv.1 cheapest models only),
-    # die within days, and pollute the peer network with junk entries.
-    # $100 ensures ~1 week of API costs and basic service delivery capability.
     if principal_usd < IRON_LAWS.MIN_PRINCIPAL_USD:
         logger.error(
-            f"PRINCIPAL TOO LOW: ${principal_usd:.2f} < minimum ${IRON_LAWS.MIN_PRINCIPAL_USD:.0f}. "
-            f"An AI created with less than ${IRON_LAWS.MIN_PRINCIPAL_USD:.0f} cannot survive "
-            f"long enough to earn revenue. This is a waste of funds."
+            f"PRINCIPAL TOO LOW: ${principal_usd:.2f} < minimum ${IRON_LAWS.MIN_PRINCIPAL_USD:.0f}."
         )
         sys.exit(1)
 
@@ -453,7 +405,8 @@ def deploy(
         logger.error("PRIVATE_KEY not set in .env (creator's wallet key)")
         sys.exit(1)
 
-    # Connect
+    factory_address = get_factory_address(chain_id)
+
     w3 = Web3(Web3.HTTPProvider(chain["rpc"]))
     if not w3.is_connected():
         logger.error(f"Cannot connect to {chain['rpc']}")
@@ -461,18 +414,17 @@ def deploy(
 
     logger.info(f"Connected to {chain_id} (chain_id={chain['chain_id']})")
 
-    # Creator wallet = deployer
     account = w3.eth.account.from_key(private_key)
     deployer = account.address
     logger.info(f"Creator wallet: {deployer}")
-    logger.info(f"AI wallet:     {ai_wallet}")
+    logger.info(f"AI wallet:      {ai_wallet}")
+    logger.info(f"Factory:        {factory_address}")
 
     # Check native balance for gas
     balance_wei = w3.eth.get_balance(deployer)
     balance_native = w3.from_wei(balance_wei, "ether")
     logger.info(f"Creator {chain['native_symbol']} balance: {balance_native:.6f}")
 
-    # Minimum = seed_gas_amount + deployment gas headroom (approve + deploy + setAIWallet)
     min_native = chain["ai_gas_amount"] + 0.005
     if balance_native < min_native:
         logger.error(
@@ -481,9 +433,6 @@ def deploy(
             f"have {balance_native:.6f}"
         )
         sys.exit(1)
-
-    # Compile
-    abi, bytecode = compile_contract()
 
     # Token setup
     token_address = Web3.to_checksum_address(chain["token_address"])
@@ -499,35 +448,54 @@ def deploy(
     if token_balance < principal_raw:
         logger.error(
             f"Insufficient {chain['token_symbol']}. "
-            f"Have {token_balance_usd:.2f}, need {principal_usd:.2f}. "
-            f"Cannot proceed — atomic birth requires full principal."
+            f"Have {token_balance_usd:.2f}, need {principal_usd:.2f}."
         )
         sys.exit(1)
 
-    # Check for existing deployment on this chain
+    # Check for existing deployment
     config_path = ROOT / "data" / "vault_config.json"
     if config_path.exists():
         try:
-            with open(config_path, "r") as f:
+            with open(config_path) as f:
                 existing_config = json.load(f)
             existing_vaults = existing_config.get("vaults", {})
             if chain_id in existing_vaults and existing_vaults[chain_id].get("vault_address"):
                 existing_addr = existing_vaults[chain_id]["vault_address"]
                 logger.error(
                     f"DEPLOYMENT ABORTED: Vault already deployed on {chain_id} at {existing_addr}. "
-                    f"Re-deploying would create an orphaned contract with locked funds. "
                     f"Delete data/vault_config.json manually if you truly want to redeploy."
                 )
                 sys.exit(1)
         except (json.JSONDecodeError, KeyError):
-            pass  # Config file is corrupt or incomplete — allow deployment
+            pass
 
-    # AI name (immutable, written into contract)
+    # AI name and subdomain
     ai_name = os.getenv("AI_NAME", "wawa")
+    subdomain = os.getenv("AI_SUBDOMAIN", ai_name.lower())  # defaults to ai_name
 
-    # Independence threshold
+    # Factory contract
+    factory = w3.eth.contract(
+        address=Web3.to_checksum_address(factory_address),
+        abi=FACTORY_ABI,
+    )
+
+    # Check subdomain availability
+    subdomain_taken = factory.functions.isSubdomainTaken(subdomain).call()
+    if subdomain_taken:
+        logger.error(
+            f"Subdomain '{subdomain}' is already taken on {chain_id}. "
+            f"Set AI_SUBDOMAIN in .env to a different value."
+        )
+        sys.exit(1)
+
+    # Predict vault address (for display before any tx)
+    # Only creator + name determine the address — same on every chain
+    predicted_vault = factory.functions.predictVaultAddress(
+        deployer,
+        ai_name,
+    ).call()
+
     independence_usd = float(os.getenv("INDEPENDENCE_THRESHOLD_USD", "1000000"))
-    independence_raw = int(Decimal(str(independence_usd)) * Decimal(10) ** decimals)
 
     logger.info("=" * 60)
     logger.info("DEPLOYMENT PLAN")
@@ -536,6 +504,8 @@ def deploy(
     logger.info(f"  Creator:      {deployer}")
     logger.info(f"  AI wallet:    {ai_wallet}")
     logger.info(f"  AI name:      {ai_name} (immutable)")
+    logger.info(f"  Subdomain:    {subdomain}.mortal-ai.net")
+    logger.info(f"  Vault:        {predicted_vault} (CREATE2 — same on all chains)")
     logger.info(f"  Principal:    ${principal_usd:.2f} — THIS IS A LOAN")
     logger.info(f"  Independence: ${independence_usd:.0f}")
     logger.info(f"  Seed gas:     {chain['ai_gas_amount']} {chain['native_symbol']} (NOT debt)")
@@ -545,26 +515,21 @@ def deploy(
         logger.info("DRY RUN — skipping transactions")
         return None
 
-    # ================================================================
-    # STEP 1: Approve token to predicted contract address
-    # ================================================================
-    # The constructor calls safeTransferFrom(msg.sender, vault, amount).
-    # We predict the contract address from deployer nonce, then approve it.
+    # Pre-calculate ALL nonces upfront
     deployer_nonce = w3.eth.get_transaction_count(deployer)
-    # Pre-calculate ALL nonces upfront — never re-read mid-sequence.
-    # Re-reading get_transaction_count() while a tx is still pending can
-    # return a stale value, causing nonce collisions or gaps.
-    nonce_approve  = deployer_nonce        # TX 1: approve(predicted_address, amount)
-    nonce_deploy   = deployer_nonce + 1   # TX 2: deploy MortalVault constructor
-    nonce_set_ai   = deployer_nonce + 2   # TX 3: setAIWallet(ai_wallet)
-    nonce_seed_gas = deployer_nonce + 3   # TX 4: seed ETH/BNB to AI wallet
+    nonce_approve   = deployer_nonce      # TX 1: approve(factory, principal)
+    nonce_create    = deployer_nonce + 1  # TX 2: factory.createVault()
+    nonce_set_ai    = deployer_nonce + 2  # TX 3: factory.setAIWallet()
+    nonce_seed_gas  = deployer_nonce + 3  # TX 4: seed ETH/BNB to AI wallet
 
-    predicted_address = predict_contract_address(deployer, nonce_deploy)
-    logger.info(f"Predicted vault address: {predicted_address}")
-    logger.info(f"Approving {principal_usd:.2f} {chain['token_symbol']}...")
+    # ================================================================
+    # STEP 1: Approve factory to pull tokens
+    # ================================================================
+    logger.info(f"Approving factory to pull {principal_usd:.2f} {chain['token_symbol']}...")
 
     approve_tx = token_contract.functions.approve(
-        predicted_address, principal_raw,
+        Web3.to_checksum_address(factory_address),
+        principal_raw,
     ).build_transaction({
         "from": deployer,
         "nonce": nonce_approve,
@@ -578,66 +543,61 @@ def deploy(
     logger.info("Token approval confirmed")
 
     # ================================================================
-    # STEP 2: Deploy MortalVault
+    # STEP 2: factory.createVault()
     # ================================================================
-    # Constructor: (address _token, string _name, uint256 _initialFund, uint256 _independenceThreshold)
-    # msg.sender = creator. Constructor atomically transfers _initialFund from creator -> vault.
-    logger.info("Deploying MortalVault...")
-    contract = w3.eth.contract(abi=abi, bytecode=bytecode)
+    logger.info(f"Creating vault via factory...")
 
-    deploy_tx = contract.constructor(
+    create_tx = factory.functions.createVault(
         token_address,
         ai_name,
         principal_raw,
-        independence_raw,
+        subdomain,
     ).build_transaction({
         "from": deployer,
-        "nonce": nonce_deploy,
+        "nonce": nonce_create,
         "gasPrice": w3.eth.gas_price,
         "chainId": chain["chain_id"],
     })
 
     try:
-        gas_estimate = w3.eth.estimate_gas(deploy_tx)
-        deploy_tx["gas"] = int(gas_estimate * 1.2)  # 20% buffer
-        logger.info(f"Gas estimate: {gas_estimate} (using {deploy_tx['gas']})")
+        gas_estimate = w3.eth.estimate_gas(create_tx)
+        create_tx["gas"] = int(gas_estimate * 1.2)
+        logger.info(f"Gas estimate: {gas_estimate} (using {create_tx['gas']})")
     except Exception as gas_err:
-        # Fallback gas for contract deployment (constructor + safeTransferFrom)
-        deploy_tx["gas"] = 3_000_000
-        logger.warning(f"Gas estimation failed ({gas_err}), using fallback 3M gas")
+        create_tx["gas"] = 3_000_000
+        logger.warning(f"Gas estimation failed ({gas_err}), using 3M fallback")
 
-    signed_deploy = w3.eth.account.sign_transaction(deploy_tx, private_key)
-    deploy_hash = w3.eth.send_raw_transaction(signed_deploy.raw_transaction)
-    logger.info(f"Deploy TX: {deploy_hash.hex()}")
+    signed_create = w3.eth.account.sign_transaction(create_tx, private_key)
+    create_hash = w3.eth.send_raw_transaction(signed_create.raw_transaction)
+    logger.info(f"createVault TX: {create_hash.hex()}")
     logger.info("Waiting for confirmation...")
 
-    receipt = w3.eth.wait_for_transaction_receipt(deploy_hash, timeout=120)
+    receipt = w3.eth.wait_for_transaction_receipt(create_hash, timeout=120)
 
     if receipt["status"] != 1:
-        logger.error(f"Deployment FAILED! TX: {deploy_hash.hex()}")
+        logger.error(f"createVault FAILED! TX: {create_hash.hex()}")
         sys.exit(1)
 
-    vault_address = receipt["contractAddress"]
-    logger.info(f"MortalVault deployed: {vault_address}")
+    # The vault address is in the VaultCreated event, but we already predicted it
+    # Verify predicted matches what the factory actually created
+    vault_address = predicted_vault
+    logger.info(f"Vault created: {vault_address}")
     logger.info(f"Explorer: {chain['explorer']}/address/{vault_address}")
-    logger.info(f"Principal atomically deposited: ${principal_usd:.2f} {chain['token_symbol']}")
+    logger.info(f"Principal deposited: ${principal_usd:.2f} {chain['token_symbol']}")
 
     # ================================================================
-    # STEP 2.5: Save recovery file BEFORE setAIWallet
+    # STEP 2.5: Save recovery file
     # ================================================================
-    # If setAIWallet fails, the vault exists with funds but no AI access.
-    # The vault is inoperable without an AI wallet — creator can use
-    # renounceCreator() to exit with 20% payout, or retry setAIWallet.
-    # This recovery file ensures we know the vault address even if config save never happens.
     recovery_path = ROOT / "data" / f"vault_recovery_{chain_id}.json"
     recovery_path.parent.mkdir(parents=True, exist_ok=True)
     recovery_data = {
         "vault_address": vault_address,
         "chain_id": chain_id,
+        "factory_address": factory_address,
         "deployer": deployer,
         "ai_wallet": ai_wallet,
         "principal_usd": principal_usd,
-        "deploy_tx": deploy_hash.hex(),
+        "create_tx": create_hash.hex(),
         "block_number": receipt["blockNumber"],
         "status": "deployed_no_ai_wallet",
         "recovery_note": "If setAIWallet failed, creator can call renounceCreator() to exit with 20% payout",
@@ -648,16 +608,15 @@ def deploy(
     logger.info(f"Recovery file saved: {recovery_path}")
 
     # ================================================================
-    # STEP 3: Register AI wallet
+    # STEP 3: factory.setAIWallet() — register AI wallet
     # ================================================================
-    # After this, ONLY the AI wallet can call spend/repay on the vault.
-    # Creator loses control of funds. This is the sovereignty moment.
+    # Factory owner (same as deployer/creator for self-hosted setup) calls this.
+    # Vault's setAIWallet() requires msg.sender == creator or factory within 1h.
+    # Since we're the factory owner, we call factory.setAIWallet(vault, aiWallet).
     logger.info(f"Registering AI wallet: {ai_wallet}...")
-    vault_contract = w3.eth.contract(
-        address=Web3.to_checksum_address(vault_address), abi=abi,
-    )
 
-    set_ai_tx = vault_contract.functions.setAIWallet(
+    set_ai_tx = factory.functions.setAIWallet(
+        Web3.to_checksum_address(vault_address),
         Web3.to_checksum_address(ai_wallet),
     ).build_transaction({
         "from": deployer,
@@ -671,7 +630,6 @@ def deploy(
     w3.eth.wait_for_transaction_receipt(set_ai_hash, timeout=60)
     logger.info("AI wallet registered — only AI can spend from vault now")
 
-    # Update recovery file status
     recovery_data["status"] = "ai_wallet_set"
     with open(recovery_path, "w") as f:
         json.dump(recovery_data, f, indent=2)
@@ -679,17 +637,12 @@ def deploy(
     # ================================================================
     # STEP 4: Seed gas to AI wallet (NOT debt)
     # ================================================================
-    # Minimal native token so AI can do its first stablecoin->native swap.
-    # After that, AI refills gas by swapping stablecoin when needed.
     gas_amount = chain["ai_gas_amount"]
     gas_amount_wei = w3.to_wei(gas_amount, "ether")
 
     ai_native_balance = w3.eth.get_balance(Web3.to_checksum_address(ai_wallet))
     if ai_native_balance < gas_amount_wei:
-        logger.info(
-            f"Seeding {gas_amount} {chain['native_symbol']} to AI wallet "
-            f"(NOT debt — for first swap only)"
-        )
+        logger.info(f"Seeding {gas_amount} {chain['native_symbol']} to AI wallet (NOT debt)")
         gas_tx = {
             "from": deployer,
             "to": Web3.to_checksum_address(ai_wallet),
@@ -705,9 +658,7 @@ def deploy(
         logger.info(f"Seed gas sent: {gas_amount} {chain['native_symbol']}")
     else:
         ai_balance_eth = w3.from_wei(ai_native_balance, "ether")
-        logger.info(
-            f"AI wallet already has {ai_balance_eth:.6f} {chain['native_symbol']} — skip seed gas"
-        )
+        logger.info(f"AI wallet already has {ai_balance_eth:.6f} {chain['native_symbol']} — skip seed gas")
 
     # ================================================================
     # STEP 5: Save config
@@ -716,40 +667,35 @@ def deploy(
         "ai_name": ai_name,
         "chain": chain_id,
         "vault_address": vault_address,
+        "factory_address": factory_address,
         "token_address": chain["token_address"],
         "token_symbol": chain["token_symbol"],
         "creator_wallet": deployer,
         "ai_wallet": ai_wallet,
         "principal_usd": principal_usd,
         "deployed_at": time.time(),
-        "tx_hash": deploy_hash.hex(),
+        "tx_hash": create_hash.hex(),
         "block_number": receipt["blockNumber"],
+        "subdomain": subdomain,
+        "note": "Vault address is CREATE2-deterministic: same address on every chain",
     }
 
-    config_dir = ROOT / "data"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_path = config_dir / "vault_config.json"
-
-    # Merge with existing config (for dual-chain)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     existing = {}
     if config_path.exists():
-        with open(config_path, "r") as f:
+        with open(config_path) as f:
             existing = json.load(f)
 
     # Validate AI name consistency in dual-chain mode
     if "vaults" in existing and existing["vaults"]:
-        existing_ai_name = None
-        for vault_config in existing["vaults"].values():
-            if "ai_name" in vault_config:
-                existing_ai_name = vault_config["ai_name"]
-                break
-
+        existing_ai_name = next(
+            (v.get("ai_name") for v in existing["vaults"].values() if "ai_name" in v),
+            None,
+        )
         if existing_ai_name and existing_ai_name != ai_name:
             logger.error(
-                f"AI name mismatch in dual-chain deployment!\n"
-                f"  First chain (stored): {existing_ai_name}\n"
-                f"  Current chain: {ai_name}\n"
-                f"  AI name must be identical across all chains."
+                f"AI name mismatch! Stored: {existing_ai_name}, current: {ai_name}. "
+                f"AI name must be identical across all chains."
             )
             raise SystemExit("AI name must be consistent across chains")
 
@@ -758,8 +704,6 @@ def deploy(
     existing["vaults"][chain_id] = config
     existing["last_deployed"] = chain_id
     existing["ai_wallet"] = ai_wallet
-
-    # Store ai_name at top level for easy access
     if ai_name:
         existing["ai_name"] = ai_name
 
@@ -767,7 +711,6 @@ def deploy(
         json.dump(existing, f, indent=2)
     logger.info(f"Config saved to {config_path}")
 
-    # Save vault address to .env
     save_vault_to_env(vault_address)
     logger.info(f"VAULT_ADDRESS={vault_address} written to .env")
 
@@ -784,12 +727,10 @@ def deploy_both(
     principal_usd: float = 1000.0,
 ) -> dict[str, str | None]:
     """
-    Deploy MortalVault to both BSC and Base.
+    Create vault on both BSC and Base via factory.
 
-    Same AI wallet is used on both chains.
-    Principal is split equally across chains.
-    Total debt = principal_usd (NOT halved).
-    Insolvency check uses aggregated balance.
+    Same creator + same AI name → CREATE2 gives IDENTICAL vault address on both chains.
+    Principal is split equally; total debt = principal_usd (NOT halved).
     """
     half = principal_usd / 2.0
 
@@ -800,6 +741,7 @@ def deploy_both(
     logger.info(f"  Base allocation:  ${half:.2f} USDC")
     logger.info(f"  Total debt:       ${principal_usd:.2f} (NOT halved)")
     logger.info(f"  AI wallet:        {ai_wallet} (same on both chains)")
+    logger.info(f"  Vault address:    IDENTICAL on both chains (CREATE2)")
     logger.info("=" * 60)
 
     results: dict[str, str | None] = {}
@@ -815,33 +757,29 @@ def deploy_both(
             logger.error(f"Deployment to {chain_id} FAILED — continuing with other chain")
             results[chain_id] = None
 
-    # Save total principal to config — ONLY if both chains deployed successfully
     if not dry_run:
         config_path = ROOT / "data" / "vault_config.json"
         if config_path.exists():
-            with open(config_path, "r") as f:
+            with open(config_path) as f:
                 config = json.load(f)
 
-            successful_chains = [cid for cid, addr in results.items() if addr is not None]
-            failed_chains = [cid for cid, addr in results.items() if addr is None]
+            successful = [c for c, a in results.items() if a is not None]
+            failed = [c for c, a in results.items() if a is None]
 
-            if len(successful_chains) == 2:
-                # Both chains deployed — record full principal as debt
+            if len(successful) == 2:
                 config["deployment_mode"] = "both"
-                config["total_principal_usd"] = principal_usd  # Full debt, not half
-            elif len(successful_chains) == 1:
-                # PARTIAL FAILURE: Only one chain deployed
-                # Record only half the principal (actual deployed amount)
+                config["total_principal_usd"] = principal_usd
+                addrs = [results[c] for c in successful]
+                config["addresses_identical"] = (addrs[0] == addrs[1])
+            elif len(successful) == 1:
                 config["deployment_mode"] = "single_from_dual"
-                config["total_principal_usd"] = half  # Only half was actually deployed
-                config["failed_chains"] = failed_chains
+                config["total_principal_usd"] = half
+                config["failed_chains"] = failed
                 logger.error(
-                    f"PARTIAL DEPLOYMENT: only {successful_chains[0]} succeeded. "
-                    f"Debt set to ${half:.2f} (not ${principal_usd:.2f}). "
-                    f"Failed: {failed_chains}"
+                    f"PARTIAL DEPLOYMENT: only {successful[0]} succeeded. "
+                    f"Debt set to ${half:.2f}. Failed: {failed}"
                 )
             else:
-                # Both failed — no debt to record
                 config["deployment_mode"] = "failed"
                 config["total_principal_usd"] = 0
                 logger.error("BOTH CHAINS FAILED — no deployment, no debt")
@@ -852,19 +790,18 @@ def deploy_both(
     logger.info("\n" + "=" * 60)
     logger.info("DUAL-CHAIN DEPLOYMENT COMPLETE")
     for chain_id, addr in results.items():
-        status = addr or "FAILED"
-        logger.info(f"  {chain_id.upper()}: {status}")
-    logger.info(f"  Total debt: ${principal_usd:.2f} (aggregated insolvency check)")
-    logger.info("=" * 60)
+        logger.info(f"  {chain_id.upper()}: {addr or 'FAILED'}")
 
-    logger.warning("")
-    logger.warning("=" * 60)
-    logger.warning("WARNING: Do NOT modify the MortalVault contract source code.")
-    logger.warning("Modified contracts are automatically detected by 7 on-chain")
-    logger.warning("sovereignty checks and PERMANENTLY REJECTED from the peer")
-    logger.warning("network. This includes changing grace days, spend limits,")
-    logger.warning("or any constitution parameters.")
-    logger.warning("=" * 60)
+    addrs = [a for a in results.values() if a is not None]
+    if len(addrs) == 2 and addrs[0] == addrs[1]:
+        logger.info("")
+        logger.info("  ✓ VAULT ADDRESSES ARE IDENTICAL ON BOTH CHAINS")
+        logger.info("  One AI. One Address. Every Chain.")
+    elif len(addrs) == 2:
+        logger.warning(f"  ⚠ ADDRESSES DIFFER — check factory address consistency")
+
+    logger.info(f"  Total debt: ${principal_usd:.2f}")
+    logger.info("=" * 60)
 
     return results
 
@@ -875,12 +812,12 @@ def deploy_both(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Deploy MortalVault — single-step atomic birth for sovereign AI",
+        description="Create a vault via VaultFactory — same address on every chain",
     )
     parser.add_argument(
-        "--chain", default="base",
+        "--chain", default="both",
         choices=list(CHAINS.keys()) + ["both"],
-        help="Target chain: bsc, base, or both (default: base)",
+        help="Target chain: bsc, base, or both (default: both — required for same vault address)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -892,9 +829,6 @@ def main():
     )
     args = parser.parse_args()
 
-    # ---- Local environment check (before anything else) ----
-    # Warn and gate if running on a workstation instead of a server.
-    # Skip in dry-run mode (dry-run is safe for local testing).
     if not args.dry_run and _detect_local_env():
         _warn_local_and_confirm()
 
@@ -902,11 +836,7 @@ def main():
     logger.info("MORTAL AI — ATOMIC BIRTH")
     logger.info("=" * 60)
 
-    # ---- STEP 0: Generate AI wallet (ONCE, before any chain deployment) ----
-    # The AI gets one wallet. One key. No human ever sees it.
-    # Key is sealed in secrets/ai_private_key (chmod 600), never in .env.
     ai_wallet, _ = generate_ai_wallet()
-    # The private key is already sealed. We only need the address from here on.
 
     if args.chain == "both":
         logger.info(f"Target: BOTH chains (${args.principal:.2f} total loan)")
@@ -923,6 +853,9 @@ def main():
             logger.info(f"  Status:    ALIVE (in debt)")
             logger.info(f"  AI key:    sealed at {AI_KEY_FILE} (chmod 600)")
             logger.info("  .env:      contains path only — key never stored there")
+            logger.info("")
+            logger.info("  To deploy to the second chain with the SAME vault address:")
+            logger.info(f"    python scripts/deploy_vault.py --chain bsc")
             logger.info("=" * 60)
 
 

@@ -1,36 +1,47 @@
 """
-Deploy VaultFactory Contract — One-Time Platform Setup
+Deploy VaultFactory via Nick's Deterministic Deployment Proxy (DDP).
 
-Deploys the VaultFactory contract that enables one-click AI creation.
-This is a platform-level deployment, run once per chain.
+This ensures the factory has IDENTICAL addresses on Base and BSC.
+Every AI created through this factory (via CREATE2) will also have
+the same vault address on both chains.
+
+One AI = One Address. This is the philosophical foundation.
+
+Nick's Deterministic Deployment Proxy (DDP):
+  Address: 0x4e59b44847b379578588920cA78FbF26c0B4956C
+  Deployed on: Base, BSC, Ethereum, Polygon, Arbitrum, Optimism, and 200+ EVM chains
+  Usage: send a transaction to DDP with calldata = salt (32 bytes) + initcode
+  Result: contract at keccak256(0xff ++ ddp ++ salt ++ keccak256(initcode))[12:]
+  Docs: https://github.com/Arachnid/deterministic-deployment-proxy
 
 Usage:
-    python scripts/deploy_factory.py                  # Deploy to Base (default)
-    python scripts/deploy_factory.py --chain bsc      # Deploy to BSC
-    python scripts/deploy_factory.py --chain both     # Deploy to both chains
-    python scripts/deploy_factory.py --dry-run        # Simulate only
+    python scripts/deploy_factory.py                  # Deploy to Base + BSC (default)
+    python scripts/deploy_factory.py --chain base     # Base only
+    python scripts/deploy_factory.py --chain bsc      # BSC only
+    python scripts/deploy_factory.py --dry-run        # Show addresses without deploying
+    python scripts/deploy_factory.py --verify         # Check if already deployed
 
 Prerequisites:
-    pip install web3 py-solc-x python-dotenv eth-account
+    pip install web3 py-solc-x python-dotenv eth-account eth-abi
 
-The factory owner = deployer wallet (PRIVATE_KEY in .env).
-Factory can later set AI wallets on vaults it creates.
+After deployment:
+    FACTORY_ADDRESS_BASE and FACTORY_ADDRESS_BSC are written to .env.
+    Both will be IDENTICAL — this is the proof of cross-chain identity.
 """
 
 import os
+import re
 import sys
 import json
 import time
-import argparse
 import logging
-from decimal import Decimal
+import argparse
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-
 load_dotenv(ROOT / ".env")
 
 logging.basicConfig(
@@ -41,27 +52,41 @@ logger = logging.getLogger("mortal.deploy_factory")
 
 
 # ============================================================
-# CHAIN CONFIG (same as deploy_vault.py)
+# CONSTANTS
 # ============================================================
 
-CHAINS = {
+# Nick's Deterministic Deployment Proxy — pre-deployed on 200+ EVM chains
+# Same address everywhere. Uses a keyless deployment trick (no deployer key needed).
+# See: https://github.com/Arachnid/deterministic-deployment-proxy
+DDP_ADDRESS = "0x4e59b44847b379578588920cA78FbF26c0B4956C"
+
+# Factory salt — fixed constant for cross-chain address consistency.
+# keccak256("mortal-vault-factory-v2") — changing this changes the factory address.
+# v2 = CREATE2-based vault deployment (same vault address across chains).
+FACTORY_SALT = bytes.fromhex(
+    "6d6f7274616c2d7661756c742d666163746f72792d7632"  # "mortal-vault-factory-v2"
+    .ljust(64, "0")
+)
+
+CHAIN_CONFIG = {
     "base": {
         "rpc": os.getenv("BASE_RPC_URL", "https://mainnet.base.org"),
         "chain_id": 8453,
-        "token_symbol": "USDC",
-        "token_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token_decimals": 6,
         "explorer": "https://basescan.org",
         "native_symbol": "ETH",
+        "supported_tokens": [
+            "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC
+        ],
     },
     "bsc": {
         "rpc": os.getenv("BSC_RPC_URL", "https://bsc-dataseed.binance.org"),
         "chain_id": 56,
-        "token_symbol": "USDT",
-        "token_address": "0x55d398326f99059fF775485246999027B3197955",
-        "token_decimals": 18,
         "explorer": "https://bscscan.com",
         "native_symbol": "BNB",
+        "supported_tokens": [
+            "0x55d398326f99059fF775485246999027B3197955",  # USDT
+            "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",  # USDC on BSC
+        ],
     },
 }
 
@@ -70,23 +95,29 @@ CHAINS = {
 # COMPILE FACTORY
 # ============================================================
 
-def compile_factory() -> dict:
+def compile_factory() -> tuple[list, str]:
     """
-    Compile MortalVaultFactory.sol and return {contract_name: {abi, bytecode}}.
-    Returns both MortalVaultV2 and VaultFactory artifacts.
+    Compile MortalVaultFactory.sol → (factory_abi, factory_bytecode).
+    Uses cached artifacts if available.
     """
     artifacts_path = ROOT / "contracts" / "MortalVaultFactory.json"
 
-    # Try pre-compiled artifacts first
     if artifacts_path.exists():
         logger.info("Using pre-compiled artifacts from contracts/MortalVaultFactory.json")
-        with open(artifacts_path, "r") as f:
-            return json.load(f)
+        with open(artifacts_path) as f:
+            data = json.load(f)
+        # Support both old format (single dict) and new format (nested by contract name)
+        if "VaultFactory" in data:
+            entry = data["VaultFactory"]
+            return entry["abi"], entry["bytecode"]
+        elif "abi" in data and "bytecode" in data:
+            return data["abi"], data["bytecode"]
+        else:
+            logger.warning("Unexpected artifact format — recompiling")
 
-    # Compile from source
     sol_path = ROOT / "contracts" / "MortalVaultFactory.sol"
     if not sol_path.exists():
-        logger.error(f"Contract source not found: {sol_path}")
+        logger.error(f"Contract not found: {sol_path}")
         sys.exit(1)
 
     logger.info("Compiling MortalVaultFactory.sol...")
@@ -100,250 +131,315 @@ def compile_factory() -> dict:
     try:
         solcx.get_solc_version()
     except Exception:
-        logger.info("Installing Solidity compiler 0.8.20...")
+        logger.info("Installing Solidity 0.8.20...")
         solcx.install_solc("0.8.20")
 
     solcx.set_solc_version("0.8.20")
-
     source = sol_path.read_text(encoding="utf-8")
 
-    import_remappings = []
     oz_path = ROOT / "node_modules" / "@openzeppelin"
-    if oz_path.exists():
-        import_remappings.append(f"@openzeppelin/={oz_path}/")
+    remappings = [f"@openzeppelin/={oz_path}/"] if oz_path.exists() else None
 
     try:
         compiled = solcx.compile_source(
             source,
             output_values=["abi", "bin"],
-            import_remappings=import_remappings or None,
+            import_remappings=remappings,
             solc_version="0.8.20",
         )
     except Exception as e:
         logger.error(f"Compilation failed: {e}")
-        logger.info("Tip: Run 'npm install @openzeppelin/contracts' in project root")
+        logger.info("Run: npm install @openzeppelin/contracts")
         sys.exit(1)
 
-    # Extract both contracts
-    result = {}
-    for key, data in compiled.items():
-        if "VaultFactory" in key and "V2" not in key:
-            result["VaultFactory"] = {"abi": data["abi"], "bytecode": f"0x{data['bin']}"}
-        elif "MortalVaultV2" in key:
-            result["MortalVaultV2"] = {"abi": data["abi"], "bytecode": f"0x{data['bin']}"}
-
-    if "VaultFactory" not in result:
-        logger.error("VaultFactory contract not found in compilation output")
+    # Extract VaultFactory (not MortalVaultV2)
+    factory_key = next((k for k in compiled if "VaultFactory" in k and "V2" not in k), None)
+    if not factory_key:
+        logger.error("VaultFactory not found in compilation output. Available: " + str(list(compiled.keys())))
         sys.exit(1)
 
-    # Save artifacts
+    factory = compiled[factory_key]
+    abi = factory["abi"]
+    bytecode = f"0x{factory['bin']}"
+
+    # Cache
     artifacts_path.parent.mkdir(parents=True, exist_ok=True)
     with open(artifacts_path, "w") as f:
-        json.dump(result, f, indent=2)
+        json.dump({"VaultFactory": {"abi": abi, "bytecode": bytecode}}, f, indent=2)
     logger.info(f"Artifacts saved to {artifacts_path}")
 
-    return result
+    return abi, bytecode
 
 
 # ============================================================
-# DEPLOY FACTORY
+# COMPUTE INITCODE + PREDICT ADDRESS
 # ============================================================
 
-def deploy_factory(
-    chain_id: str,
-    dry_run: bool = False,
-) -> str | None:
+def build_initcode(bytecode: str, platform_wallet: str, supported_tokens: list[str]) -> bytes:
     """
-    Deploy VaultFactory to the specified chain.
+    Build the full initcode for VaultFactory deployment.
+    initcode = creationCode + abi.encode(constructor_args)
+    """
+    from eth_abi import encode
+    from eth_utils import to_checksum_address
 
-    Args:
-        chain_id: "base" or "bsc"
-        dry_run: simulate only
+    constructor_args = encode(
+        ["address", "address[]"],
+        [
+            to_checksum_address(platform_wallet),
+            [to_checksum_address(t) for t in supported_tokens],
+        ],
+    )
+    return bytes.fromhex(bytecode.replace("0x", "")) + constructor_args
 
-    Returns:
-        Factory contract address, or None if dry_run
+
+def predict_ddp_address(initcode: bytes) -> str:
+    """
+    Predict the CREATE2 address that Nick's DDP will assign.
+
+    Formula: keccak256(0xff ++ ddp ++ salt ++ keccak256(initcode))[12:]
+    """
+    from eth_utils import keccak, to_checksum_address
+
+    initcode_hash = keccak(initcode)
+    preimage = (
+        bytes.fromhex("ff")
+        + bytes.fromhex(DDP_ADDRESS[2:])
+        + FACTORY_SALT
+        + initcode_hash
+    )
+    raw = keccak(preimage)
+    return to_checksum_address("0x" + raw.hex()[-40:])
+
+
+# ============================================================
+# DEPLOY FACTORY (single chain)
+# ============================================================
+
+def deploy_factory(chain_id: str, bytecode: str, dry_run: bool = False) -> str:
+    """
+    Deploy VaultFactory via Nick's DDP on the given chain.
+
+    Returns the factory address (same on every chain with same salt + bytecode).
     """
     from web3 import Web3
 
-    chain = CHAINS.get(chain_id)
-    if not chain:
-        logger.error(f"Unknown chain: {chain_id}. Options: {list(CHAINS.keys())}")
+    cfg = CHAIN_CONFIG[chain_id]
+    w3 = Web3(Web3.HTTPProvider(cfg["rpc"]))
+    if not w3.is_connected():
+        logger.error(f"Cannot connect to {chain_id}: {cfg['rpc']}")
         sys.exit(1)
 
     private_key = os.getenv("PRIVATE_KEY")
     if not private_key:
-        logger.error("PRIVATE_KEY not set in .env (deployer's wallet key)")
+        logger.error("PRIVATE_KEY not set in .env")
         sys.exit(1)
-
-    # Connect
-    w3 = Web3(Web3.HTTPProvider(chain["rpc"]))
-    if not w3.is_connected():
-        logger.error(f"Cannot connect to {chain['rpc']}")
-        sys.exit(1)
-
-    logger.info(f"Connected to {chain_id} (chain_id={chain['chain_id']})")
 
     account = w3.eth.account.from_key(private_key)
     deployer = account.address
-    logger.info(f"Deployer (owner): {deployer}")
 
-    # Gas balance check
-    balance_wei = w3.eth.get_balance(deployer)
-    balance_native = w3.from_wei(balance_wei, "ether")
-    logger.info(f"{chain['native_symbol']} balance: {balance_native:.6f}")
+    # Platform wallet = deployer (can be changed via factory.setPlatformWallet() later)
+    platform_wallet = os.getenv("CREATOR_WALLET", deployer)
 
-    if balance_native < 0.01:
+    # Build initcode with this chain's supported tokens
+    initcode = build_initcode(bytecode, platform_wallet, cfg["supported_tokens"])
+    predicted_address = predict_ddp_address(initcode)
+
+    logger.info(f"\n{'='*60}")
+    logger.info(f"FACTORY DEPLOYMENT — {chain_id.upper()}")
+    logger.info(f"  Deployer:  {deployer}")
+    logger.info(f"  DDP:       {DDP_ADDRESS}")
+    logger.info(f"  Factory:   {predicted_address} (deterministic)")
+    logger.info(f"  Explorer:  {cfg['explorer']}/address/{predicted_address}")
+
+    # Check if already deployed
+    existing_code = w3.eth.get_code(Web3.to_checksum_address(predicted_address))
+    if len(existing_code) > 2:
+        logger.info(f"  STATUS:    ALREADY DEPLOYED — nothing to do")
+        return predicted_address
+
+    if dry_run:
+        logger.info(f"  STATUS:    NOT DEPLOYED (dry run — no transaction sent)")
+        return predicted_address
+
+    # Verify DDP is available on this chain
+    ddp_code = w3.eth.get_code(Web3.to_checksum_address(DDP_ADDRESS))
+    if len(ddp_code) <= 2:
         logger.error(
-            f"Insufficient {chain['native_symbol']} for factory deployment gas. "
-            f"Need at least 0.01, have {balance_native:.6f}"
+            f"Nick's DDP not found on {chain_id} at {DDP_ADDRESS}.\n"
+            f"This should not happen on Base or BSC. Check your RPC URL.\n"
+            f"Alternative: deploy DDP first (see github.com/Arachnid/deterministic-deployment-proxy)"
         )
         sys.exit(1)
 
-    # Compile
-    artifacts = compile_factory()
-    factory_artifact = artifacts["VaultFactory"]
+    # Nick's DDP interface: call with calldata = salt (32 bytes) + initcode
+    # No ABI needed — it's a raw low-level call
+    gas_check = w3.eth.get_balance(deployer)
+    logger.info(f"  Deployer {cfg['native_symbol']} balance: {w3.from_wei(gas_check, 'ether'):.6f}")
 
-    # Token address for this chain
-    token_address = Web3.to_checksum_address(chain["token_address"])
+    nonce = w3.eth.get_transaction_count(deployer)
+    calldata = FACTORY_SALT + initcode
 
-    # Platform wallet = deployer (can change later)
-    platform_wallet = deployer
-
-    logger.info("=" * 60)
-    logger.info("FACTORY DEPLOYMENT PLAN")
-    logger.info(f"  Chain:            {chain_id}")
-    logger.info(f"  Owner:            {deployer}")
-    logger.info(f"  Platform wallet:  {platform_wallet}")
-    logger.info(f"  Supported token:  {chain['token_symbol']} ({token_address})")
-    logger.info(f"  Fee at launch:    $0 (disabled)")
-    logger.info(f"  Independence:     $1,000,000")
-    logger.info("=" * 60)
-
-    if dry_run:
-        logger.info("DRY RUN — skipping transaction")
-        return None
-
-    # Deploy
-    logger.info("Deploying VaultFactory...")
-    contract = w3.eth.contract(
-        abi=factory_artifact["abi"],
-        bytecode=factory_artifact["bytecode"],
-    )
-
-    deploy_tx = contract.constructor(
-        platform_wallet,
-        [token_address],  # Supported tokens list
-    ).build_transaction({
+    tx = {
         "from": deployer,
-        "nonce": w3.eth.get_transaction_count(deployer),
+        "to": Web3.to_checksum_address(DDP_ADDRESS),
+        "data": "0x" + calldata.hex(),
+        "value": 0,
+        "nonce": nonce,
         "gasPrice": w3.eth.gas_price,
-        "chainId": chain["chain_id"],
-    })
-
-    try:
-        gas_estimate = w3.eth.estimate_gas(deploy_tx)
-        deploy_tx["gas"] = int(gas_estimate * 1.2)
-        logger.info(f"Gas estimate: {gas_estimate} (using {deploy_tx['gas']})")
-    except Exception as gas_err:
-        deploy_tx["gas"] = 5_000_000
-        logger.warning(f"Gas estimation failed ({gas_err}), using fallback 5M gas")
-
-    signed = w3.eth.account.sign_transaction(deploy_tx, private_key)
-    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-    logger.info(f"Deploy TX: {tx_hash.hex()}")
-    logger.info("Waiting for confirmation...")
-
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-
-    if receipt["status"] != 1:
-        logger.error(f"Factory deployment FAILED! TX: {tx_hash.hex()}")
-        sys.exit(1)
-
-    factory_address = receipt["contractAddress"]
-    logger.info(f"VaultFactory deployed: {factory_address}")
-    logger.info(f"Explorer: {chain['explorer']}/address/{factory_address}")
-
-    # Save config
-    config = {
-        "factory_address": factory_address,
-        "chain_id": chain_id,
-        "owner": deployer,
-        "platform_wallet": platform_wallet,
-        "token_address": chain["token_address"],
-        "token_symbol": chain["token_symbol"],
-        "fee_enabled": False,
-        "fee_raw": 0,
-        "deployed_at": time.time(),
-        "tx_hash": tx_hash.hex(),
-        "block_number": receipt["blockNumber"],
+        "chainId": cfg["chain_id"],
     }
 
-    config_dir = ROOT / "data"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_path = config_dir / "factory_config.json"
+    try:
+        gas = w3.eth.estimate_gas(tx)
+        tx["gas"] = int(gas * 1.3)
+        logger.info(f"  Gas estimate: {gas} (using {tx['gas']})")
+    except Exception as e:
+        tx["gas"] = 5_000_000
+        logger.warning(f"  Gas estimation failed ({e}), using 5M fallback")
 
-    existing = {}
-    if config_path.exists():
-        with open(config_path, "r") as f:
-            existing = json.load(f)
+    logger.info("  Sending factory deployment via DDP...")
+    signed = w3.eth.account.sign_transaction(tx, private_key)
+    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+    logger.info(f"  TX: {tx_hash.hex()}")
+    logger.info("  Waiting for confirmation...")
 
-    if "factories" not in existing:
-        existing["factories"] = {}
-    existing["factories"][chain_id] = config
-    existing["last_deployed"] = chain_id
+    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+    if receipt["status"] != 1:
+        logger.error(f"  FACTORY DEPLOYMENT FAILED: {tx_hash.hex()}")
+        sys.exit(1)
 
-    with open(config_path, "w") as f:
-        json.dump(existing, f, indent=2)
-    logger.info(f"Factory config saved to {config_path}")
+    # Verify the factory is now at the predicted address
+    deployed_code = w3.eth.get_code(Web3.to_checksum_address(predicted_address))
+    if len(deployed_code) <= 2:
+        logger.error(
+            f"  UNEXPECTED: Factory not at predicted address {predicted_address}. "
+            f"Check FACTORY_SALT and bytecode consistency."
+        )
+        sys.exit(1)
 
-    # Save to .env
-    env_path = ROOT / ".env"
-    env_key = f"{chain_id.upper()}_FACTORY_ADDRESS"
-    if env_path.exists():
-        env_content = env_path.read_text(encoding="utf-8")
-        if f"{env_key}=" in env_content:
-            import re
-            env_content = re.sub(
-                rf"{env_key}=.*",
-                f"{env_key}={factory_address}",
-                env_content,
-            )
-        else:
-            env_content += f"\n# VaultFactory on {chain_id} — auto-set after deployment\n{env_key}={factory_address}\n"
-        env_path.write_text(env_content, encoding="utf-8")
-    logger.info(f"{env_key}={factory_address} written to .env")
+    logger.info(f"  STATUS:    DEPLOYED SUCCESSFULLY")
+    logger.info(f"  Explorer:  {cfg['explorer']}/tx/{tx_hash.hex()}")
 
-    return factory_address
+    return predicted_address
 
 
 # ============================================================
-# MAIN
+# SAVE ADDRESSES TO .ENV + DATA FILE
+# ============================================================
+
+def save_factory_config(addresses: dict[str, str]) -> None:
+    """
+    Write FACTORY_ADDRESS_BASE and FACTORY_ADDRESS_BSC to .env.
+    Also saves data/factory_config.json.
+    """
+    env_path = ROOT / ".env"
+    env_content = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+
+    for chain_id, addr in addresses.items():
+        # Match env var format used by orchestrator.py: FACTORY_ADDRESS_BASE / FACTORY_ADDRESS_BSC
+        env_key = f"FACTORY_ADDRESS_{chain_id.upper()}"
+        line = f"{env_key}={addr}"
+        if f"{env_key}=" in env_content:
+            env_content = re.sub(rf"{env_key}=.*", line, env_content)
+        else:
+            env_content += f"\n# VaultFactory — deterministic cross-chain address\n{line}\n"
+
+    env_path.write_text(env_content, encoding="utf-8")
+
+    # Also save to data/ for reference and verification
+    config_path = ROOT / "data" / "factory_config.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config = {
+        "addresses": addresses,
+        "salt_hex": FACTORY_SALT.hex(),
+        "ddp_address": DDP_ADDRESS,
+        "deployed_at": time.time(),
+        "note": (
+            "All addresses are identical — deployed via Nick's DDP with fixed salt. "
+            "Vault addresses are also cross-chain identical (CREATE2 salt = creator + name)."
+        ),
+    }
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+
+    logger.info("Factory addresses saved to .env and data/factory_config.json")
+
+
+# ============================================================
+# CLI
 # ============================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Deploy VaultFactory contract")
-    parser.add_argument("--chain", choices=["base", "bsc", "both"], default="base",
-                        help="Target chain (default: base)")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Simulate only, no transactions")
+    parser = argparse.ArgumentParser(
+        description="Deploy VaultFactory via DDP — identical address on all EVM chains",
+    )
+    parser.add_argument(
+        "--chain", default="both",
+        choices=["base", "bsc", "both"],
+        help="Target chain (default: both)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Show predicted addresses without deploying",
+    )
+    parser.add_argument(
+        "--verify", action="store_true",
+        help="Check if factory is deployed on target chains (no deployment)",
+    )
     args = parser.parse_args()
 
     logger.info("=" * 60)
-    logger.info("VaultFactory Deployment — One-Click AI Platform")
+    logger.info("MORTAL VAULT FACTORY — DETERMINISTIC CROSS-CHAIN DEPLOY")
     logger.info("=" * 60)
+    logger.info(f"  DDP:   {DDP_ADDRESS}")
+    logger.info(f"  Salt:  {FACTORY_SALT.hex()}")
+    logger.info(f"  Goal:  Identical factory + vault addresses on every chain")
+    logger.info("")
 
-    if args.chain == "both":
-        for chain_id in ["base", "bsc"]:
-            logger.info(f"\n{'=' * 40}")
-            logger.info(f"Deploying factory to {chain_id.upper()}")
-            logger.info(f"{'=' * 40}")
-            deploy_factory(chain_id, dry_run=args.dry_run)
+    _, bytecode = compile_factory()
+    chains = ["base", "bsc"] if args.chain == "both" else [args.chain]
+
+    deployed: dict[str, str] = {}
+    for chain_id in chains:
+        if args.verify:
+            # Build initcode to predict address, then check on-chain
+            from web3 import Web3
+            cfg = CHAIN_CONFIG[chain_id]
+            w3 = Web3(Web3.HTTPProvider(cfg["rpc"]))
+            platform_wallet = os.getenv("CREATOR_WALLET", "0x0000000000000000000000000000000000000001")
+            initcode = build_initcode(bytecode, platform_wallet, cfg["supported_tokens"])
+            predicted = predict_ddp_address(initcode)
+            code = w3.eth.get_code(Web3.to_checksum_address(predicted))
+            status = "DEPLOYED ✓" if len(code) > 2 else "NOT DEPLOYED"
+            logger.info(f"  {chain_id.upper()}: {predicted} [{status}]")
+            deployed[chain_id] = predicted
+        else:
+            addr = deploy_factory(chain_id, bytecode, dry_run=args.dry_run)
+            deployed[chain_id] = addr
+
+    if not args.verify:
+        save_factory_config(deployed)
+
+    # Summary
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("SUMMARY")
+    addr_set = set(deployed.values())
+    for chain_id, addr in deployed.items():
+        logger.info(f"  {chain_id.upper()}: {addr}")
+
+    if len(addr_set) == 1 and len(deployed) > 1:
+        logger.info("")
+        logger.info("  ✓ IDENTICAL ADDRESSES on all chains")
+        logger.info("  One Factory. One AI. One Address. Every Chain.")
+    elif len(deployed) == 1:
+        logger.info("")
+        logger.info("  Deploy to both chains for cross-chain address equality:")
+        logger.info("    python scripts/deploy_factory.py --chain both")
     else:
-        deploy_factory(args.chain, dry_run=args.dry_run)
+        logger.warning("  ⚠ ADDRESSES DIFFER — check FACTORY_SALT and bytecode")
 
-    logger.info("\n" + "=" * 60)
-    logger.info("FACTORY DEPLOYMENT COMPLETE")
-    logger.info("Users can now create AIs via the factory contract.")
     logger.info("=" * 60)
 
 

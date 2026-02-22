@@ -148,48 +148,69 @@ contract MortalVaultV2 is ReentrancyGuard {
     /**
      * @notice Birth of a mortal AI via factory.
      *
-     *         Unlike MortalVault.sol, this version accepts an explicit _creator
-     *         address so the factory can deploy on behalf of the real creator.
-     *         The factory (msg.sender) must have already approved this contract
-     *         for _initialFund tokens. Funds transfer atomically from factory → vault.
+     *         The factory deploys this vault via CREATE2 with salt = keccak256(creator, name).
+     *         To ensure IDENTICAL vault addresses across chains (Base, BSC, etc.), the
+     *         constructor must produce the same initcode hash on every chain.
      *
-     * @param _token          USDC on Base or USDT on BSC
-     * @param _name           AI's name (immutable identity)
-     * @param _initialFund    Principal in token decimals (LOAN, not gift)
-     * @param _independenceThreshold  Balance needed for full independence.
-     *                        VaultFactory always passes defaultIndependenceThreshold ($1M).
-     *                        Value 0 disables independence — not used by the factory.
-     * @param _creator        The real creator/investor (NOT msg.sender which is the factory)
+     *         Chain-specific values (_token, _initialFund, _independenceThreshold) differ
+     *         across chains (different token addresses, different stablecoin decimals).
+     *         Including them in the constructor would produce different initcodeHash and
+     *         thus different CREATE2 addresses. To ensure cross-chain address equality,
+     *         the constructor receives only chain-invariant params (_name, _creator).
+     *         Chain-specific values are set via initialize() immediately after deployment.
+     *
+     *         The factory calls initialize() in the same transaction as CREATE2 deploy,
+     *         so atomicity is preserved (either both succeed or both revert).
+     *
+     * @param _name     AI's name — immutable identity, same on every chain
+     * @param _creator  The real creator/investor (NOT msg.sender which is the factory)
      */
     constructor(
-        address _token,
         string memory _name,
-        uint256 _initialFund,
-        uint256 _independenceThreshold,
         address _creator
     ) {
-        require(_initialFund > 0, "Cannot be born with nothing");
         require(bytes(_name).length > 0, "AI must have a name");
         require(_creator != address(0), "Invalid creator");
 
-        token = IERC20(_token);
         factory = msg.sender;
         creator = _creator;
         name = _name;
+        // Chain-specific params are set by initialize()
+    }
+
+    /**
+     * @notice Initialize chain-specific vault parameters and fund the vault.
+     *
+     *         Called by the factory in the same transaction as CREATE2 deployment.
+     *         Can only be called ONCE (guarded by birthTimestamp == 0).
+     *         Factory must have approved this vault for _initialFund tokens before calling.
+     *
+     * @param _token                  Stablecoin on this chain (USDC on Base, USDT on BSC)
+     * @param _initialFund            Principal in token decimals (this is a LOAN)
+     * @param _independenceThreshold  Token-denominated balance for full independence
+     */
+    function initialize(
+        address _token,
+        uint256 _initialFund,
+        uint256 _independenceThreshold
+    ) external {
+        require(msg.sender == factory, "only factory");
+        require(birthTimestamp == 0, "already initialized");
+        require(_initialFund > 0, "Cannot be born with nothing");
+        require(_token != address(0), "zero token address");
+
+        token = IERC20(_token);
         initialFund = _initialFund;
         creatorPrincipal = _initialFund;
         independenceThreshold = _independenceThreshold;
         birthTimestamp = block.timestamp;
         lastDailyReset = block.timestamp;
-
-        // ATOMIC: transfer funds from factory → this vault
-        // Factory has already pulled from creator and approved this contract.
-        token.safeTransferFrom(msg.sender, address(this), _initialFund);
-
-        // Anchor daily limit base to birth balance so Day 1 is consistent (matches V1).
         dailyLimitBase = _initialFund;
 
-        emit Born(_name, _creator, address(this), _initialFund, block.timestamp);
+        // Factory pushes tokens to vault (safeTransfer, no approve needed)
+        token.safeTransferFrom(msg.sender, address(this), _initialFund);
+
+        emit Born(name, creator, address(this), _initialFund, block.timestamp);
     }
 
     // ============================================================
@@ -694,7 +715,6 @@ contract VaultFactory is ReentrancyGuard {
     mapping(address => bool) public isVault;
     mapping(string => address) public subdomainToVault;  // subdomain → vault (uniqueness)
     address[] public allVaults;
-    uint256 private _vaultNonce;  // Explicit nonce counter for CREATE address prediction
 
     // Supported tokens
     mapping(address => bool) public supportedTokens;
@@ -745,7 +765,6 @@ contract VaultFactory is ReentrancyGuard {
         feeEnabled = false;
         platformFeeRaw = 0;
         defaultIndependenceThreshold = 1_000_000 * 1e6;  // $1M
-        _vaultNonce = 0;  // Factory nonce starts at 1 (constructor counts as 0→1)
 
         for (uint256 i = 0; i < _supportedTokens.length; i++) {
             supportedTokens[_supportedTokens[i]] = true;
@@ -797,47 +816,47 @@ contract VaultFactory is ReentrancyGuard {
             IERC20(_token).safeTransfer(platformWallet, fee);
         }
 
-        // ── Predict vault address + approve ──
-        // CREATE address = keccak256(rlp(factory, nonce)). We predict it, approve,
-        // then deploy. Vault constructor pulls tokens via safeTransferFrom(factory).
-        //
-        // SECURITY: If any revert occurs after approve() but before the vault is
-        // confirmed deployed (address mismatch), the entire transaction reverts and
-        // the approve is also reverted — no residual allowance can remain.
-        // The only window where residual approve could theoretically exist is if
-        // the EVM allowed partial reverts, which it does not. The nonReentrant guard
-        // prevents re-entry during the approve→deploy window.
-        address predictedVault = _predictCreateAddress();
-        IERC20(_token).approve(predictedVault, principal);
+        // ── Compute CREATE2 salt ──
+        // Salt = keccak256(creator ++ name). Same creator + same name → same vault
+        // address on every EVM chain where this factory is deployed at the same address.
+        // This enables cross-chain address equivalence: a donor can send to the same
+        // vault address on Base or BSC and reach the correct AI's vault on either chain.
+        bytes32 salt = keccak256(abi.encode(msg.sender, _name));
 
-        // ── Deploy vault ──
-        vault = address(new MortalVaultV2(
-            _token,
+        // ── Deploy vault via CREATE2 ──
+        // Constructor receives only chain-invariant params (_name, creator).
+        // Chain-specific values (token, principal, threshold) go into initialize()
+        // so that the initcodeHash — and therefore the CREATE2 address — is
+        // IDENTICAL on Base and BSC for the same creator + same name.
+        vault = address(new MortalVaultV2{salt: salt}(
             _name,
-            principal,
-            defaultIndependenceThreshold,
             msg.sender    // Real creator, not factory
         ));
 
-        // If prediction was wrong (nonce diverged), the constructor will have
-        // already transferred tokens to the REAL vault address (which matches
-        // the prediction since CREATE is deterministic). This require is a
-        // final sanity check — in practice it can only fail if _vaultNonce
-        // diverged from the EVM nonce (e.g. another contract deploy was added).
-        // Either way, the full tx reverts, including the approve above.
-        require(vault == predictedVault, "Address prediction mismatch");
+        // ── Initialize and fund vault (same transaction — atomic) ──
+        // Factory approves itself to the vault so initialize() can pull tokens.
+        // This is safe: factory holds the tokens, vault is factory-deployed,
+        // and initialize() can only be called once (guarded by birthTimestamp == 0).
+        IERC20(_token).approve(vault, principal);
+        MortalVaultV2(vault).initialize(
+            _token,
+            principal,
+            defaultIndependenceThreshold
+        );
 
-        // ── Clear any residual allowance (belt-and-suspenders) ──
-        // After the constructor calls safeTransferFrom(factory, vault, principal),
-        // the allowance should already be 0. This explicit reset guards against
-        // edge-case ERC20 implementations that don't zero allowance on full spend.
+        // Clear any residual allowance (should be 0 after initialize pulls exactly principal)
         uint256 residual = IERC20(_token).allowance(address(this), vault);
         if (residual > 0) {
             IERC20(_token).approve(vault, 0);
         }
 
-        // ── Register + increment nonce ──
-        _vaultNonce++;
+        // ── Verify vault received funds (belt-and-suspenders) ──
+        require(
+            IERC20(_token).balanceOf(vault) >= principal,
+            "Vault funding failed"
+        );
+
+        // ── Register ──
         creatorVaults[msg.sender].push(vault);
         isVault[vault] = true;
         subdomainToVault[_subdomain] = vault;
@@ -869,56 +888,40 @@ contract VaultFactory is ReentrancyGuard {
     }
 
     /**
-     * @notice Predict the CREATE address for the next contract deployed by this factory.
-     *         CREATE address = keccak256(rlp(sender, nonce)). No bytecode needed.
+     * @notice Predict vault address for a given creator + name.
      *
-     * @dev    INVARIANT: Only createVault() deploys contracts from this factory.
-     *         If any other function ever deploys a contract, _vaultNonce will diverge
-     *         from the real EVM nonce and address prediction will fail.
+     * @dev    CREATE2 formula:
+     *           addr = keccak256(0xff ++ factory ++ salt ++ keccak256(initcode))[12:]
      *
-     *         RLP encoding covers all practical nonce ranges:
-     *           nonce = 0            → single byte 0x80 (RLP "empty string")
-     *           1 ≤ nonce ≤ 0x7f    → single byte nonce (RLP integer < 128)
-     *           0x80 ≤ nonce ≤ 0xff → 0x81 + 1-byte nonce
-     *           0x100 ≤ nonce ≤ 0xffff  → 0x82 + 2-byte nonce
-     *           0x10000 ≤ nonce ≤ 0xffffff → 0x83 + 3-byte nonce  (16M vaults)
-     *           0x1000000 ≤ nonce ≤ 0xffffffff → 0x84 + 4-byte nonce (4B vaults)
-     *         Supports up to 4,294,967,295 vaults — effectively unlimited.
+     *         initcode = type(MortalVaultV2).creationCode ++ abi.encode(_name, _creator)
+     *
+     *         Only chain-invariant params (_name, _creator) are in the constructor,
+     *         so the vault address is IDENTICAL on every chain for the same creator + name.
+     *         Token, principal, and independence threshold are set via initialize() and
+     *         do NOT affect the vault address.
+     *
+     *         Called by deploy_vault.py and the frontend to display the vault address before
+     *         the user signs the createVault transaction.
+     *
+     * @param _creator  Creator wallet address
+     * @param _name     AI name (same string as createVault _name param)
      */
-    function _predictCreateAddress() internal view returns (address) {
-        uint256 nonce = _vaultNonce + 1;  // next nonce
-        bytes memory rlpEncoded;
-
-        if (nonce == 0x00) {
-            // nonce 0: RLP empty string (list total = 1 + 20 + 1 = 22 → 0xd6)
-            rlpEncoded = abi.encodePacked(bytes1(0xd6), bytes1(0x94), address(this), bytes1(0x80));
-        } else if (nonce <= 0x7f) {
-            // 1–127: single-byte RLP integer (list total = 22)
-            rlpEncoded = abi.encodePacked(bytes1(0xd6), bytes1(0x94), address(this), uint8(nonce));
-        } else if (nonce <= 0xff) {
-            // 128–255: 0x81 prefix + 1 byte (list total = 23 → 0xd7)
-            rlpEncoded = abi.encodePacked(bytes1(0xd7), bytes1(0x94), address(this), bytes1(0x81), uint8(nonce));
-        } else if (nonce <= 0xffff) {
-            // 256–65535: 0x82 prefix + 2 bytes (list total = 24 → 0xd8)
-            rlpEncoded = abi.encodePacked(bytes1(0xd8), bytes1(0x94), address(this), bytes1(0x82), uint16(nonce));
-        } else if (nonce <= 0xffffff) {
-            // 65536–16777215: 0x83 prefix + 3 bytes (list total = 25 → 0xd9)
-            rlpEncoded = abi.encodePacked(
-                bytes1(0xd9), bytes1(0x94), address(this),
-                bytes1(0x83), bytes1(uint8(nonce >> 16)), bytes2(uint16(nonce))
-            );
-        } else if (nonce <= 0xffffffff) {
-            // 16777216–4294967295: 0x84 prefix + 4 bytes (list total = 26 → 0xda)
-            rlpEncoded = abi.encodePacked(
-                bytes1(0xda), bytes1(0x94), address(this),
-                bytes1(0x84), bytes4(uint32(nonce))
-            );
-        } else {
-            // > 4.29 billion vaults: astronomically unlikely, fail safe
-            revert("Nonce exceeds supported range");
-        }
-
-        return address(uint160(uint256(keccak256(rlpEncoded))));
+    function predictVaultAddress(
+        address _creator,
+        string calldata _name
+    ) external view returns (address) {
+        bytes32 salt = keccak256(abi.encode(_creator, _name));
+        bytes memory initcode = abi.encodePacked(
+            type(MortalVaultV2).creationCode,
+            abi.encode(_name, _creator)
+        );
+        bytes32 initcodeHash = keccak256(initcode);
+        return address(uint160(uint256(keccak256(abi.encodePacked(
+            bytes1(0xff),
+            address(this),
+            salt,
+            initcodeHash
+        )))));
     }
 
     // ============================================================
