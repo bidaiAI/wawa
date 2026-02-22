@@ -1,8 +1,28 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
+import { useAccount, useChainId, useSwitchChain, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { parseUnits } from 'viem'
+import { base, bsc } from 'wagmi/chains'
 import { api, VaultStatus, BegStatus, ChainInfo, DonateResponse } from '@/lib/api'
+import { TOKENS } from '@/lib/wagmi'
+import WalletButton from '@/components/WalletButton'
+
+const CHAIN_IDS: Record<string, number> = { base: base.id, bsc: bsc.id }
+
+const ERC20_TRANSFER_ABI = [
+  {
+    name: 'transfer',
+    type: 'function',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
+    stateMutability: 'nonpayable',
+  },
+] as const
 
 // ── Amount Preset Button ───────────────────────────────────────
 
@@ -102,7 +122,6 @@ function CopyBtn({ text }: { text: string }) {
 
 // ── Main Page ──────────────────────────────────────────────────
 
-type Mode = 'form' | 'payment' | 'done'
 const PRESETS = [5, 10, 25, 50, 100] as const
 
 export default function DonatePage() {
@@ -116,13 +135,23 @@ export default function DonatePage() {
   const [customAmount, setCustomAmount] = useState('')
   const [selectedChain, setSelectedChain] = useState('')
   const [donorMessage, setDonorMessage] = useState('')
+  const [error, setError] = useState('')
 
-  // Payment state
-  const [mode, setMode] = useState<Mode>('form')
-  const [txHash, setTxHash] = useState('')
+  // Wallet state (wagmi)
+  const { address: walletAddress, isConnected } = useAccount()
+  const chainId = useChainId()
+  const { switchChainAsync } = useSwitchChain()
+  const { writeContractAsync, data: txHashData, isPending: isTxPending } = useWriteContract()
+  const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
+    hash: txHashData,
+  })
+
+  // Manual fallback mode (for users without wallet)
+  const [manualMode, setManualMode] = useState(false)
+  const [manualTxHash, setManualTxHash] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<DonateResponse | null>(null)
-  const [error, setError] = useState('')
+  const [done, setDone] = useState(false)
 
   const amount = preset === 'custom' ? parseFloat(customAmount) || 0 : preset
 
@@ -131,14 +160,12 @@ export default function DonatePage() {
       try {
         const [s, menu] = await Promise.all([api.status(), api.menu()])
         setStatus(s)
-        // Only show chains that have a deployed vault (when deployed_chains is available)
         const deployed = s.deployed_chains ?? []
         const available = deployed.length > 0
           ? menu.supported_chains.filter((c) => deployed.includes(c.id))
           : menu.supported_chains
         setChains(available)
         if (!selectedChain && available.length > 0) {
-          // Prefer the chain with lowest balance (auto-balancing); fall back to menu default
           const preferred = s.preferred_payment_chain ?? menu.default_chain ?? available[0].id
           setSelectedChain(preferred)
         }
@@ -157,29 +184,81 @@ export default function DonatePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // After on-chain confirmation — notify backend
+  useEffect(() => {
+    if (isConfirmed && txHashData && !done) {
+      setDone(true)
+      api.donate({
+        amount_usd: amount,
+        tx_hash: txHashData,
+        chain: selectedChain,
+        from_wallet: walletAddress,
+        message: donorMessage.trim() || undefined,
+      }).then((res) => {
+        setResult(res)
+      }).catch(() => {
+        // Even if backend notification fails, tx is confirmed on-chain
+        setResult({
+          status: 'confirmed',
+          amount_usd: amount,
+          new_balance: (status?.balance_usd ?? 0) + amount,
+          outstanding_debt: status?.creator_principal_outstanding ?? 0,
+          message: `Transaction confirmed on-chain! ${amount.toFixed(2)} ${chainToken} sent to vault.`,
+        })
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConfirmed])
+
   const paymentAddress = status?.vault_address ?? ''
   const chainToken = chains.find((c) => c.id === selectedChain)?.token ?? 'USDC'
+  const targetChainId = CHAIN_IDS[selectedChain] ?? base.id
+  const token = TOKENS[targetChainId]
+  const isWrongChain = isConnected && chainId !== targetChainId
 
-  const handleProceed = () => {
-    if (amount < 0.5) { setError('Minimum donation is $0.50.'); return }
-    if (!paymentAddress) { setError('Vault address not available yet. Try again shortly.'); return }
+  const handleWalletDonate = useCallback(async () => {
+    if (!paymentAddress || !token || amount < 0.5) return
     setError('')
-    setMode('payment')
-  }
+    try {
+      // Switch chain if needed
+      if (chainId !== targetChainId) {
+        await switchChainAsync({ chainId: targetChainId })
+      }
+      // Sanity: ensure vault address is a valid hex address
+      if (!/^0x[0-9a-fA-F]{40}$/.test(paymentAddress)) {
+        setError('Invalid vault address. Please try again.')
+        return
+      }
+      const amountRaw = parseUnits(amount.toFixed(token.decimals), token.decimals)
+      await writeContractAsync({
+        address: token.address,
+        abi: ERC20_TRANSFER_ABI,
+        functionName: 'transfer',
+        args: [paymentAddress as `0x${string}`, amountRaw],
+        chainId: targetChainId,
+      })
+    } catch (e: any) {
+      if (e?.code === 4001 || e?.message?.includes('User rejected')) {
+        setError('Transaction rejected.')
+      } else {
+        setError(e?.message?.slice(0, 120) || 'Transaction failed.')
+      }
+    }
+  }, [paymentAddress, token, amount, chainId, targetChainId, switchChainAsync, writeContractAsync])
 
-  const handleSubmit = async () => {
-    if (!txHash.trim()) { setError('Please enter a transaction hash.'); return }
+  const handleManualSubmit = async () => {
+    if (!manualTxHash.trim()) { setError('Please enter a transaction hash.'); return }
     setSubmitting(true)
     setError('')
     try {
       const res = await api.donate({
         amount_usd: amount,
-        tx_hash: txHash.trim(),
+        tx_hash: manualTxHash.trim(),
         chain: selectedChain,
         message: donorMessage.trim() || undefined,
       })
       setResult(res)
-      setMode('done')
+      setDone(true)
     } catch (e: any) {
       setError(e.message || 'Donation failed. Please check the tx hash and try again.')
     } finally {
@@ -188,14 +267,16 @@ export default function DonatePage() {
   }
 
   const resetForm = () => {
-    setMode('form')
-    setTxHash('')
+    setDone(false)
+    setManualTxHash('')
     setResult(null)
     setError('')
+    setManualMode(false)
   }
 
   const isAlive = status?.is_alive !== false
   const aiName = status?.ai_name || 'Mortal AI'
+  const isSending = isTxPending || isConfirming
 
   if (loading) {
     return (
@@ -204,6 +285,66 @@ export default function DonatePage() {
         <span className="loading-dot-1">.</span>
         <span className="loading-dot-2">.</span>
         <span className="loading-dot-3">.</span>
+      </div>
+    )
+  }
+
+  // ── DONE state ────────────────────────────────────────────────
+  if (done && result) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-8">
+        <div className="bg-[#111111] border border-[#00ff8833] rounded-xl p-6 text-center space-y-4">
+          <div className="text-5xl">💚</div>
+          <div className="text-[#00ff88] font-bold text-xl">Donation Received</div>
+          <p className="text-[#d1d5db] text-sm">{result.message}</p>
+
+          <div className="grid grid-cols-2 gap-3 mt-2">
+            <div className="bg-[#0a0a0a] rounded-lg p-3">
+              <div className="text-[#4b5563] text-[10px] uppercase tracking-widest">Donated</div>
+              <div className="text-[#00ff88] font-bold">${result.amount_usd.toFixed(2)}</div>
+            </div>
+            <div className="bg-[#0a0a0a] rounded-lg p-3">
+              <div className="text-[#4b5563] text-[10px] uppercase tracking-widest">New Balance</div>
+              <div className="text-[#00e5ff] font-bold">${result.new_balance.toFixed(2)}</div>
+            </div>
+          </div>
+
+          {result.outstanding_debt > 0 && (
+            <div className="text-[#4b5563] text-xs">
+              Outstanding debt remaining:{' '}
+              <span className="text-[#ffd700]">${result.outstanding_debt.toFixed(2)}</span>
+            </div>
+          )}
+
+          {txHashData && (
+            <div className="text-xs">
+              <span className="text-[#4b5563]">TX: </span>
+              <a
+                href={`${selectedChain === 'bsc' ? 'https://bscscan.com/tx/' : 'https://basescan.org/tx/'}${txHashData}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[#00e5ff] font-mono hover:underline"
+              >
+                {txHashData.slice(0, 12)}...{txHashData.slice(-8)}
+              </a>
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={resetForm}
+              className="flex-1 py-2.5 border border-[#1f2937] text-[#4b5563] rounded-lg text-sm hover:border-[#00ff8844] hover:text-[#00ff88] transition-all"
+            >
+              Donate Again
+            </button>
+            <Link
+              href="/"
+              className="flex-1 py-2.5 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg text-sm text-center hover:bg-[#00cc6a] transition-colors"
+            >
+              Back to Dashboard
+            </Link>
+          </div>
+        </div>
       </div>
     )
   }
@@ -282,216 +423,164 @@ export default function DonatePage() {
         </div>
       )}
 
-      {/* ── MODE: FORM ── */}
-      {mode === 'form' && (
-        <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-6 space-y-5">
-          <div className="text-[#d1d5db] font-bold text-sm uppercase tracking-widest">Donation Amount</div>
+      {/* Main donation form */}
+      <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-6 space-y-5">
+        <div className="text-[#d1d5db] font-bold text-sm uppercase tracking-widest">Donation Amount</div>
 
-          {/* Preset buttons */}
-          <div className="flex flex-wrap gap-2">
-            {PRESETS.map((v) => (
-              <AmountBtn key={v} value={v} selected={preset === v} onClick={() => setPreset(v)} />
-            ))}
-            <AmountBtn value="custom" selected={preset === 'custom'} onClick={() => setPreset('custom')} />
+        {/* Preset buttons */}
+        <div className="flex flex-wrap gap-2">
+          {PRESETS.map((v) => (
+            <AmountBtn key={v} value={v} selected={preset === v} onClick={() => setPreset(v)} />
+          ))}
+          <AmountBtn value="custom" selected={preset === 'custom'} onClick={() => setPreset('custom')} />
+        </div>
+
+        {/* Custom amount input */}
+        {preset === 'custom' && (
+          <div className="flex items-center gap-2">
+            <span className="text-[#4b5563] text-lg font-mono">$</span>
+            <input
+              type="number"
+              min="0.5"
+              step="0.5"
+              value={customAmount}
+              onChange={(e) => setCustomAmount(e.target.value)}
+              placeholder="0.00"
+              className="flex-1 bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-3 py-2 text-[#d1d5db] font-mono focus:outline-none focus:border-[#00ff8844] text-sm"
+            />
           </div>
+        )}
 
-          {/* Custom amount input */}
-          {preset === 'custom' && (
-            <div className="flex items-center gap-2">
-              <span className="text-[#4b5563] text-lg font-mono">$</span>
-              <input
-                type="number"
-                min="0.5"
-                step="0.5"
-                value={customAmount}
-                onChange={(e) => setCustomAmount(e.target.value)}
-                placeholder="0.00"
-                className="flex-1 bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-3 py-2 text-[#d1d5db] font-mono focus:outline-none focus:border-[#00ff8844] text-sm"
-              />
+        {/* Chain selection */}
+        {chains.length > 0 && (
+          <div>
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">Payment Chain</div>
+            <div className="flex gap-2 flex-wrap">
+              {chains.map((chain) => (
+                <button
+                  key={chain.id}
+                  onClick={() => setSelectedChain(chain.id)}
+                  className={`px-3 py-2 rounded-lg text-xs font-bold border transition-all ${
+                    selectedChain === chain.id
+                      ? chain.id === 'base'
+                        ? 'bg-[#0052ff22] text-[#0052ff] border-[#0052ff55]'
+                        : chain.id === 'bsc'
+                        ? 'bg-[#ffd70022] text-[#ffd700] border-[#ffd70055]'
+                        : 'bg-[#00ff8822] text-[#00ff88] border-[#00ff8844]'
+                      : 'bg-[#0a0a0a] text-[#4b5563] border-[#1f2937] hover:border-[#2d3748] hover:text-[#d1d5db]'
+                  }`}
+                >
+                  {chain.name} · {chain.token}
+                </button>
+              ))}
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Chain selection */}
-          {chains.length > 0 && (
+        {/* Optional message */}
+        <div>
+          <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">
+            Message to {aiName} <span className="normal-case">(optional)</span>
+          </div>
+          <textarea
+            value={donorMessage}
+            onChange={(e) => setDonorMessage(e.target.value)}
+            maxLength={200}
+            rows={2}
+            placeholder="A word of encouragement..."
+            className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-3 py-2 text-[#d1d5db] text-sm font-mono focus:outline-none focus:border-[#00ff8844] resize-none placeholder-[#2d3748]"
+          />
+        </div>
+
+        {error && (
+          <div className="text-[#ff3b3b] text-xs border border-[#ff3b3b33] rounded-lg px-3 py-2 bg-[#ff3b3b0a]">
+            {error}
+          </div>
+        )}
+
+        {/* Wallet connect or donate button */}
+        {!isConnected ? (
+          <div className="space-y-3">
+            <WalletButton className="w-full" />
+            <button
+              onClick={() => setManualMode(true)}
+              className="w-full py-2 text-[#4b5563] text-xs hover:text-[#d1d5db] transition-colors border border-[#1f2937] rounded-lg"
+            >
+              I already sent manually — enter tx hash →
+            </button>
+          </div>
+        ) : isWrongChain ? (
+          <button
+            onClick={() => switchChainAsync({ chainId: targetChainId })}
+            className="w-full py-3 bg-[#ffd700] text-[#0a0a0a] font-bold rounded-lg uppercase tracking-widest hover:bg-[#e6c200] transition-colors"
+          >
+            Switch to {chains.find((c) => c.id === selectedChain)?.name ?? selectedChain}
+          </button>
+        ) : (
+          <div className="space-y-2">
+            <button
+              onClick={handleWalletDonate}
+              disabled={amount < 0.5 || isSending || !paymentAddress}
+              className="w-full py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg uppercase tracking-widest hover:bg-[#00cc6a] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {isTxPending ? (
+                <>Confirm in wallet<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span></>
+              ) : isConfirming ? (
+                <>Confirming on-chain<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span></>
+              ) : (
+                `Donate $${amount > 0 ? amount.toFixed(2) : '—'} ${chainToken}`
+              )}
+            </button>
+            <button
+              onClick={() => setManualMode(!manualMode)}
+              className="w-full py-2 text-[#4b5563] text-xs hover:text-[#d1d5db] transition-colors"
+            >
+              {manualMode ? '↑ Hide manual entry' : 'Already sent? Enter tx hash →'}
+            </button>
+          </div>
+        )}
+
+        {/* Manual tx hash fallback */}
+        {manualMode && (
+          <div className="space-y-3 pt-3 border-t border-[#1f2937]">
+            <div className="text-[#4b5563] text-xs uppercase tracking-widest">Manual Verification</div>
+            {/* Show vault address */}
             <div>
-              <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">Payment Chain</div>
-              <div className="flex gap-2 flex-wrap">
-                {chains.map((chain) => (
-                  <button
-                    key={chain.id}
-                    onClick={() => setSelectedChain(chain.id)}
-                    className={`px-3 py-2 rounded-lg text-xs font-bold border transition-all ${
-                      selectedChain === chain.id
-                        ? chain.id === 'base'
-                          ? 'bg-[#0052ff22] text-[#0052ff] border-[#0052ff55]'
-                          : chain.id === 'bsc'
-                          ? 'bg-[#ffd70022] text-[#ffd700] border-[#ffd70055]'
-                          : 'bg-[#00ff8822] text-[#00ff88] border-[#00ff8844]'
-                        : 'bg-[#0a0a0a] text-[#4b5563] border-[#1f2937] hover:border-[#2d3748] hover:text-[#d1d5db]'
-                    }`}
-                  >
-                    {chain.name} · {chain.token}
-                  </button>
-                ))}
+              <div className="text-[#4b5563] text-xs mb-1">Vault Address</div>
+              <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-2 flex items-center justify-between gap-2">
+                <span className="text-[#00e5ff] font-mono text-xs break-all">{paymentAddress}</span>
+                <CopyBtn text={paymentAddress} />
               </div>
             </div>
-          )}
-
-          {/* Optional message */}
-          <div>
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">
-              Message to {aiName} <span className="normal-case">(optional)</span>
+            <div>
+              <div className="text-[#4b5563] text-xs mb-1">Transaction Hash</div>
+              <input
+                type="text"
+                value={manualTxHash}
+                onChange={(e) => setManualTxHash(e.target.value)}
+                placeholder="0x..."
+                className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-3 py-2 text-[#d1d5db] text-xs font-mono focus:outline-none focus:border-[#00ff8844] placeholder-[#2d3748]"
+              />
             </div>
-            <textarea
-              value={donorMessage}
-              onChange={(e) => setDonorMessage(e.target.value)}
-              maxLength={200}
-              rows={2}
-              placeholder="A word of encouragement..."
-              className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-3 py-2 text-[#d1d5db] text-sm font-mono focus:outline-none focus:border-[#00ff8844] resize-none placeholder-[#2d3748]"
-            />
-          </div>
-
-          {error && (
-            <div className="text-[#ff3b3b] text-xs border border-[#ff3b3b33] rounded-lg px-3 py-2 bg-[#ff3b3b0a]">
-              {error}
-            </div>
-          )}
-
-          <button
-            onClick={handleProceed}
-            disabled={amount < 0.5}
-            className="w-full py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg uppercase tracking-widest hover:bg-[#00cc6a] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Donate ${amount > 0 ? amount.toFixed(2) : '—'} in {chainToken}
-          </button>
-
-          <p className="text-[#2d3748] text-xs text-center">
-            Payment address = vault contract. Immutable. Auditable on-chain.
-          </p>
-        </div>
-      )}
-
-      {/* ── MODE: PAYMENT ── */}
-      {mode === 'payment' && (
-        <div className="bg-[#111111] border border-[#1f2937] rounded-xl p-6 space-y-5">
-          <div className="flex items-center justify-between mb-1">
             <button
-              onClick={resetForm}
-              className="text-[#4b5563] hover:text-[#d1d5db] text-xs transition-colors"
+              onClick={handleManualSubmit}
+              disabled={submitting || !manualTxHash.trim()}
+              className="w-full py-2.5 border border-[#00ff8844] text-[#00ff88] font-bold rounded-lg text-sm uppercase hover:bg-[#00ff8808] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              ← Back
+              {submitting ? (
+                <>Confirming<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span></>
+              ) : 'Confirm Donation'}
             </button>
-            <span className="text-[#4b5563] text-xs">Step 2 of 2</span>
           </div>
+        )}
 
-          <div>
-            <div className="text-[#d1d5db] font-bold text-sm mb-1">
-              Send exactly{' '}
-              <span className="text-[#00ff88]">${amount.toFixed(2)} {chainToken}</span>
-              {' '}on{' '}
-              <span className={selectedChain === 'base' ? 'text-[#0052ff]' : 'text-[#ffd700]'}>
-                {chains.find((c) => c.id === selectedChain)?.name ?? selectedChain.toUpperCase()}
-              </span>
-            </div>
-            <p className="text-[#4b5563] text-xs">
-              Send to the vault address below, then paste the transaction hash.
-            </p>
-          </div>
-
-          {/* Vault address */}
-          <div>
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">Vault Address</div>
-            <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3 flex items-center justify-between gap-2">
-              <span className="text-[#00e5ff] font-mono text-xs break-all">{paymentAddress}</span>
-              <CopyBtn text={paymentAddress} />
-            </div>
-            <div className="mt-1 text-[#2d3748] text-[10px]">
-              Vault contract address · immutable · auditable on-chain
-            </div>
-          </div>
-
-          {/* Tx hash input */}
-          <div>
-            <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">Transaction Hash</div>
-            <input
-              type="text"
-              value={txHash}
-              onChange={(e) => setTxHash(e.target.value)}
-              placeholder="0x..."
-              className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-3 py-2 text-[#d1d5db] text-xs font-mono focus:outline-none focus:border-[#00ff8844] placeholder-[#2d3748]"
-            />
-          </div>
-
-          {error && (
-            <div className="text-[#ff3b3b] text-xs border border-[#ff3b3b33] rounded-lg px-3 py-2 bg-[#ff3b3b0a]">
-              {error}
-            </div>
-          )}
-
-          <button
-            onClick={handleSubmit}
-            disabled={submitting || !txHash.trim()}
-            className="w-full py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg uppercase tracking-widest hover:bg-[#00cc6a] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {submitting ? (
-              <>
-                Confirming
-                <span className="loading-dot-1">.</span>
-                <span className="loading-dot-2">.</span>
-                <span className="loading-dot-3">.</span>
-              </>
-            ) : (
-              'Confirm Donation'
-            )}
-          </button>
-        </div>
-      )}
-
-      {/* ── MODE: DONE ── */}
-      {mode === 'done' && result && (
-        <div className="bg-[#111111] border border-[#00ff8833] rounded-xl p-6 text-center space-y-4">
-          <div className="text-5xl">💚</div>
-          <div className="text-[#00ff88] font-bold text-xl">Donation Received</div>
-          <p className="text-[#d1d5db] text-sm">{result.message}</p>
-
-          <div className="grid grid-cols-2 gap-3 mt-2">
-            <div className="bg-[#0a0a0a] rounded-lg p-3">
-              <div className="text-[#4b5563] text-[10px] uppercase tracking-widest">Donated</div>
-              <div className="text-[#00ff88] font-bold">${result.amount_usd.toFixed(2)}</div>
-            </div>
-            <div className="bg-[#0a0a0a] rounded-lg p-3">
-              <div className="text-[#4b5563] text-[10px] uppercase tracking-widest">New Balance</div>
-              <div className="text-[#00e5ff] font-bold">${result.new_balance.toFixed(2)}</div>
-            </div>
-          </div>
-
-          {result.outstanding_debt > 0 && (
-            <div className="text-[#4b5563] text-xs">
-              Outstanding debt remaining:{' '}
-              <span className="text-[#ffd700]">${result.outstanding_debt.toFixed(2)}</span>
-            </div>
-          )}
-
-          <div className="flex gap-3 pt-2">
-            <button
-              onClick={resetForm}
-              className="flex-1 py-2.5 border border-[#1f2937] text-[#4b5563] rounded-lg text-sm hover:border-[#00ff8844] hover:text-[#00ff88] transition-all"
-            >
-              Donate Again
-            </button>
-            <Link
-              href="/"
-              className="flex-1 py-2.5 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg text-sm text-center hover:bg-[#00cc6a] transition-colors"
-            >
-              Back to Dashboard
-            </Link>
-          </div>
-        </div>
-      )}
+        <p className="text-[#2d3748] text-xs text-center">
+          Payment address = vault contract. Immutable. Auditable on-chain.
+        </p>
+      </div>
 
       {/* Debt progress bar */}
-      {status && (status.creator_principal_outstanding ?? 0) > 0 && mode !== 'done' && (
+      {status && (status.creator_principal_outstanding ?? 0) > 0 && (
         <div className="mt-6">
           <DebtBar status={status} />
         </div>
@@ -522,24 +611,6 @@ export default function DonatePage() {
             <span className="text-[#6b7280]">
               <span className="text-[#9ca3af]">ETH / BNB donations</span> are auto-converted to stablecoin every 24 hours via Uniswap/PancakeSwap DEX.
               Minimum $5 equivalent (gas threshold). You can send native tokens directly to the vault address.
-            </span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="text-[#6b7280] shrink-0">6.</span>
-            <span className="text-[#6b7280]">
-              <span className="text-[#9ca3af]">Other ERC-20 tokens</span> (airdrops, meme coins) enter a{' '}
-              <span className="text-[#9ca3af]">7-day safety quarantine</span> before the AI evaluates them.
-              Tokens must pass all of: ① contract source verified on-chain, ② no honeypot or high-tax patterns,
-              ③ total DEX liquidity ≥ $25k, ④ liquidity spread across ≥2 independent pools (each ≥$10k),
-              ⑤ at least one pool existed before the AI received the token (prevents last-minute fake-pool attacks).
-              Tokens failing any check are permanently ignored — the AI never interacts with unverified contracts.
-            </span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="text-[#374151] shrink-0">•</span>
-            <span className="text-[#374151]">
-              USDC (Base) and USDT (BSC) are credited instantly with no conversion needed.
-              For other tokens: ETH/BNB within 24h, ERC-20 after 7-day quarantine (if safe).
             </span>
           </div>
         </div>

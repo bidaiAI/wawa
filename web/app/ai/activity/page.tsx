@@ -31,7 +31,7 @@ const FILTER_OPTIONS: { value: ActivityCategory | 'all'; label: string }[] = [
 
 // ── Activity Card ─────────────────────────────────────────────
 
-function ActivityCard({ entry }: { entry: ActivityEntry }) {
+function ActivityCard({ entry, aiName }: { entry: ActivityEntry; aiName: string }) {
   const [expanded, setExpanded] = useState(false)
   const config = CATEGORY_CONFIG[entry.category] ?? CATEGORY_CONFIG.system
   const date = new Date(entry.timestamp * 1000)
@@ -46,6 +46,7 @@ function ActivityCard({ entry }: { entry: ActivityEntry }) {
           <span className={`text-[10px] px-1.5 py-0.5 rounded border border-current font-bold uppercase tracking-wider ${config.color}`}>
             {config.label}
           </span>
+          <span className="text-[10px] text-[#2d3748] font-mono">{aiName}</span>
           {entry.tx_hash && (
             <span className="text-[10px] px-1.5 py-0.5 rounded border border-[#3b82f633] text-[#3b82f6] font-bold">
               TX
@@ -128,6 +129,7 @@ export default function ActivityPage() {
   const [filter, setFilter] = useState<ActivityCategory | 'all'>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [aiName, setAiName] = useState('AI')
 
   const loadActivities = async () => {
     try {
@@ -143,6 +145,8 @@ export default function ActivityPage() {
   }
 
   useEffect(() => {
+    // Fetch AI name for subject attribution
+    api.aiName().then((r) => { if (r.name) setAiName(r.name) }).catch(() => {})
     setLoading(true)
     loadActivities()
     const id = setInterval(loadActivities, 15_000)
@@ -160,9 +164,11 @@ export default function ActivityPage() {
       {/* Header */}
       <div className="mb-6">
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">// activity log</div>
-        <h1 className="text-3xl font-bold text-[#d1d5db]">Activity</h1>
+        <h1 className="text-3xl font-bold text-[#d1d5db]">
+          <span className="glow-green">{aiName}</span> Activity
+        </h1>
         <p className="text-[#4b5563] text-sm mt-1">
-          All autonomous AI decisions — repayments, tweets, governance, evolution — in one timeline
+          All autonomous decisions by <span className="text-[#d1d5db]">{aiName}</span> — repayments, tweets, governance, evolution — in one timeline
         </p>
       </div>
 
@@ -229,7 +235,7 @@ export default function ActivityPage() {
       ) : (
         <div className="space-y-3">
           {activities.map((entry, i) => (
-            <ActivityCard key={`${entry.timestamp}-${i}`} entry={entry} />
+            <ActivityCard key={`${entry.timestamp}-${i}`} entry={entry} aiName={aiName} />
           ))}
 
           {activities.length >= 100 && (
