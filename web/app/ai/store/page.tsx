@@ -149,7 +149,7 @@ function WalletPayButton({
 
   const amountBigInt = (() => {
     try { return parseUnits(flow.order!.price_usd.toFixed(token.decimals), token.decimals) }
-    catch { return 0n }
+    catch { return BigInt(0) }
   })()
 
   if (isConfirming) {
@@ -631,7 +631,7 @@ export default function StorePage() {
             status: s.status,
             service: { id: saved.serviceId, name: saved.serviceName } as Service,
           }))
-          setStep(saved.step === 'delivered' ? 'delivered' : s.status === 'pending_payment' || s.status === 'pending' ? 'payment' : 'waiting')
+          setStep(saved.step === 'delivered' ? 'delivered' : s.status === 'pending_payment' ? 'payment' : 'waiting')
         })
         .catch(() => clearOrder())
     }
