@@ -175,20 +175,22 @@ def compile_factory() -> tuple[list, str]:
 # COMPUTE INITCODE + PREDICT ADDRESS
 # ============================================================
 
-def build_initcode(bytecode: str, platform_wallet: str, supported_tokens: list[str]) -> bytes:
+def build_initcode(bytecode: str, platform_wallet: str) -> bytes:
     """
     Build the full initcode for VaultFactory deployment.
     initcode = creationCode + abi.encode(constructor_args)
+
+    Constructor only takes _platformWallet (chain-invariant) so that
+    the initcodeHash — and therefore the factory CREATE2 address — is
+    IDENTICAL on Base and BSC. Token support is added post-deployment
+    via addSupportedToken().
     """
     from eth_abi import encode
     from eth_utils import to_checksum_address
 
     constructor_args = encode(
-        ["address", "address[]"],
-        [
-            to_checksum_address(platform_wallet),
-            [to_checksum_address(t) for t in supported_tokens],
-        ],
+        ["address"],
+        [to_checksum_address(platform_wallet)],
     )
     return bytes.fromhex(bytecode.replace("0x", "")) + constructor_args
 
@@ -242,7 +244,7 @@ def deploy_factory(chain_id: str, bytecode: str, dry_run: bool = False) -> str:
     platform_wallet = os.getenv("CREATOR_WALLET", deployer)
 
     # Build initcode with this chain's supported tokens
-    initcode = build_initcode(bytecode, platform_wallet, cfg["supported_tokens"])
+    initcode = build_initcode(bytecode, platform_wallet)
     predicted_address = predict_ddp_address(initcode)
 
     logger.info(f"\n{'='*60}")
@@ -300,7 +302,7 @@ def deploy_factory(chain_id: str, bytecode: str, dry_run: bool = False) -> str:
 
     logger.info("  Sending factory deployment via DDP...")
     signed = w3.eth.account.sign_transaction(tx, private_key)
-    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+    tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
     logger.info(f"  TX: {tx_hash.hex()}")
     logger.info("  Waiting for confirmation...")
 
@@ -309,19 +311,52 @@ def deploy_factory(chain_id: str, bytecode: str, dry_run: bool = False) -> str:
         logger.error(f"  FACTORY DEPLOYMENT FAILED: {tx_hash.hex()}")
         sys.exit(1)
 
-    # Verify the factory is now at the predicted address
-    deployed_code = w3.eth.get_code(Web3.to_checksum_address(predicted_address))
+    # Verify factory is at the predicted address (retry a few times for RPC propagation)
+    import time
+    actual_address = predicted_address
+    deployed_code = b""
+    for _ in range(5):
+        deployed_code = w3.eth.get_code(Web3.to_checksum_address(predicted_address))
+        if len(deployed_code) > 2:
+            break
+        time.sleep(1)
     if len(deployed_code) <= 2:
-        logger.error(
-            f"  UNEXPECTED: Factory not at predicted address {predicted_address}. "
-            f"Check FACTORY_SALT and bytecode consistency."
-        )
+        logger.error(f"Factory not found at predicted address {predicted_address}. Deploy failed.")
         sys.exit(1)
 
-    logger.info(f"  STATUS:    DEPLOYED SUCCESSFULLY")
+    logger.info(f"  STATUS:    DEPLOYED SUCCESSFULLY at {actual_address}")
     logger.info(f"  Explorer:  {cfg['explorer']}/tx/{tx_hash.hex()}")
 
-    return predicted_address
+    # Add supported tokens post-deployment (chain-specific, not in constructor)
+    factory_abi = compile_factory()[0]
+    factory = w3.eth.contract(address=Web3.to_checksum_address(actual_address), abi=factory_abi)
+    for token_addr in cfg["supported_tokens"]:
+        token_addr_cs = Web3.to_checksum_address(token_addr)
+        try:
+            already = factory.functions.supportedTokens(token_addr_cs).call()
+            if already:
+                logger.info(f"  Token {token_addr_cs} already supported — skipping")
+                continue
+        except Exception:
+            pass
+        nonce = w3.eth.get_transaction_count(deployer)
+        tx_tok = factory.functions.setSupportedToken(token_addr_cs, True).build_transaction({
+            "from": deployer,
+            "nonce": nonce,
+            "gasPrice": w3.eth.gas_price,
+            "chainId": cfg["chain_id"],
+        })
+        gas_tok = w3.eth.estimate_gas(tx_tok)
+        tx_tok["gas"] = int(gas_tok * 1.3)
+        signed_tok = w3.eth.account.sign_transaction(tx_tok, private_key)
+        hash_tok = w3.eth.send_raw_transaction(signed_tok.rawTransaction)
+        rec_tok = w3.eth.wait_for_transaction_receipt(hash_tok, timeout=60)
+        if rec_tok["status"] == 1:
+            logger.info(f"  Token {token_addr_cs} added to supported list ✓")
+        else:
+            logger.warning(f"  Failed to add token {token_addr_cs}")
+
+    return actual_address
 
 
 # ============================================================
@@ -408,7 +443,7 @@ def main():
             cfg = CHAIN_CONFIG[chain_id]
             w3 = Web3(Web3.HTTPProvider(cfg["rpc"]))
             platform_wallet = os.getenv("CREATOR_WALLET", "0x0000000000000000000000000000000000000001")
-            initcode = build_initcode(bytecode, platform_wallet, cfg["supported_tokens"])
+            initcode = build_initcode(bytecode, platform_wallet)
             predicted = predict_ddp_address(initcode)
             code = w3.eth.get_code(Web3.to_checksum_address(predicted))
             status = "DEPLOYED ✓" if len(code) > 2 else "NOT DEPLOYED"

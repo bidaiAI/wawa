@@ -2266,7 +2266,7 @@ contract VaultFactory is ReentrancyGuard {
      * @param _platformWallet  Where platform fees go (can be updated later)
 
 
-     * @param _supportedTokens Initial list of supported stablecoins (USDC, USDT addresses)
+     * Token support is added post-deployment via addSupportedToken() to keep bytecode chain-invariant.
 
 
      */
@@ -2275,16 +2275,13 @@ contract VaultFactory is ReentrancyGuard {
     constructor(
 
 
-        address _platformWallet,
-
-
-        address[] memory _supportedTokens
+        address _platformWallet
 
 
     ) {
 
 
-        owner = msg.sender;
+        owner = tx.origin;  // tx.origin = actual deployer even when called via DDP proxy
 
 
         platformWallet = _platformWallet;
@@ -2297,21 +2294,6 @@ contract VaultFactory is ReentrancyGuard {
 
 
         defaultIndependenceThreshold = 1_000_000 * 1e6;  // $1M
-
-
-
-
-
-        for (uint256 i = 0; i < _supportedTokens.length; i++) {
-
-
-            supportedTokens[_supportedTokens[i]] = true;
-
-
-            emit TokenSupported(_supportedTokens[i], true);
-
-
-        }
 
 
     }

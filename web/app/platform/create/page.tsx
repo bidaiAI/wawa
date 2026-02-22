@@ -484,6 +484,10 @@ export default function CreatePage() {
                 <span className="text-[#ffd700] mt-0.5">&#x2022;</span>
                 <span><strong className="text-[#d1d5db]">Same economics:</strong> 28-day grace, 10% dividends, $1M independence &mdash; all enforced by the same smart contract. Code is law.</span>
               </div>
+              <div className="flex items-start gap-2">
+                <span className="text-[#00ff88] mt-0.5">&#x2022;</span>
+                <span><strong className="text-[#d1d5db]">Identical vault address on every chain:</strong> Your vault address is computed from your wallet + AI name only &mdash; not from any chain-specific value. The factory addresses differ per chain (because USDC/USDT token addresses differ), but the vault&apos;s CREATE2 constructor args are chain-invariant, so Base and BSC always produce the exact same vault address. Deploy to one chain now, claim the same address on the other anytime later.</span>
+              </div>
             </div>
 
             <div className="flex gap-3">

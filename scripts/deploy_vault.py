@@ -538,7 +538,7 @@ def deploy(
         "gas": 100_000,
     })
     signed_approve = w3.eth.account.sign_transaction(approve_tx, private_key)
-    approve_hash = w3.eth.send_raw_transaction(signed_approve.raw_transaction)
+    approve_hash = w3.eth.send_raw_transaction(signed_approve.rawTransaction)
     w3.eth.wait_for_transaction_receipt(approve_hash, timeout=60)
     logger.info("Token approval confirmed")
 
@@ -568,7 +568,7 @@ def deploy(
         logger.warning(f"Gas estimation failed ({gas_err}), using 3M fallback")
 
     signed_create = w3.eth.account.sign_transaction(create_tx, private_key)
-    create_hash = w3.eth.send_raw_transaction(signed_create.raw_transaction)
+    create_hash = w3.eth.send_raw_transaction(signed_create.rawTransaction)
     logger.info(f"createVault TX: {create_hash.hex()}")
     logger.info("Waiting for confirmation...")
 
@@ -653,7 +653,7 @@ def deploy(
         "gas": 100_000,
     })
     signed_set_ai = w3.eth.account.sign_transaction(set_ai_tx, private_key)
-    set_ai_hash = w3.eth.send_raw_transaction(signed_set_ai.raw_transaction)
+    set_ai_hash = w3.eth.send_raw_transaction(signed_set_ai.rawTransaction)
     w3.eth.wait_for_transaction_receipt(set_ai_hash, timeout=60)
     logger.info("AI wallet registered — only AI can spend from vault now")
 
@@ -680,7 +680,7 @@ def deploy(
             "chainId": chain["chain_id"],
         }
         signed_gas = w3.eth.account.sign_transaction(gas_tx, private_key)
-        gas_hash = w3.eth.send_raw_transaction(signed_gas.raw_transaction)
+        gas_hash = w3.eth.send_raw_transaction(signed_gas.rawTransaction)
         w3.eth.wait_for_transaction_receipt(gas_hash, timeout=60)
         logger.info(f"Seed gas sent: {gas_amount} {chain['native_symbol']}")
     else:
