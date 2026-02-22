@@ -397,7 +397,7 @@ def create_app(
     )
 
     # CORS: allow all in dev, restrict in production via CORS_ORIGINS env var
-    cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
+    cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,

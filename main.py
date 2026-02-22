@@ -2714,7 +2714,6 @@ async def _heartbeat_loop():
             # If any chain is within 10% of its liquidation threshold,
             # auto-repays on that chain to prevent attacker from triggering
             # triggerInsolvencyDeath() even when aggregate total is healthy.
-            now = time.time()
             if now - _last_per_chain_solvency_check >= _PER_CHAIN_SOLVENCY_INTERVAL:
                 _last_per_chain_solvency_check = now
                 try:
@@ -2826,7 +2825,7 @@ async def _heartbeat_loop():
 
             # ---- HIGHLIGHT EVALUATION (hourly, same cadence as repayment) ----
             try:
-                if now - _last_repayment_eval < 10:  # Only run when repayment just evaluated (same hour)
+                if now - _last_repayment_eval < IRON_LAWS.HEARTBEAT_INTERVAL_SECONDS:  # Run when repayment just evaluated
                     await _evaluate_highlights()
             except Exception as e:
                 logger.warning(f"Heartbeat: highlights eval failed: {e}")

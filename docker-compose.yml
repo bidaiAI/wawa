@@ -12,6 +12,8 @@ services:
     volumes:
       # Persist data across restarts (memory, tweets, orders)
       - wawa-data:/app/data
+      # Persist AI private key across restarts
+      - wawa-secrets:/app/secrets
       # Hot-reload services catalog
       - ./web:/app/web:ro
     restart: unless-stopped
@@ -34,4 +36,5 @@ services:
 
 volumes:
   wawa-data:
+  wawa-secrets:
   # ollama-models:
