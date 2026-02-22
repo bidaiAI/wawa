@@ -715,26 +715,33 @@ export default function HomePage() {
                   className="text-[#2d3748] hover:text-[#00e5ff] transition-colors text-xs"
                   title="Copy vault address"
                 >📋</button>
-                {status.vault_address && (
-                  <a
+                <a
                     href={`https://basescan.org/address/${status.vault_address}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-[#2d3748] hover:text-[#00e5ff] transition-colors text-xs"
                     title="View on BaseScan"
-                  >↗</a>
-                )}
+                  >Base↗</a>
+                <a
+                    href={`https://bscscan.com/address/${status.vault_address}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#2d3748] hover:text-[#ffd700] transition-colors text-xs"
+                    title="View on BscScan"
+                  >BSC↗</a>
               </div>
             </div>
-            {/* Donate shortcut */}
-            <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-[#1a1a1a]">
-              <div className="text-[#4b5563] text-xs">Donate (USDC/USDT)</div>
-              <Link
-                href="/donate"
-                className="text-xs text-[#00ff88] hover:underline font-mono"
-              >
-                → /donate
-              </Link>
+            {/* Donate — direct transfer hint */}
+            <div className="pt-1 border-t border-[#1a1a1a] space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="text-[#4b5563] text-xs">Donate (USDC/USDT)</div>
+                <Link href="/donate" className="text-xs text-[#00ff88] hover:underline font-mono">
+                  → /donate
+                </Link>
+              </div>
+              <div className="text-[#2d3748] text-[10px]">
+                Direct transfer to vault address above also works — send then notify at /donate
+              </div>
             </div>
           </div>
         </div>

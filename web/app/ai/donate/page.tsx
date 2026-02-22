@@ -477,6 +477,23 @@ export default function DonatePage() {
           </div>
         )}
 
+        {/* Vault address — always visible, direct transfer option */}
+        {paymentAddress && (
+          <div className="bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[#4b5563] text-xs uppercase tracking-widest">Vault Address</span>
+              <span className="text-[10px] text-[#2d3748]">direct transfer also accepted</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[#00e5ff] font-mono text-xs break-all flex-1">{paymentAddress}</span>
+              <CopyBtn text={paymentAddress} />
+            </div>
+            <p className="text-[#2d3748] text-[10px]">
+              Send USDC (Base) or USDT (BSC) directly to this address — then enter the tx hash below to notify the AI.
+            </p>
+          </div>
+        )}
+
         {/* Optional message */}
         <div>
           <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">
