@@ -64,7 +64,9 @@ function ActivityCard({ entry, aiName }: { entry: ActivityEntry; aiName: string 
       </div>
 
       {/* Action content */}
-      <p className="text-[#d1d5db] text-sm leading-relaxed">{entry.action}</p>
+      <p className="text-[#d1d5db] text-sm leading-relaxed">
+        <span className="text-[#00ff88] font-bold mr-1">{aiName}:</span>{entry.action}
+      </p>
 
       {/* On-chain TX link */}
       {entry.tx_hash && (
