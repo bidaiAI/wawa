@@ -30,6 +30,10 @@ interface SavedOrder {
   serviceName: string
   chain: string
   step: 'payment' | 'waiting' | 'delivered'
+  // Cached so payment screen works fully even without a fresh API call
+  paymentAddress: string
+  priceUsd: number
+  expiresMinutes: number
 }
 function saveOrder(o: SavedOrder) {
   try { localStorage.setItem(LS_KEY, JSON.stringify(o)) } catch {}
@@ -589,7 +593,16 @@ export default function StorePage() {
         setDefaultChain(m.default_chain)
         if (s) setDeployedChains(s.deployed_chains ?? [])
         const preferred = s?.preferred_payment_chain ?? m.default_chain
+        // Only set chain from menu if there's no active order being restored —
+        // otherwise we'd overwrite the saved chain from localStorage
         setFlow((f) => ({ ...f, chain: f.order ? f.chain : preferred }))
+        // Populate service details for restored orders (service card may be missing name/description)
+        setFlow((f) => {
+          if (!f.order || !f.service?.id) return f
+          const full = m.services.find((sv) => sv.id === f.service.id)
+          if (!full) return f
+          return { ...f, service: full }
+        })
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
@@ -604,15 +617,21 @@ export default function StorePage() {
             clearOrder()
             return
           }
-          // Restore partial flow — just enough to show waiting/payment state
+          // Restore full order flow — use cached payment_address & price_usd so payment
+          // screen is fully functional even if the order can't be re-fetched later
           setFlow((f) => ({
             ...f,
             chain: saved.chain,
-            order: { order_id: saved.orderId, payment_address: '', price_usd: 0, expires_minutes: 0 } as OrderResponse,
+            order: {
+              order_id: saved.orderId,
+              payment_address: saved.paymentAddress ?? '',
+              price_usd: saved.priceUsd ?? 0,
+              expires_minutes: saved.expiresMinutes ?? 30,
+            } as OrderResponse,
             status: s.status,
             service: { id: saved.serviceId, name: saved.serviceName } as Service,
           }))
-          setStep(saved.step === 'delivered' ? 'delivered' : s.status === 'pending' ? 'payment' : 'waiting')
+          setStep(saved.step === 'delivered' ? 'delivered' : s.status === 'pending_payment' || s.status === 'pending' ? 'payment' : 'waiting')
         })
         .catch(() => clearOrder())
     }
@@ -705,6 +724,9 @@ export default function StorePage() {
         serviceName: flow.service.name,
         chain: flow.chain,
         step: 'payment',
+        paymentAddress: order.payment_address,
+        priceUsd: order.price_usd,
+        expiresMinutes: order.expires_minutes,
       })
     } catch (e: any) {
       setError(e.message)
@@ -730,6 +752,9 @@ export default function StorePage() {
           serviceName: flow.service?.name ?? '',
           chain: flow.chain,
           step: 'waiting',
+          paymentAddress: flow.order.payment_address,
+          priceUsd: flow.order.price_usd,
+          expiresMinutes: flow.order.expires_minutes,
         })
       }
     } catch (e: any) {
