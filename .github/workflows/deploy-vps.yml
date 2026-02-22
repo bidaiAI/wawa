@@ -36,6 +36,12 @@ jobs:
             # Restart wawa AI instance
             sudo docker restart platform-wawa-1 || true
 
+            # Sync Caddyfile and reload Caddy (HTTPS reverse proxy)
+            if [ -f Caddyfile ]; then
+              sudo cp Caddyfile /etc/caddy/Caddyfile
+              sudo systemctl reload caddy 2>/dev/null || true
+            fi
+
             echo "AI deploy complete: $(sudo git log --oneline -1)"
 
       - name: Deploy platform orchestrator server

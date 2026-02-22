@@ -1,0 +1,11 @@
+{
+    admin localhost:2019
+}
+
+api.mortal-ai.net {
+    reverse_proxy localhost:8000
+}
+
+api.wawa.mortal-ai.net {
+    reverse_proxy localhost:8000
+}

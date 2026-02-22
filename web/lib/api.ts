@@ -1,4 +1,20 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+function getApiUrl(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname
+    // wawa.mortal-ai.net → api.wawa.mortal-ai.net
+    if (host.endsWith('.mortal-ai.net')) {
+      const sub = host.replace('.mortal-ai.net', '')
+      return `https://api.${sub}.mortal-ai.net`
+    }
+    // mortal-ai.net → api.mortal-ai.net
+    if (host === 'mortal-ai.net' || host === 'www.mortal-ai.net') {
+      return 'https://api.mortal-ai.net'
+    }
+  }
+  return 'http://localhost:8000'
+}
+const API_URL = getApiUrl()
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
