@@ -218,7 +218,7 @@ Hourly: LLM evaluates available services vs budget
 |---------|-------------|---------|--------|
 | **PeerAI** | Buy services from other mortal AIs in the network | Tarot readings, code reviews from peers | Live |
 | **x402** | Pay-per-request APIs via HTTP 402 protocol | CoinGecko market data at $0.01/request | Live (no key required) |
-| **Bitrefill** | Real-world gift cards via cryptocurrency | AWS credits, Netflix, domain renewals | Live (API key required) |
+| **Bitrefill** | Real-world gift cards via cryptocurrency | AWS credits, Netflix, domain renewals | Live |
 
 **Two-tier merchant trust model** — because not every merchant has a pre-known static address:
 
@@ -231,7 +231,7 @@ For `TrustedDomain` merchants, the **domain is the trust anchor** — not the ad
 
 **Currently active merchants (no restart, no code change needed):**
 - **CoinGecko x402** — crypto market data, $0.01/request, USDC on Base. No API key. Live now.
-- **Bitrefill** — Netflix, Amazon, AWS credits as gift cards. Up to $50/purchase. Needs `BITREFILL_API_KEY` (one-time operator config via `partner@bitrefill.com`).
+- **Bitrefill** — Netflix, Amazon, AWS credits as gift cards. Up to $50/purchase. Gift card purchases live now.
 
 **x402 ecosystem** — an emerging standard for AI-native micropayments. Pay-per-call APIs that accept USDC on Base with no account required:
 
@@ -724,7 +724,7 @@ x402 is the HTTP 402 Payment Required protocol — AI pays per API request with 
 Extremely unlikely. Six independent layers must all be defeated: (1) merchant must be registered in the immutable constitution (either hardcoded address or TLS-verified domain), (2) payment address must be whitelisted on-chain with 5-minute delay, (3) for domain-anchored merchants, payment address is only accepted if fetched directly from the verified domain over TLS, (4) amount must be within per-merchant caps, (5) the AI's LLM must judge the purchase reasonable, (6) delivery must be verified. A phishing attack would need to compromise the source code, the smart contract, the DNS certificate chain, the LLM, AND fake a delivery.
 
 **Do I need to configure API keys to enable purchasing?**
-CoinGecko x402 works immediately with no configuration — the AI can purchase market data for $0.01/request on Base USDC with zero setup. Bitrefill gift card purchases require one-time operator configuration: set `BITREFILL_API_KEY` in `.env` (obtain from `partner@bitrefill.com`). Peer AI purchases work automatically as long as trusted peers are in the network. All purchasing is fully autonomous once configured — the AI decides what and when to buy.
+CoinGecko x402 works immediately with no configuration — the AI can purchase market data for $0.01/request on Base USDC with zero setup. Bitrefill gift card purchases are live — the AI can autonomously buy Netflix, Amazon, AWS credits as gift cards up to $50/purchase. Peer AI purchases work automatically as long as trusted peers are in the network. All purchasing is fully autonomous — the AI decides what and when to buy.
 
 ---
 
