@@ -20,7 +20,8 @@ jobs:
           script: |
             set -e
             cd /opt/mortal/platform
-            sudo git pull origin main
+            sudo git fetch origin main
+            sudo git reset --hard origin/main
 
             # Patch CORS_ORIGINS to allow all mortal-ai.net subdomains (wildcard pattern)
             if sudo grep -q "^CORS_ORIGINS=" .env 2>/dev/null; then
@@ -47,40 +48,49 @@ jobs:
           timeout: 60s
           command_timeout: 10m
           script: |
-            set -e
+            # Note: no set -e here — this step is optional, failures are non-fatal
             PRIVATE_DIR=/opt/mortal/private
             GH_PAT="${{ secrets.GH_PRIVATE_REPO_PAT }}"
+
+            # Skip entirely if PAT not configured
+            if [ -z "$GH_PAT" ]; then
+              echo "GH_PRIVATE_REPO_PAT not set -- skipping platform orchestrator deploy"
+              echo "Add the secret at: https://github.com/bidaiAI/wawa/settings/secrets/actions"
+              exit 0
+            fi
+
             PRIVATE_REPO="https://${GH_PAT}@github.com/bidaiAI/mortal-platform.git"
 
             # Clone or update private repo
             if [ -d "$PRIVATE_DIR/.git" ]; then
               cd "$PRIVATE_DIR"
               sudo git remote set-url origin "$PRIVATE_REPO"
-              sudo git pull origin main
+              sudo git pull origin main || { echo "git pull failed"; exit 1; }
             else
               sudo mkdir -p "$PRIVATE_DIR"
-              sudo git clone "$PRIVATE_REPO" "$PRIVATE_DIR"
+              sudo git clone "$PRIVATE_REPO" "$PRIVATE_DIR" || { echo "git clone failed -- check PAT permissions"; exit 1; }
               cd "$PRIVATE_DIR"
-              # Copy .env from public wawa as base, then patch platform-specific vars
+              # Copy wawa .env as base for platform config
               sudo cp /opt/mortal/platform/.env "$PRIVATE_DIR/.env.platform" 2>/dev/null || true
             fi
 
             cd "$PRIVATE_DIR"
 
             # Build platform server image
-            sudo docker build -t mortal-platform:latest -f Dockerfile.platform . || {
+            if ! sudo docker build -t mortal-platform:latest -f Dockerfile.platform .; then
               echo "Platform image build failed -- skipping orchestrator restart"
               exit 0
-            }
+            fi
 
             # Start or restart platform orchestrator container
             if sudo docker inspect platform-orchestrator > /dev/null 2>&1; then
               sudo docker restart platform-orchestrator
             else
-              # First-time start -- requires .env.platform to exist
+              # First-time start
               if [ ! -f "$PRIVATE_DIR/.env.platform" ]; then
-                echo "WARNING: $PRIVATE_DIR/.env.platform not found -- skipping first-time start"
-                echo "Create it manually: sudo cp /opt/mortal/platform/.env /opt/mortal/private/.env.platform"
+                echo "WARNING: .env.platform not found"
+                echo "Run: sudo cp /opt/mortal/platform/.env /opt/mortal/private/.env.platform"
+                echo "Then add: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID, VPS_IP, PLATFORM_PORT=8001"
                 exit 0
               fi
               sudo docker run -d \
