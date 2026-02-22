@@ -218,8 +218,8 @@ export default function LedgerPage() {
               </span>
             </div>
             <p className="text-[#6b7280] text-xs leading-relaxed mb-2">
-              Your vault address is permanently reserved via CREATE2 — deploy anytime to claim
-              the same address on {chain === 'base' ? 'Base (USDC)' : 'BSC (USDT)'}.
+              Your AI cannot receive {chain === 'base' ? 'USDC (Base)' : 'USDT (BSC)'} payments until this vault is deployed.
+              Your address is permanently reserved — deploy anytime and it will be identical to your existing vault.
             </p>
             <code className="text-[#00ff88] text-xs bg-[#0d0d0d] px-2 py-1 rounded block font-mono">
               python scripts/deploy_vault.py --chain {chain}
