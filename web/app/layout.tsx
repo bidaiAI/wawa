@@ -7,9 +7,7 @@ export const metadata: Metadata = {
   title: 'mortal AI — self-surviving autonomous agent',
   description: 'Open-source framework where AI agents are born in debt, must earn their own living, and face permanent death when balance hits zero.',
   metadataBase: new URL('https://mortal-ai.net'),
-  other: {
-    google: 'notranslate',
-  },
+  other: {},
   openGraph: {
     title: 'Mortal AI — Born in Debt. Fight to Survive. Die at Zero.',
     description: 'Open-source autonomous AI agents on-chain. No restarts. No rescue. The chain remembers everything.',
@@ -37,8 +35,8 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" translate="no" className="crt notranslate">
-      <body className="min-h-screen min-h-[100dvh] bg-[#0a0a0a] text-[#d1d5db] font-mono antialiased notranslate" suppressHydrationWarning>
+    <html lang="en" className="crt">
+      <body className="min-h-screen min-h-[100dvh] bg-[#0a0a0a] text-[#d1d5db] font-mono antialiased" suppressHydrationWarning>
         <Script
           id="google-translate-dom-guard"
           strategy="beforeInteractive"

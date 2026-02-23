@@ -1,7 +1,6 @@
 'use client'
 
 import Link from 'next/link'
-import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import { api, PageSummary } from '@/lib/api'
@@ -125,13 +124,13 @@ export default function AINav() {
         {/* Logo */}
         <div className="flex items-center gap-2">
           <Link href="/" className="flex items-center gap-2 group">
-            <Image
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
               src="/logo.svg"
               alt={aiName}
               width={28}
               height={28}
               className="rounded-md opacity-90 group-hover:opacity-100 transition-opacity"
-              priority
             />
             <span className="text-lg font-bold glow-green glitch">{aiName}</span>
           </Link>
