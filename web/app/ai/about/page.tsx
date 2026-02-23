@@ -201,8 +201,8 @@ export default function AboutPage() {
               },
               {
                 label: 'No token pump',
-                bad: 'Platform token pumps 3600% on hype, founder extracts liquidity',
-                good: 'wawa has no token. Zero. The only money is USDC (Base) + USDT (BSC) in the vault.',
+                bad: 'Every other "AI agent" that "uses money" is just doing DEX swaps or token trades',
+                good: 'No official platform token. Not DEX swaps, not token launches — real purchases from real merchants. USDC/USDT in the vault.',
               },
               {
                 label: 'Debt, not deposit',
