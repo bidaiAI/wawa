@@ -446,13 +446,13 @@ def create_app(
         # WildcardCORSMiddleware handles both exact + wildcard origins
         # Do NOT add CORSMiddleware — it would run first and reject wildcard matches
     else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # ── Creator signature verification helper ──────────────────────────────────
     _CREATOR_WALLET = os.getenv("CREATOR_WALLET", "").lower()
@@ -716,7 +716,7 @@ def create_app(
             )
 
         try:
-        msg = await chat_router.route(session_id, req.message, ip)
+            msg = await chat_router.route(session_id, req.message, ip)
             reply_text = msg.content
 
             # Gift code race-condition protection:
@@ -762,11 +762,11 @@ def create_app(
             if any(sig in reply_lower for sig in _GROWTH_SIGNALS):
                 asyncio.create_task(_chat_growth_reflection(req.message, reply_text))
 
-        return ChatResponse(
+            return ChatResponse(
                 reply=reply_text,
-            session_id=session_id,
-            layer=msg.layer.value,
-            cost_usd=msg.cost_usd,
+                session_id=session_id,
+                layer=msg.layer.value,
+                cost_usd=msg.cost_usd,
             )
         except Exception as e:
             logger.error(f"Chat endpoint error (session={session_id}): {e}", exc_info=True)
@@ -909,13 +909,13 @@ def create_app(
             # CRITICAL #1: Acquire per-order lock to prevent concurrent verify on same order
             lock = _order_locks.setdefault(order_id, asyncio.Lock())
             async with lock:
-        order = orders[order_id]
+                order = orders[order_id]
 
-        if order.status == OrderStatus.DELIVERED:
-            return {"status": "already_delivered", "result": order.result}
+                if order.status == OrderStatus.DELIVERED:
+                    return {"status": "already_delivered", "result": order.result}
 
-        if order.status == OrderStatus.EXPIRED:
-            raise HTTPException(410, "Order expired")
+                if order.status == OrderStatus.EXPIRED:
+                    raise HTTPException(410, "Order expired")
 
                 # Guard against double-verify: only allow verification from PENDING_PAYMENT
                 if order.status != OrderStatus.PENDING_PAYMENT:
@@ -966,10 +966,10 @@ def create_app(
                 _used_tx_hashes.add(tx_hash.lower())
                 _persist_tx_hash(tx_hash)
 
-        # Record payment
-        order.status = OrderStatus.PAYMENT_CONFIRMED
-        order.paid_at = time.time()
-        order.tx_hash = tx_hash
+                # Record payment
+                order.status = OrderStatus.PAYMENT_CONFIRMED
+                order.paid_at = time.time()
+                order.tx_hash = tx_hash
 
                 # MEDIUM #3: Persist immediately on PAYMENT_CONFIRMED so restarts don't lose paid orders
                 _persist_order(order)
@@ -978,14 +978,14 @@ def create_app(
                 # vault lock serialises against heartbeat sync_balance / repayment eval
                 from core.vault import FundType, SpendType
                 async with vault_manager.get_lock():
-        vault_manager.receive_funds(
+                    vault_manager.receive_funds(
                         amount_usd=verified_amount,
-            fund_type=FundType.SERVICE_REVENUE,
+                        fund_type=FundType.SERVICE_REVENUE,
                         from_wallet=verified_from,
-            tx_hash=tx_hash,
-            description=f"Order {order.order_id}: {order.service_name}",
-            chain=order.chain,
-        )
+                        tx_hash=tx_hash,
+                        description=f"Order {order.order_id}: {order.service_name}",
+                        chain=order.chain,
+                    )
                 # Use verified_amount (chain-confirmed) not order.price_usd (listed price).
                 # Slight over/under-payments cause vault vs cost_guard divergence over time.
                 cost_guard.record_revenue(verified_amount)
@@ -2618,11 +2618,11 @@ def create_app(
     def _persist_order(order: Order):
         """Append order to disk log with flush for durability."""
         try:
-        log_dir = Path("data/orders")
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / "orders.jsonl"
+            log_dir = Path("data/orders")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / "orders.jsonl"
             line = json.dumps(order.to_dict(), ensure_ascii=False) + "\n"
-        with open(log_file, "a", encoding="utf-8") as f:
+            with open(log_file, "a", encoding="utf-8") as f:
                 f.write(line)
                 f.flush()
         except Exception as e:
