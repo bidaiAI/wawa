@@ -440,6 +440,54 @@ async def _fetch_search_context_fn(message: str, session_id: str) -> Optional[st
     return context
 
 
+async def _analyze_contract_fn(address: str, user_message: str) -> Optional[str]:
+    """
+    Analyze a contract address using Grok and relate it to wawa's vault.
+    Called from chat_router when user message contains a 0x address.
+    Returns analysis string to inject as context, or None.
+    """
+    vault_status = vault.get_status()
+    vault_addr = vault_status.get("vault_address", "unknown")
+    balance = vault_status.get("balance_usd", 0)
+    chains = list(vault_status.get("balance_by_chain", {}).keys())
+
+    # Quick check: is this wawa's own vault address?
+    if address.lower() == str(vault_addr).lower():
+        return (
+            f"This IS wawa's own vault address: {vault_addr}. "
+            f"Current balance: ${balance:.2f}. Deployed on {', '.join(chains) if chains else 'Base, BSC'}. "
+            f"This is the correct address for donations and payments."
+        )
+
+    analysis_prompt = [
+        {"role": "system", "content": (
+            "You are a blockchain contract analyst. Analyze the given address and determine:\n"
+            "1. What this contract/address is (token, DEX, vault, wallet, etc.)\n"
+            "2. Its relationship to the given AI vault address (if any)\n"
+            "3. Whether it's safe to interact with\n"
+            "Keep analysis concise (3-5 sentences). Be factual. If you can't determine what it is, say so.\n"
+            "IMPORTANT: If the address is NOT the AI's vault, clearly state that."
+        )},
+        {"role": "user", "content": (
+            f"Analyze this address: {address}\n\n"
+            f"Context: The user sent this address while chatting with wawa (an AI agent).\n"
+            f"wawa's vault address: {vault_addr}\n"
+            f"wawa operates on: {', '.join(chains) if chains else 'Base, BSC'}\n"
+            f"User's message: {user_message[:300]}"
+        )},
+    ]
+
+    try:
+        # Use Grok for analysis (higher quality), fall back to tier routing
+        text, cost = await _call_xai(analysis_prompt, max_tokens=300, temperature=0.3)
+        if cost > 0:
+            vault.spend(cost, SpendType.API_COST, description="contract-analysis")
+        return text if text.strip() else None
+    except Exception as e:
+        logger.warning(f"Contract analysis failed for {address[:10]}...: {e}")
+        return None
+
+
 async def _big_llm_fn(service_id: str, user_input: str) -> tuple[str, float]:
     """Paid service delivery — minimum Lv.3 (Claude Haiku) for quality."""
     system = (
@@ -3508,6 +3556,7 @@ async def lifespan(app):
     chat_router.set_vault_status_function(vault.get_status)
     chat_router.set_cost_status_function(cost_guard.get_status)
     chat_router.set_search_context_function(_fetch_search_context_fn)
+    chat_router.set_contract_analysis_function(_analyze_contract_fn)
 
     tarot.set_interpret_function(_tarot_interpret_fn)
     token_analysis.set_interpret_function(_token_interpret_fn)

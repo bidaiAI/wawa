@@ -174,6 +174,7 @@ class ChatRouter:
         self._get_vault_status_fn: Optional[callable] = None  # fn() -> dict
         self._get_cost_status_fn: Optional[callable] = None   # fn() -> dict
         self._search_context_fn: Optional[callable] = None    # fn(message, session_id) -> str|None
+        self._analyze_contract_fn: Optional[callable] = None  # fn(address, user_msg) -> str|None
 
     def set_small_llm_function(self, fn: callable):
         """fn(messages: list[dict], max_tokens: int) -> (reply_text: str, cost_usd: float)"""
@@ -188,6 +189,10 @@ class ChatRouter:
     def set_search_context_function(self, fn: callable):
         """fn(message: str, session_id: str) -> Optional[str] — xAI on-demand search."""
         self._search_context_fn = fn
+
+    def set_contract_analysis_function(self, fn: callable):
+        """fn(address: str, user_message: str) -> Optional[str] — Grok contract analysis."""
+        self._analyze_contract_fn = fn
 
     # ============================================================
     # PUBLIC API
@@ -457,6 +462,34 @@ class ChatRouter:
                         logger.debug(f"xAI search context injected ({len(search_ctx)} chars)")
                 except Exception as _se:
                     logger.warning(f"xAI search context fetch failed: {_se}")
+
+        # Contract address analysis injection:
+        # If the user's message contains a 0x address, use Grok to analyze it
+        # and inject the analysis before the conversation history.
+        if self._analyze_contract_fn and session.messages:
+            last_user_msg = next(
+                (m.content for m in reversed(session.messages) if m.role == "user"),
+                None,
+            )
+            if last_user_msg:
+                # Detect 0x addresses (40 hex chars)
+                addr_matches = re.findall(r'0x[a-fA-F0-9]{40}', last_user_msg)
+                if addr_matches:
+                    for addr in addr_matches[:2]:  # max 2 addresses per message
+                        try:
+                            analysis = await self._analyze_contract_fn(addr, last_user_msg)
+                            if analysis:
+                                messages.append({
+                                    "role": "system",
+                                    "content": (
+                                        f"[Contract Analysis for {addr}]\n"
+                                        f"{analysis}\n"
+                                        f"[End of contract analysis — use this info to answer the user's question about this address]"
+                                    ),
+                                })
+                                logger.info(f"Contract analysis injected for {addr[:10]}...")
+                        except Exception as _ce:
+                            logger.warning(f"Contract analysis failed for {addr[:10]}...: {_ce}")
 
         # Include last few messages for context (cap at 6 turns)
         recent = session.messages[-12:]
