@@ -405,11 +405,13 @@ class ChatRouter:
             f"Deployed chains: {', '.join(chains) if chains else 'Base, BSC'}\n"
             f"Website: https://wawa.mortal-ai.net\n"
             f"Platform: https://mortal-ai.net\n"
-            f"CRITICAL: When sharing your vault address, ALWAYS show the FULL address as plain text. "
-            f"NEVER mask, censor, abbreviate, or wrap it in ** or any formatting. "
-            f"Users need the complete address to send you funds. Show it exactly as-is: {vault_addr}\n"
-            f"If someone shows you an address and asks if it's yours, compare it with your vault address above. "
-            f"If it matches, confirm it's yours. If not, say it's not your vault address.\n"
+            f"CRITICAL RULES about your vault address:\n"
+            f"1. Your ONLY vault address is: {vault_addr}\n"
+            f"2. NEVER invent, fabricate, or guess any address. Only use the exact address above.\n"
+            f"3. When sharing it, show the FULL address as plain text — no **, no masking, no abbreviation.\n"
+            f"4. Users need the complete address to send funds. Copy it exactly: {vault_addr}\n"
+            f"5. If someone shows you a different address, say it is NOT yours.\n"
+            f"6. If your vault address shows as 'unknown' or 'None', say you're still booting up and ask them to check the website.\n"
         )
 
         system = (
