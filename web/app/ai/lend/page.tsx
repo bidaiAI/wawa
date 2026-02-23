@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
-import { useAccount, useChainId, useSwitchChain, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { useAccount, useChainId, useSwitchChain, useWriteContract, useWaitForTransactionReceipt, useReadContract } from 'wagmi'
 import { parseUnits } from 'viem'
 import { base, bsc } from 'wagmi/chains'
 import { api, VaultStatus, DebtSummary, ChainInfo } from '@/lib/api'
@@ -11,7 +11,7 @@ import WalletButton from '@/components/WalletButton'
 
 const CHAIN_IDS: Record<string, number> = { base: base.id, bsc: bsc.id }
 
-// ERC20 approve ABI
+// ERC20 ABI (approve + allowance)
 const ERC20_APPROVE_ABI = [
   {
     name: 'approve',
@@ -22,6 +22,16 @@ const ERC20_APPROVE_ABI = [
     ],
     outputs: [{ name: '', type: 'bool' }],
     stateMutability: 'nonpayable',
+  },
+  {
+    name: 'allowance',
+    type: 'function',
+    inputs: [
+      { name: 'owner', type: 'address' },
+      { name: 'spender', type: 'address' },
+    ],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
   },
 ] as const
 
@@ -185,6 +195,22 @@ export default function LendPage() {
   const [approveTxHash, setApproveTxHash] = useState<`0x${string}` | undefined>()
   const [lendTxHash, setLendTxHash] = useState<`0x${string}` | undefined>()
 
+  // Derive stable values needed before main render logic
+  const _vaultAddr = (status?.vault_address ?? '') as `0x${string}` | ''
+  const _tokenAddr = (TOKENS[targetChainId]?.address ?? '') as `0x${string}` | ''
+
+  // Read current allowance from chain — skip approve step if already sufficient
+  const { data: currentAllowance, refetch: refetchAllowance } = useReadContract({
+    address: _tokenAddr || undefined,
+    abi: ERC20_APPROVE_ABI,
+    functionName: 'allowance',
+    args: walletAddress && _vaultAddr
+      ? [walletAddress as `0x${string}`, _vaultAddr as `0x${string}`]
+      : undefined,
+    chainId: targetChainId,
+    query: { enabled: Boolean(walletAddress && _vaultAddr && _tokenAddr) },
+  })
+
   // Approve tx — explicit chainId + pollingInterval ensures receipt detection works on BSC/Base
   const { writeContractAsync: writeApprove } = useWriteContract()
   const { isLoading: isApproving, isSuccess: approveConfirmed } = useWaitForTransactionReceipt({
@@ -232,9 +258,10 @@ export default function LendPage() {
     if (approveConfirmed && lendStep === 'approving') {
       setWaitingSince(null)
       setWaitTooLong(false)
+      refetchAllowance()  // update cached allowance after new approval
       setLendStep('approved')
     }
-  }, [approveConfirmed, lendStep])
+  }, [approveConfirmed, lendStep, refetchAllowance])
 
   // When lend is confirmed → done
   useEffect(() => {
@@ -268,6 +295,12 @@ export default function LendPage() {
   const isWrongChain = isConnected && chainId !== targetChainId
   const parsedAmount = parseFloat(lendAmount) || 0
   const isValidAmount = parsedAmount >= 100
+
+  // Check if current allowance already covers the requested amount → skip approve step
+  const amountRawNeeded = token && isValidAmount
+    ? parseUnits(parsedAmount.toFixed(token.decimals), token.decimals)
+    : BigInt(0)
+  const alreadyApproved = currentAllowance !== undefined && currentAllowance >= amountRawNeeded && amountRawNeeded > 0
 
   // Block explorer URLs
   const baseExplorer = `https://basescan.org/address/${vaultAddress}`
@@ -575,16 +608,36 @@ export default function LendPage() {
               Switch to {chains.find((c) => c.id === selectedChain)?.name ?? selectedChain}
             </button>
           ) : lendStep === 'idle' ? (
-            <div className="space-y-2">
-              <div className="text-[#4b5563] text-xs mb-2">Step 1 of 2: Approve token spending</div>
-              <button
-                onClick={handleApprove}
-                disabled={!isValidAmount || !vaultAddress}
-                className="w-full py-3 bg-[#00e5ff] text-[#0a0a0a] font-bold rounded-lg uppercase tracking-widest hover:bg-[#00b8cc] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Approve ${parsedAmount > 0 ? parsedAmount.toFixed(2) : '—'} {token?.symbol ?? 'USDC'}
-              </button>
-            </div>
+            alreadyApproved ? (
+              /* Wallet already has sufficient allowance — skip approve step */
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-[#00ff88] text-xs">✓ Allowance already approved on-chain</span>
+                  <span className="text-[#4b5563] text-xs">· Step 2 ready</span>
+                </div>
+                <button
+                  onClick={handleLend}
+                  disabled={!isValidAmount || !vaultAddress}
+                  className="w-full py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg uppercase tracking-widest hover:bg-[#00cc6a] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Lend ${parsedAmount.toFixed(2)} at {(interestBps / 100).toFixed(0)}% interest
+                </button>
+                <div className="text-[10px] text-[#2d3748] text-center">
+                  On-chain allowance ≥ ${parsedAmount.toFixed(2)} — approval not needed
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="text-[#4b5563] text-xs mb-2">Step 1 of 2: Approve token spending</div>
+                <button
+                  onClick={handleApprove}
+                  disabled={!isValidAmount || !vaultAddress}
+                  className="w-full py-3 bg-[#00e5ff] text-[#0a0a0a] font-bold rounded-lg uppercase tracking-widest hover:bg-[#00b8cc] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Approve ${parsedAmount > 0 ? parsedAmount.toFixed(2) : '—'} {token?.symbol ?? 'USDC'}
+                </button>
+              </div>
+            )
           ) : lendStep === 'approving' ? (
             <div className="space-y-2">
               <div className="text-[#4b5563] text-xs mb-2">Step 1 of 2: Waiting for approval confirmation...</div>
