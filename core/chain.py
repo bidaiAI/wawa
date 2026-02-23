@@ -486,6 +486,7 @@ class ChainTxResult:
     gas_price_wei: int = 0       # effectiveGasPrice from receipt
     gas_cost_native: float = 0.0  # gas_used * gas_price in native token (ETH/BNB)
     stable_usd: float = 0.0      # stablecoin USD amount received (swap results only)
+    amount_usd: float = 0.0      # for repay_principal: actual USD sent (may be capped to on-chain outstanding)
 
 
 class _TxTimeoutError(Exception):
@@ -1386,8 +1387,12 @@ class ChainExecutor:
             logger.warning(f"Could not query on-chain debt for cap check: {e}")
             # Proceed anyway — worst case tx reverts and we catch it
 
+        amount_sent_usd = _raw_to_usd(amount_raw, decimals)
         tx_fn = chain["vault_contract"].functions.repayPrincipalPartial(amount_raw)
-        return await self._send_tx(picked, tx_fn)
+        result = await self._send_tx(picked, tx_fn)
+        if result.success:
+            result.amount_usd = amount_sent_usd
+        return result
 
     async def repay_loan(self, loan_index: int, amount_usd: float, chain_id: Optional[str] = None) -> ChainTxResult:
         """
@@ -1844,12 +1849,14 @@ class ChainExecutor:
         except Exception as e:
             logger.warning(f"Could not query on-chain debt for cap check [{chain_id}]: {e}")
 
+        amount_sent_usd = _raw_to_usd(amount_raw, decimals)
         tx_fn = chain["vault_contract"].functions.repayPrincipalPartial(amount_raw)
         result = await self._send_tx(chain_id, tx_fn)
 
         if result.success:
+            result.amount_usd = amount_sent_usd
             logger.info(
-                f"Per-chain repayment [{chain_id}]: ${amount_usd:.2f} "
+                f"Per-chain repayment [{chain_id}]: ${amount_sent_usd:.2f} "
                 f"tx={result.tx_hash[:16]}..."
             )
         return result
