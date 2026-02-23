@@ -4137,8 +4137,6 @@ async def lifespan(app):
     # Start background tasks
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
 
-    memory.add("wawa started up", source="system", importance=0.6)
-
     logger.info(f"Balance: ${vault.balance_usd:.2f}")
     logger.info(f"LLM: {cost_guard.current_provider.value if cost_guard.current_provider else 'NONE'}")
     tier = cost_guard.get_current_tier()
