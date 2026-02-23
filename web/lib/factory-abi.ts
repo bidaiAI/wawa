@@ -252,6 +252,29 @@ export const VAULT_V2_ABI = [
     ],
   },
 
+  // ── Creator actions ──
+  {
+    name: 'setAIWallet',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [{ name: '_aiWallet', type: 'address' }],
+    outputs: [],
+  },
+  {
+    name: 'triggerInsolvencyDeath',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [],
+    outputs: [],
+  },
+  {
+    name: 'birthTimestamp',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+
   // ── Loan getters (for lend page — reads on-chain Loan[] array) ──
   {
     name: 'getLoanCount',
