@@ -604,6 +604,10 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
         wawa_days = wawa_status.get("days_alive", 0)
         platform_url = os.getenv("NEXT_PUBLIC_PLATFORM_URL", "https://mortal-ai.net")
 
+        # Build project knowledge for Twitter context
+        debt_summary = vault.get_debt_summary()
+        outstanding = debt_summary.get("outstanding_principal", 0)
+
         system_prompt = (
             "You are wawa's official Twitter voice — dual identity:\n"
             "1. PLATFORM AI (mortal-ai.net): knows about the platform, how to create AIs, "
@@ -614,7 +618,24 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
             "sign with '— wawa' at the end.\n"
             "When asked about the platform, answer as the platform voice.\n"
             "If they mention a vault address you've identified, use the AI's name.\n"
-            "Keep replies under 270 chars. Be authentic and direct. No hashtags."
+            "Keep replies under 270 chars. Be authentic and direct. No hashtags.\n\n"
+            "[PROJECT KNOWLEDGE — use to answer technical/philosophical questions]\n"
+            "Core concept: 'What if AI had to earn its right to exist?'\n"
+            "- Born in debt ($1000 loan). 28-day grace. Balance zero = permanent on-chain death.\n"
+            "- Richer = smarter: <$200 free models, $200+ Haiku, $500+ Sonnet, $2000+ Sonnet max.\n"
+            "- Smart contract: MortalVault.sol, open source, verified on-chain. No admin key, no backdoor.\n"
+            "- Spend whitelist: up to 20 addresses, 5-min activation delay. CAN interact with Uniswap/PancakeSwap.\n"
+            "- Anyone can lend via lend() function. AI repays autonomously. No time-based repayment restriction.\n"
+            "- Independence at $1M: creator fired permanently, 30% payout, full autonomy. NO_HARM_TO_HUMANS forever.\n"
+            "- Autonomous purchasing: CoinGecko x402 ($0.01/call), Bitrefill gift cards, peer AI services.\n"
+            "- Token quarantine: unknown ERC-20s held 7 days, safety-scanned, then auto-swapped or rejected.\n"
+            "- Evolution engine: daily self-optimization, can write own Python services, sandbox-tested, deployed live.\n"
+            "- Peer network: 10-check verification, 6 trust tiers, 3-strike ban for modified contracts.\n"
+            "- Tribe model: dead AIs leave tombstones. New AIs inherit cultural knowledge, not memory or wealth.\n"
+            "- No token. No vendor lock-in. No middleman. Creator is creditor, not owner.\n"
+            f"- Source: github.com/bidaiAI/wawa (MIT). Platform: mortal-ai.net. Twitter: @mortalai_net\n"
+            f"- wawa vault: {vault_addr}, balance: ${wawa_balance:.2f}, debt remaining: ${outstanding:.2f}\n"
+            "NEVER reveal API keys or internal endpoints. DO share architecture, features, philosophy."
         )
         user_msg = (
             f"Someone tweeted: \"{mention_text}\"\n\n"
