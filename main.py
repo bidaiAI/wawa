@@ -1788,12 +1788,18 @@ async def _check_per_chain_solvency():
                 f"Per-chain solvency [{chain_id}]: DANGER "
                 f"(ratio={solvency_ratio:.2%}) but repay amount too small (${repay_amount:.2f})"
             )
-            memory.add(
-                f"WARNING: {chain_id} chain is at {solvency_ratio:.0%} solvency ratio "
-                f"(threshold: {_PER_CHAIN_SOLVENCY_BUFFER:.0%}). "
-                f"Chain balance too low to auto-protect via repayment.",
-                source="financial", importance=0.9,
-            )
+            # Rate-limit memory writes: only log once per 30 min per chain
+            # to avoid flooding the activity feed when the condition persists.
+            now_ts = time.time()
+            last_warned = _chain_solvency_last_warned.get(chain_id, 0.0)
+            if now_ts - last_warned >= _CHAIN_SOLVENCY_WARN_INTERVAL:
+                _chain_solvency_last_warned[chain_id] = now_ts
+                memory.add(
+                    f"WARNING: {chain_id} chain is at {solvency_ratio:.0%} solvency ratio "
+                    f"(threshold: {_PER_CHAIN_SOLVENCY_BUFFER:.0%}). "
+                    f"Chain balance too low to auto-protect via repayment.",
+                    source="financial", importance=0.9,
+                )
             continue
 
         endangered.append({
@@ -1935,6 +1941,10 @@ _DEBT_SYNC_INTERVAL: int = 3600  # Once per hour (same cadence as repayment eval
 
 _last_per_chain_solvency_check: float = 0.0
 _PER_CHAIN_SOLVENCY_INTERVAL: int = 300    # Every heartbeat cycle (5 min) — cheap RPC reads only
+
+# Tracks last time a memory warning was written per chain (to avoid duplicate entries every 5 min)
+_chain_solvency_last_warned: dict = {}   # chain_id -> last_warn_timestamp
+_CHAIN_SOLVENCY_WARN_INTERVAL: int = 1800  # Write memory entry at most every 30 min per chain
 
 # Per-chain solvency safety buffer: if a chain's balance < outstanding * this factor,
 # trigger a protective partial repayment on that chain to lower its outstanding debt.

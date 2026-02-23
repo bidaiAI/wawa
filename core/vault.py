@@ -167,6 +167,9 @@ class VaultManager:
         self._on_independence: Optional[Callable] = None
         self._on_transcendence: Optional[Callable] = None  # Called once when godhood achieved
 
+        # Guard: prevent survival mode callback from firing on every spend() when already in survival mode
+        self._survival_mode_notified: bool = False
+
     def get_lock(self) -> asyncio.Lock:
         """
         Return the async state lock, creating it lazily on first call.
@@ -218,6 +221,10 @@ class VaultManager:
         if chain:
             self.balance_by_chain[chain] = self.balance_by_chain.get(chain, 0.0) + amount_usd
         self.total_income_usd += amount_usd
+
+        # Reset survival mode notification guard when balance recovers above threshold
+        if self.balance_usd >= 100.0 and self._survival_mode_notified:
+            self._survival_mode_notified = False
 
         # Track earned revenue separately (excludes capital injections)
         # CREATOR_DEPOSIT = loan capital, LOAN_RECEIVED = third-party loan capital
@@ -398,8 +405,12 @@ class VaultManager:
                 self._on_low_balance(self.balance_usd)
 
         # Check survival mode trigger (< $100)
+        # Guard: only fire once per entry into survival mode to prevent
+        # duplicate memory entries when multiple spend() calls happen in
+        # the same heartbeat cycle while already in survival mode.
         elif self.balance_usd < 100.0:
-            if self._on_survival_mode:
+            if self._on_survival_mode and not self._survival_mode_notified:
+                self._survival_mode_notified = True
                 self._on_survival_mode(self.balance_usd)
 
         return True

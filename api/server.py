@@ -2353,9 +2353,22 @@ def create_app(
             except Exception as exc:
                 logger.debug(f"Activity: transaction log unavailable: {exc}")
 
-        # Sort by timestamp descending, deduplicate, limit
+        # Sort by timestamp descending
         activities.sort(key=lambda a: a["timestamp"], reverse=True)
-        activities = activities[:limit]
+
+        # Deduplicate: drop entries with identical action text within 30 minutes of each other.
+        # This removes repeated "Entered survival mode" / chain warning duplicates from the feed
+        # without losing genuinely different events that happen to share similar wording.
+        _DEDUP_WINDOW = 1800.0  # 30 minutes
+        seen: dict[str, float] = {}   # action_text -> most recent timestamp kept
+        deduped: list = []
+        for item in activities:
+            key = item.get("action", "")[:120]  # Truncate for comparison
+            last_ts = seen.get(key)
+            if last_ts is None or (last_ts - item["timestamp"]) > _DEDUP_WINDOW:
+                deduped.append(item)
+                seen[key] = item["timestamp"]
+        activities = deduped[:limit]
 
         return {"activities": activities}
 
