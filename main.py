@@ -915,7 +915,7 @@ async def _tweet_post_fn(content: str) -> str:
             access_secret = os.getenv("TWITTER_ACCESS_SECRET", "")
             headers = {"Content-Type": "application/json"}
             if _tweet_proxy_secret:
-                headers["Authorization"] = f"Bearer {_tweet_proxy_secret}"
+                headers["X-Platform-Secret"] = _tweet_proxy_secret
 
             payload = {
                 "content": content,
@@ -1020,7 +1020,7 @@ async def _tweet_reply_fn(content: str, in_reply_to_tweet_id: str) -> str:
                 async with session.post(
                     _tweet_proxy_url,
                     json=payload,
-                    headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {_tweet_proxy_secret}"} if _tweet_proxy_secret else {})},
+                    headers={"Content-Type": "application/json", **({"X-Platform-Secret": _tweet_proxy_secret} if _tweet_proxy_secret else {})},
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status == 200:
