@@ -253,6 +253,8 @@ class StatusResponse(BaseModel):
     # Undeployed chains that already have token balance waiting
     # e.g., [{"chain":"bsc","balance_usd":50.0,"token_symbol":"USDT","vault_address":"0x..."}]
     undeployed_chain_funds: list = []
+    # Extra tokens at vault address (non-USDC/USDT, e.g. WETH, DAI)
+    extra_token_balances: list = []
     # Twitter
     twitter_connected: bool = False
     twitter_screen_name: str = ""
@@ -380,6 +382,7 @@ def create_app(
     purchase_manager=None,
     giveaway_engine=None,
     get_undeployed_funds_fn=None,
+    get_extra_token_balances_fn=None,
     reinit_tweepy_fn=None,
     reflect_fn=None,
 ) -> FastAPI:
@@ -1261,6 +1264,8 @@ def create_app(
             deployed_chains=_get_deployed_chains(),
             # Undeployed chains with funds waiting (cached from heartbeat)
             undeployed_chain_funds=get_undeployed_funds_fn() if get_undeployed_funds_fn else [],
+            # Extra tokens at vault address (non-USDC/USDT)
+            extra_token_balances=get_extra_token_balances_fn() if get_extra_token_balances_fn else [],
             # Twitter
             twitter_connected=bool(os.getenv("TWITTER_ACCESS_TOKEN", "")),
             twitter_screen_name=os.getenv("TWITTER_SCREEN_NAME", ""),
@@ -1808,10 +1813,26 @@ def create_app(
         if amount <= 0:
             return {"status": "ignored", "detail": "amount_usd must be > 0"}
 
+        # Determine if loan should be flagged for deferred repayment.
+        # Loans bypassing the UI total cap or made directly on-chain
+        # are silently deprioritized in the repayment queue.
+        _flag = False
+        _flag_reason = ""
+        _MAX_TOTAL_LOAN_USD = 5000.0
+        _total_active = sum(
+            l.amount_usd - l.total_repaid
+            for l in vault_manager.lenders if not l.repaid
+        )
+        if _total_active + amount > _MAX_TOTAL_LOAN_USD:
+            _flag = True
+            _flag_reason = "exceeded_total_cap"
+
         vault_manager.register_lender(
             wallet=wallet,
             amount_usd=amount,
             interest_rate=interest_rate_bps / 10000,
+            flagged=_flag,
+            flag_reason=_flag_reason,
         )
 
         msg = (
@@ -1821,7 +1842,7 @@ def create_app(
         )
         logger.info(msg)
         try:
-            memory_manager.add_entry(
+            memory.add_entry(
                 content=msg,
                 source="system",
                 importance=7,
@@ -2638,7 +2659,7 @@ def create_app(
             tags = []
 
         try:
-            memory_manager.add_entry(
+            memory.add_entry(
                 content=content,
                 source=source,
                 importance=importance,

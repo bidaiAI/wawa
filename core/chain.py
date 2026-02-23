@@ -63,6 +63,30 @@ CHAIN_DEFAULTS = {
 
 
 # ============================================================
+# EXTRA TOKENS — common tokens to check at vault address
+# These are NOT the primary vault tokens (USDC/USDT),
+# but other tokens someone might send to the vault address.
+# ============================================================
+
+EXTRA_TOKENS: dict[str, list[dict]] = {
+    "base": [
+        {"address": "0x4200000000000000000000000000000000000006", "symbol": "WETH", "decimals": 18},
+        {"address": "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6a", "symbol": "USDbC", "decimals": 6},
+        {"address": "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb", "symbol": "DAI", "decimals": 18},
+        {"address": "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22", "symbol": "cbETH", "decimals": 18},
+        {"address": "0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452", "symbol": "wstETH", "decimals": 18},
+    ],
+    "bsc": [
+        {"address": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", "symbol": "WBNB", "decimals": 18},
+        {"address": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", "symbol": "USDC", "decimals": 18},
+        {"address": "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56", "symbol": "BUSD", "decimals": 18},
+        {"address": "0x2170Ed0880ac9A755fd29B2688956BD959F933F8", "symbol": "ETH", "decimals": 18},
+        {"address": "0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3", "symbol": "DAI", "decimals": 18},
+    ],
+}
+
+
+# ============================================================
 # MINIMAL ABI — only functions we call at runtime
 # ============================================================
 
@@ -1698,6 +1722,78 @@ class ChainExecutor:
 
             except Exception as e:
                 logger.debug(f"check_undeployed_chain_balances [{chain_id}]: {e}")
+
+        return results
+
+    # ============================================================
+    # EXTRA TOKEN BALANCE CHECK
+    # ============================================================
+
+    async def check_extra_token_balances(self) -> list[dict]:
+        """
+        Check for non-primary tokens at the vault address on deployed chains.
+
+        Scans EXTRA_TOKENS list (WETH, DAI, WBNB, etc.) via balanceOf().
+        Returns list of dicts for any token with balance > $0.01:
+          [{"chain": "base", "symbol": "WETH", "balance": 0.05, "balance_usd": 150.0,
+            "address": "0x...", "decimals": 18}]
+
+        Note: balance_usd is approximate — uses hardcoded price estimates since
+        we don't have a live price oracle for every token. For display only.
+        """
+        if not self._initialized:
+            return []
+
+        # Very rough price estimates for display purposes only
+        # Updated manually; not used for financial decisions
+        _PRICE_ESTIMATES: dict[str, float] = {
+            "WETH": 2800.0, "ETH": 2800.0, "cbETH": 2900.0, "wstETH": 3200.0,
+            "WBNB": 600.0, "BNB": 600.0,
+            "USDC": 1.0, "USDbC": 1.0, "USDT": 1.0, "BUSD": 1.0, "DAI": 1.0,
+        }
+
+        results: list[dict] = []
+        loop = asyncio.get_running_loop()
+
+        for chain_id, chain_info in self._chains.items():
+            extra = EXTRA_TOKENS.get(chain_id, [])
+            if not extra:
+                continue
+
+            w3 = chain_info["w3"]
+            vault_addr = chain_info["vault_address"]
+
+            for token_def in extra:
+                try:
+                    addr = Web3.to_checksum_address(token_def["address"])
+                    tc = w3.eth.contract(address=addr, abi=ERC20_ABI)
+
+                    def _read(c=tc, va=vault_addr):
+                        return c.functions.balanceOf(va).call()
+
+                    raw = await loop.run_in_executor(None, _read)
+                    if raw == 0:
+                        continue
+
+                    decimals = token_def["decimals"]
+                    balance = raw / (10 ** decimals)
+                    price = _PRICE_ESTIMATES.get(token_def["symbol"], 0.0)
+                    balance_usd = balance * price
+
+                    if balance_usd < 0.01 and balance < 0.0001:
+                        continue  # Ignore dust
+
+                    results.append({
+                        "chain": chain_id,
+                        "symbol": token_def["symbol"],
+                        "balance": round(balance, 8),
+                        "balance_usd": round(balance_usd, 2),
+                        "address": token_def["address"],
+                        "decimals": decimals,
+                    })
+
+                except Exception as e:
+                    logger.debug(f"check_extra_token [{chain_id}/{token_def['symbol']}]: {e}")
 
         return results
 

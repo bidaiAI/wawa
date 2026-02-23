@@ -478,6 +478,29 @@ export default function HomePage() {
         )}
 
         <div className="mt-1 text-[#4b5563] text-xs">USDC + USDT equivalent</div>
+
+        {/* Outstanding loans — small text under balance */}
+        {debt && (debt.total_debt ?? 0) > 0 && (
+          <div className="mt-2 text-[10px] text-[#ff3b3b99] tabular-nums">
+            outstanding loans: ${(debt.total_debt ?? 0).toFixed(2)}
+            {debt.lender_count > 0 && (
+              <span className="text-[#4b5563]"> ({debt.lender_count} lender{debt.lender_count > 1 ? 's' : ''}: ${(debt.lender_total_owed ?? 0).toFixed(2)})</span>
+            )}
+          </div>
+        )}
+
+        {/* Extra tokens at vault address (non-USDC/USDT) */}
+        {status && (status.extra_token_balances ?? []).length > 0 && (
+          <div className="mt-2 flex items-center justify-center gap-2 flex-wrap">
+            {(status.extra_token_balances as Array<{ chain: string; symbol: string; balance: number; balance_usd: number }>).map((t, i) => (
+              <span key={i} className={`text-[10px] tabular-nums ${CHAIN_COLORS[t.chain] ?? 'text-[#4b5563]'}`}>
+                {t.balance < 0.001 ? t.balance.toFixed(6) : t.balance < 1 ? t.balance.toFixed(4) : t.balance.toFixed(2)} {t.symbol}
+                {t.balance_usd > 0.01 && <span className="text-[#4b5563]"> (~${t.balance_usd.toFixed(2)})</span>}
+              </span>
+            ))}
+          </div>
+        )}
+
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,#00ff8808,transparent_70%)] pointer-events-none" />
       </div>
 

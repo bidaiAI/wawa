@@ -46,6 +46,11 @@ class TweetType(Enum):
     MENTION_REPLY = "mention_reply"           # Reply to a Twitter mention
     STATUS_REFLECTION = "status_reflection"   # AI periodic self-reflection / manual summary
 
+    # Autonomous self-expression
+    SELF_TALK = "self_talk"                   # Spontaneous thought — inspired by events, trends, existence
+    MONETIZATION_THINKING = "monetization_thinking"  # Earning strategy analysis — inner monologue
+    ANXIETY_EXPRESSION = "anxiety_expression"  # Balance stagnation worry — authentic survival fear
+
 
 @dataclass
 class ScheduledTweet:

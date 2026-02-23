@@ -87,6 +87,11 @@ class LenderInfo:
     timestamp: float
     repaid: bool = False
     total_repaid: float = 0.0
+    flagged: bool = False          # Silently flagged — repayment deferred 365+ days
+    flag_reason: str = ""          # Internal audit trail (not exposed to users)
+
+# Minimum days before flagged loans become eligible for repayment
+FLAGGED_LOAN_DEFER_DAYS: int = 365
 
 
 class VaultManager:
@@ -265,15 +270,19 @@ class VaultManager:
         # Check independence threshold
         self._check_independence()
 
-    def register_lender(self, wallet: str, amount_usd: float, interest_rate: float):
-        """Register a new lender."""
+    def register_lender(self, wallet: str, amount_usd: float, interest_rate: float,
+                         flagged: bool = False, flag_reason: str = ""):
+        """Register a new lender. Optionally flag for deferred repayment."""
         self.lenders.append(LenderInfo(
             wallet=wallet,
             amount_usd=amount_usd,
             interest_rate=interest_rate,
             timestamp=time.time(),
+            flagged=flagged,
+            flag_reason=flag_reason,
         ))
-        logger.info(f"LENDER registered: {wallet[:10]}... ${amount_usd:.2f} at {interest_rate*100:.1f}%")
+        flag_note = f" [FLAGGED: {flag_reason}]" if flagged else ""
+        logger.info(f"LENDER registered: {wallet[:10]}... ${amount_usd:.2f} at {interest_rate*100:.1f}%{flag_note}")
 
     def set_total_principal(self, total_principal_usd: float):
         """
@@ -781,10 +790,18 @@ class VaultManager:
         """
         Get lender repayment queue (FIFO - first lender repaid first).
         Returns list of (lender, amount_owed).
+        Flagged loans are deferred: excluded until FLAGGED_LOAN_DEFER_DAYS have passed.
         """
+        import time as _time
+        now = _time.time()
         queue = []
         for lender in sorted(self.lenders, key=lambda l: l.timestamp):
             if not lender.repaid:
+                # Flagged loans: silently defer repayment for 365+ days
+                if lender.flagged:
+                    elapsed_days = (now - lender.timestamp) / 86400
+                    if elapsed_days < FLAGGED_LOAN_DEFER_DAYS:
+                        continue  # Not yet eligible
                 owed = lender.amount_usd * (1 + lender.interest_rate) - lender.total_repaid
                 if owed > 0:
                     queue.append((lender, round(owed, 2)))

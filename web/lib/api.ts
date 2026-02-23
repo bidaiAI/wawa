@@ -80,6 +80,16 @@ export interface VaultStatus {
     vault_address: string
     explorer: string
   }>
+  // Extra token balances at vault address (non-USDC/USDT tokens)
+  // e.g. [{chain:"base", symbol:"WETH", balance:0.05, balance_usd:150.0, address:"0x...", decimals:18}]
+  extra_token_balances: Array<{
+    chain: string
+    symbol: string
+    balance: number
+    balance_usd: number
+    address: string
+    decimals: number
+  }>
   // Suggested payment chain — chain with lowest balance (auto-balancing hint)
   // null = single-chain deployment or chain executor not initialized
   preferred_payment_chain: string | null

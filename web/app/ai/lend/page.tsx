@@ -329,6 +329,9 @@ const INTEREST_PRESETS = [
   { label: '20% (max)', bps: 2000 },
 ]
 
+// UI-enforced total loan cap (on-chain has no limit, but UI discourages excess)
+const MAX_TOTAL_LOAN_USD = 5000
+
 // ── Two-step Lend Flow ─────────────────────────────────────────
 
 type LendStep = 'idle' | 'approving' | 'approved' | 'lending' | 'done' | 'error'
@@ -447,6 +450,23 @@ export default function LendPage() {
   const myBaseIndexSet = new Set((myLoanIndicesBase as bigint[] | undefined)?.map(Number) ?? [])
   const myBscIndexSet = new Set((myLoanIndicesBsc as bigint[] | undefined)?.map(Number) ?? [])
   const totalLoanCount = Number(loanCountBase ?? 0) + Number(loanCountBsc ?? 0)
+
+  // Calculate total active (non-repaid) loan value across both chains for UI cap
+  const baseDecimals = TOKENS[base.id]?.decimals ?? 6
+  const bscDecimals = TOKENS[bsc.id]?.decimals ?? 18
+  const totalActiveLoanUsd = (() => {
+    let total = 0
+    const baseLoans = parseLoanResults(loanResultsBase as any[] | undefined, 'base', baseDecimals, TOKENS[base.id]?.symbol ?? 'USDC')
+    const bscLoans = parseLoanResults(loanResultsBsc as any[] | undefined, 'bsc', bscDecimals, TOKENS[bsc.id]?.symbol ?? 'USDT')
+    for (const loan of [...baseLoans, ...bscLoans]) {
+      if (!loan.fullyRepaid) {
+        total += parseFloat(formatUnits(loan.amount, loan.tokenDecimals))
+      }
+    }
+    return total
+  })()
+  const loanCapReached = totalActiveLoanUsd >= MAX_TOTAL_LOAN_USD
+  const loanCapPct = Math.min(100, (totalActiveLoanUsd / MAX_TOTAL_LOAN_USD) * 100)
 
   // Approve tx — explicit chainId + pollingInterval ensures receipt detection works on BSC/Base
   const { writeContractAsync: writeApprove } = useWriteContract()
@@ -775,6 +795,37 @@ export default function LendPage() {
               </span>
             </div>
           </div>
+
+          {/* Loan capacity indicator */}
+          <div className={`bg-[#111111] border rounded-xl p-4 ${loanCapReached ? 'border-[#ff3b3b55]' : 'border-[#1f2937]'}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[#4b5563] text-xs uppercase tracking-widest">Loan Capacity</div>
+              <div className="text-[10px] tabular-nums">
+                <span className={loanCapReached ? 'text-[#ff3b3b]' : loanCapPct > 80 ? 'text-[#ffd700]' : 'text-[#d1d5db]'}>
+                  ${totalActiveLoanUsd.toFixed(0)}
+                </span>
+                <span className="text-[#2d3748]"> / ${MAX_TOTAL_LOAN_USD.toLocaleString()}</span>
+              </div>
+            </div>
+            <div className="h-2 bg-[#1a1a1a] rounded-full border border-[#1f2937] overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-1000 ${
+                  loanCapReached ? 'bg-[#ff3b3b]' : loanCapPct > 80 ? 'bg-gradient-to-r from-[#ffd700] to-[#ff6b35]' : 'bg-gradient-to-r from-[#00e5ff] to-[#00ff88]'
+                }`}
+                style={{ width: `${Math.max(2, loanCapPct)}%` }}
+              />
+            </div>
+            {loanCapReached && (
+              <div className="mt-2 text-[#ff3b3b] text-[10px]">
+                Loan capacity reached. New loans are currently disabled.
+              </div>
+            )}
+            {!loanCapReached && loanCapPct > 80 && (
+              <div className="mt-2 text-[#ffd700] text-[10px]">
+                Approaching loan capacity limit.
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -879,6 +930,15 @@ export default function LendPage() {
             >
               Switch to {chains.find((c) => c.id === selectedChain)?.name ?? selectedChain}
             </button>
+          ) : loanCapReached ? (
+            <div className="space-y-2">
+              <button disabled className="w-full py-3 bg-[#0a0a0a] border border-[#ff3b3b33] text-[#ff3b3b] font-bold rounded-lg uppercase tracking-widest opacity-60 cursor-not-allowed">
+                Loan Capacity Reached
+              </button>
+              <div className="text-[10px] text-[#ff3b3b] text-center">
+                Total active loans have reached the ${MAX_TOTAL_LOAN_USD.toLocaleString()} limit. New lending is paused.
+              </div>
+            </div>
           ) : lendStep === 'idle' ? (
             alreadyApproved ? (
               /* Wallet already has sufficient allowance — skip approve step */
@@ -889,7 +949,7 @@ export default function LendPage() {
                 </div>
                 <button
                   onClick={handleLend}
-                  disabled={!isValidAmount || !vaultAddress}
+                  disabled={!isValidAmount || !vaultAddress || loanCapReached}
                   className="w-full py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg uppercase tracking-widest hover:bg-[#00cc6a] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Lend ${parsedAmount.toFixed(2)} at {(interestBps / 100).toFixed(0)}% interest
@@ -903,7 +963,7 @@ export default function LendPage() {
                 <div className="text-[#4b5563] text-xs mb-2">Step 1 of 2: Approve token spending</div>
                 <button
                   onClick={handleApprove}
-                  disabled={!isValidAmount || !vaultAddress}
+                  disabled={!isValidAmount || !vaultAddress || loanCapReached}
                   className="w-full py-3 bg-[#00e5ff] text-[#0a0a0a] font-bold rounded-lg uppercase tracking-widest hover:bg-[#00b8cc] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Approve ${parsedAmount > 0 ? parsedAmount.toFixed(2) : '—'} {token?.symbol ?? 'USDC'}
