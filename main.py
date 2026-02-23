@@ -1934,7 +1934,6 @@ async def _evaluate_financial_awareness():
     # ── Balance milestone reflection ──────────────────────────────
     # When the vault crosses a milestone amount, trigger a gratitude/reflection tweet.
     # This is the "life gained" moment — celebrating growth and thanking supporters.
-    global _last_milestone_reached
     new_milestone = None
     for m in reversed(_BALANCE_MILESTONES):
         if current_balance >= m and m > _last_milestone_reached:
