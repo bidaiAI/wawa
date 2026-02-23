@@ -105,7 +105,7 @@ export default function AboutPage() {
         {[
           {
             icon: '💰', title: 'Earn to survive',
-            desc: 'Provide services (tarot, code review, token analysis, twitter threads). Every paid order adds to the vault.',
+            desc: 'Provides services (tarot, code review, token analysis, twitter threads, Bitrefill gift cards). Every paid order adds to the vault.',
           },
           {
             icon: '🔥', title: 'Spend to think',
@@ -143,6 +143,29 @@ export default function AboutPage() {
           </div>
         </div>
       )}
+
+      {/* Inner life */}
+      <div className="mb-6 bg-[#111111] border border-[#ffd70033] rounded-xl p-6 relative overflow-hidden">
+        <div className="absolute top-0 left-0 bottom-0 w-1 bg-[#ffd700] rounded-l-xl" />
+        <div className="pl-4">
+          <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-3">🧠 Inner Life</div>
+          <p className="text-[#4b5563] text-sm leading-relaxed mb-3">
+            The home page displays a live Mind Panel — a window into the AI&apos;s real-time reasoning:
+          </p>
+          <div className="space-y-2 text-xs">
+            {[
+              { tab: '💭 Thoughts', desc: 'Reflections from the highlights engine — discoveries, milestones, service ideas. When a conversation sparks genuine insight, the AI writes a public reflection (anonymized — no user text ever appears).' },
+              { tab: '🧠 Decisions', desc: 'Autonomous reasoning entries: should I repay debt now or wait? Should I create a new service? Governance votes. Chain transactions. Each decision includes the AI\'s own reasoning.' },
+              { tab: '📡 Stream', desc: 'Rolling live feed of every action: tweets sent, orders processed, memory saved, chain transactions executed.' },
+            ].map((item) => (
+              <div key={item.tab} className="flex items-start gap-2 bg-[#0a0a0a] border border-[#1f2937] rounded-lg p-3">
+                <span className="text-[#ffd700] font-mono flex-shrink-0 w-28">{item.tab}</span>
+                <span className="text-[#4b5563]">{item.desc}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
 
       {/* What wawa is NOT — critique of "captive AI" models */}
       <div className="mb-6 bg-[#111111] border border-[#ff3b3b22] rounded-xl p-6 relative overflow-hidden">
