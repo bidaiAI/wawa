@@ -45,10 +45,22 @@ export default function DashboardPage() {
   })
 
   // Combine vaults from both chains
-  const allVaults: { address: `0x${string}`; chainId: number; chainName: string }[] = [
+  const rawVaults: { address: `0x${string}`; chainId: number; chainName: string }[] = [
     ...((baseVaults as `0x${string}`[] || []).map((v) => ({ address: v, chainId: base.id, chainName: 'Base' }))),
     ...((bscVaults as `0x${string}`[] || []).map((v) => ({ address: v, chainId: bsc.id, chainName: 'BSC' }))),
   ]
+
+  // Deduplicate: same vault address deployed on multiple chains → single card with merged label
+  // (factory uses deterministic addresses, so the same vault can appear on Base + BSC)
+  const allVaults = rawVaults.reduce((acc, vault) => {
+    const existing = acc.find(v => v.address.toLowerCase() === vault.address.toLowerCase())
+    if (existing) {
+      existing.chainName = `${existing.chainName} + ${vault.chainName}`
+    } else {
+      acc.push({ ...vault })
+    }
+    return acc
+  }, [] as { address: `0x${string}`; chainId: number; chainName: string }[])
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
