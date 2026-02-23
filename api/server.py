@@ -381,6 +381,7 @@ def create_app(
     giveaway_engine=None,
     get_undeployed_funds_fn=None,
     reinit_tweepy_fn=None,
+    reflect_fn=None,
 ) -> FastAPI:
     """
     Create FastAPI app wired to all mortal modules.
@@ -1829,6 +1830,23 @@ def create_app(
         except Exception:
             pass  # memory not critical for this path
 
+        # Tweet about new loan (LOAN_RECEIVED)
+        if twitter_agent:
+            try:
+                from twitter.agent import TweetType
+                asyncio.create_task(twitter_agent.trigger_event_tweet(
+                    TweetType.LOAN_RECEIVED,
+                    extra_context={
+                        "lender_wallet": wallet,
+                        "amount_usd": amount,
+                        "interest_rate_pct": interest_rate_bps / 100,
+                        "chain": chain,
+                        "new_balance_usd": vault_manager.get_status().get("balance_usd", 0),
+                    }
+                ))
+            except Exception as _te:
+                logger.warning(f"LOAN_RECEIVED tweet failed: {_te}")
+
         return {"status": "recorded"}
 
     @app.get("/transcendence")
@@ -2631,6 +2649,36 @@ def create_app(
         except Exception as e:
             logger.warning(f"Memory injection failed: {e}")
             raise HTTPException(500, f"Memory injection error: {e}")
+
+    @app.post("/internal/reflect")
+    async def internal_reflect(request: Request):
+        """
+        Trigger an AI self-reflection — creates a Highlight (website) + Tweet.
+        Protected: PLATFORM_FEE_SECRET header or localhost access.
+        Used to manually trigger a gratitude/summary tweet about recent events.
+        """
+        # Auth: same pattern as /internal/fee-collect
+        fee_secret = os.getenv("PLATFORM_FEE_SECRET", "")
+        auth_header = request.headers.get("x-platform-secret", "").strip()
+        is_local = request.client and request.client.host in ("127.0.0.1", "::1", "localhost")
+
+        if not is_local:
+            if not fee_secret or len(fee_secret) < 16:
+                raise HTTPException(503, "Reflection not configured (PLATFORM_FEE_SECRET unset)")
+            if auth_header != fee_secret:
+                bearer = request.headers.get("authorization", "").strip()
+                if bearer != f"Bearer {fee_secret}":
+                    raise HTTPException(403, "Invalid platform secret")
+
+        if not reflect_fn:
+            raise HTTPException(503, "Reflect function not configured")
+
+        try:
+            result = await reflect_fn()
+            return result
+        except Exception as e:
+            logger.error(f"Reflection failed: {e}")
+            raise HTTPException(500, f"Reflection error: {str(e)[:200]}")
 
     def _persist_order(order: Order):
         """Append order to disk log with flush for durability."""

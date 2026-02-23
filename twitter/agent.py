@@ -44,6 +44,7 @@ class TweetType(Enum):
     HIGHLIGHT = "highlight"                   # Conway-style showcase of AI intelligence
     INCOME_RECEIVED = "income_received"       # Token arrived in vault (airdrop/transfer)
     MENTION_REPLY = "mention_reply"           # Reply to a Twitter mention
+    STATUS_REFLECTION = "status_reflection"   # AI periodic self-reflection / manual summary
 
 
 @dataclass
