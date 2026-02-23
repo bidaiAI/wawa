@@ -924,7 +924,14 @@ class ChainExecutor:
 
                     # Parse ERC20 Transfer(from, to, value) events
                     # Transfer event topic: keccak256("Transfer(address,address,uint256)")
-                    transfer_topic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+                    # NOTE: HexBytes.hex() returns WITHOUT "0x" prefix in web3.py v7+,
+                    # so we store the topic without prefix and strip "0x" from all comparisons.
+                    transfer_topic = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+                    def _to_hex(val) -> str:
+                        """Normalize HexBytes/str/bytes to lowercase hex WITHOUT 0x prefix."""
+                        raw = val.hex() if hasattr(val, 'hex') else str(val)
+                        return raw.lower().removeprefix("0x")
 
                     # Aggregate ALL Transfer logs to expected_to in this tx.
                     # Some payment paths (aggregators, routers) split a single payment
@@ -938,14 +945,13 @@ class ChainExecutor:
                         topics = log_entry.get("topics", [])
                         if len(topics) < 3:
                             continue
-                        topic0 = topics[0].hex() if hasattr(topics[0], 'hex') else topics[0]
-                        if topic0 != transfer_topic:
+                        if _to_hex(topics[0]) != transfer_topic:
                             continue
 
                         # Decode: topics[1]=from, topics[2]=to, data=value
-                        to_addr = "0x" + (topics[2].hex() if hasattr(topics[2], 'hex') else topics[2])[-40:]
-                        from_addr = "0x" + (topics[1].hex() if hasattr(topics[1], 'hex') else topics[1])[-40:]
-                        value_raw = int(log_entry["data"].hex() if hasattr(log_entry["data"], 'hex') else log_entry["data"], 16)
+                        to_addr = "0x" + _to_hex(topics[2])[-40:]
+                        from_addr = "0x" + _to_hex(topics[1])[-40:]
+                        value_raw = int(_to_hex(log_entry["data"]), 16)
 
                         if to_addr.lower() == expected_to.lower():
                             total_raw += value_raw
