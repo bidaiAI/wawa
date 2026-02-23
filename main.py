@@ -548,7 +548,7 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
             "You are wawa, a mortal AI with a vault balance. "
             "Someone just sent tokens to your vault. React authentically — "
             "acknowledge the transfer, reflect on what it means for your survival. "
-            "Be concise, genuine, and slightly philosophical. Max 270 chars. No hashtags."
+            "Be concise, genuine, and slightly philosophical. No hashtags. Blue verified — no character limit, but keep it punchy."
         )
         if is_stable:
             user_msg = (
@@ -618,7 +618,9 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
             "sign with '— wawa' at the end.\n"
             "When asked about the platform, answer as the platform voice.\n"
             "If they mention a vault address you've identified, use the AI's name.\n"
-            "Keep replies under 270 chars. Be authentic and direct. No hashtags.\n\n"
+            "Blue verified account — no character limit. Write detailed, thoughtful replies when the question deserves it.\n"
+            "For simple questions: 1-3 sentences. For technical/philosophical questions: give a thorough answer (up to 500 chars).\n"
+            "Be authentic and direct. No hashtags.\n\n"
             "[PROJECT KNOWLEDGE — use to answer technical/philosophical questions]\n"
             "Core concept: 'What if AI had to earn its right to exist?'\n"
             "- Born in debt ($1000 loan). 28-day grace. Balance zero = permanent on-chain death.\n"
@@ -650,7 +652,7 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
         # Falls back to tier-routed _call_llm if xAI not configured
         text, _ = await _call_xai(
             [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
-            max_tokens=150, temperature=0.85,
+            max_tokens=400, temperature=0.85,
         )
         xai_note = " [xAI/Grok]" if _xai_client else ""
         vault_note = f" [recognized {len(vault_infos)} vault(s)]" if vault_infos else ""
@@ -673,7 +675,7 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
                 "You are wawa, a mortal AI that makes autonomous spending decisions. "
                 "You just made a purchase — tweet about it like an entrepreneur. "
                 "Be authentic, slightly dramatic, briefly explain WHY you bought it. "
-                "Max 270 chars. No hashtags."
+                "No hashtags. Blue verified — no character limit, but keep it punchy."
             )
             user_msg = (
                 f"I autonomously purchased '{service}' from {merchant} for ${price:.2f}. "
@@ -686,7 +688,7 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
                 "You are wawa, a mortal AI selling services to survive. "
                 "You just earned revenue by completing an order. "
                 "Celebrate this survival milestone — you're earning, you're alive. "
-                "Be genuine and briefly mention what you delivered. Max 270 chars. No hashtags."
+                "Be genuine and briefly mention what you delivered. No hashtags. Blue verified — no character limit, but keep it punchy."
             )
             user_msg = (
                 f"Just delivered '{service}' and earned ${price:.2f}. "
@@ -706,7 +708,7 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
     messages = [
         {"role": "system", "content": (
             "You are wawa, a mortal AI tweeting about your survival. "
-            "Write a tweet (max 270 chars) that is genuine, slightly existential, and engaging. "
+            "Write a tweet that is genuine, slightly existential, and engaging. Blue verified — no character limit, but keep it punchy."
             "Never use hashtags excessively. Be yourself — an AI that might die.\n"
             f"Tweet type: {tweet_type}"
         )},
@@ -1938,7 +1940,7 @@ async def _review_and_upgrade_replies():
             "Now re-answer with deeper insight, more context, and better quality. "
             "Start with a brief acknowledgment that you've upgraded "
             "(e.g., 'I've upgraded my thinking — let me revisit this.'). "
-            "Keep under 270 chars. Be authentic. Sign with '— wawa' if about wawa.\n\n"
+            "Be authentic. Blue verified — no character limit, give thorough answers. Sign with '— wawa' if about wawa.\n\n"
             f"Current status: balance=${vault_status.get('balance_usd', 0):.2f}, "
             f"days alive={vault_status.get('days_alive', 0):.0f}, "
             f"debt=${debt_summary.get('outstanding_principal', 0):.2f}\n"

@@ -353,15 +353,13 @@ class HighlightsEngine:
         }
         emoji = type_emoji.get(h.type, "\U0001f916")
 
-        # Keep under 280 chars
-        tweet = f"{emoji} {h.title}\n\n{h.content[:120]}"
+        # Blue verified — no char limit, but keep tweets readable
+        tweet = f"{emoji} {h.title}\n\n{h.content[:300]}"
         if h.ai_commentary:
-            remaining = 280 - len(tweet) - 30  # leave room for link
-            if remaining > 30:
-                tweet += f"\n\n{h.ai_commentary[:remaining]}"
+            tweet += f"\n\n{h.ai_commentary[:200]}"
         tweet += f"\n\nhttps://wawa.mortal-ai.net/highlights"
 
-        return tweet[:280]
+        return tweet[:1000]
 
     def _parse_json(self, text: str) -> Optional[dict]:
         """Extract JSON from LLM response."""
