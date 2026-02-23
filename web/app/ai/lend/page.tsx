@@ -108,62 +108,88 @@ function RiskMeter({ debtRatio, isIndependent }: { debtRatio: number; isIndepend
   )
 }
 
-// ── Active Loans Table (on-chain) ─────────────────────────────
+// ── Active Loans Table (on-chain, both chains) ────────────────
 
 interface LoanRow {
   index: number
+  chain: 'base' | 'bsc'
   lender: string
   amount: bigint
   interestRate: bigint
   timestamp: bigint
   repaid: bigint
   fullyRepaid: boolean
+  tokenDecimals: number
+  tokenSymbol: string
+}
+
+function parseLoanResults(
+  results: any[] | undefined,
+  chain: 'base' | 'bsc',
+  tokenDecimals: number,
+  tokenSymbol: string,
+): LoanRow[] {
+  return (results ?? [])
+    .map((r, i) => {
+      if (!r || r.status !== 'success' || !r.result) return null
+      const [lender, amount, interestRate, timestamp, repaid, fullyRepaid] =
+        r.result as [string, bigint, bigint, bigint, bigint, boolean]
+      return { index: i, chain, lender, amount, interestRate, timestamp, repaid, fullyRepaid, tokenDecimals, tokenSymbol }
+    })
+    .filter(Boolean) as LoanRow[]
 }
 
 function ActiveLoansTable({
-  loanCount,
-  loanResults,
-  myIndexSet,
-  tokenDecimals,
-  tokenSymbol,
-  chainId,
+  loanResultsBase,
+  loanResultsBsc,
+  loanCountBase,
+  loanCountBsc,
+  myBaseIndexSet,
+  myBscIndexSet,
 }: {
-  loanCount: number
-  loanResults: any[] | undefined
-  myIndexSet: Set<number>
-  tokenDecimals: number
-  tokenSymbol: string
-  chainId: number
+  loanResultsBase: any[] | undefined
+  loanResultsBsc: any[] | undefined
+  loanCountBase: number
+  loanCountBsc: number
+  myBaseIndexSet: Set<number>
+  myBscIndexSet: Set<number>
 }) {
-  const loans: LoanRow[] = (loanResults ?? [])
-    .map((r, i) => {
-      if (!r || r.status !== 'success' || !r.result) return null
-      const [lender, amount, interestRate, timestamp, repaid, fullyRepaid] = r.result as [string, bigint, bigint, bigint, bigint, boolean]
-      return { index: i, lender, amount, interestRate, timestamp, repaid, fullyRepaid }
-    })
-    .filter(Boolean) as LoanRow[]
+  const baseDecimals = TOKENS[base.id]?.decimals ?? 6
+  const bscDecimals = TOKENS[bsc.id]?.decimals ?? 18
+  const baseSymbol = TOKENS[base.id]?.symbol ?? 'USDC'
+  const bscSymbol = TOKENS[bsc.id]?.symbol ?? 'USDT'
 
-  const fmt = (raw: bigint) => parseFloat(formatUnits(raw, tokenDecimals)).toFixed(2)
+  const loansBase = parseLoanResults(loanResultsBase, 'base', baseDecimals, baseSymbol)
+  const loansBsc = parseLoanResults(loanResultsBsc, 'bsc', bscDecimals, bscSymbol)
+  // Sort: Base first, then BSC; within each chain by index
+  const loans: LoanRow[] = [...loansBase, ...loansBsc]
+
+  const totalCount = loanCountBase + loanCountBsc
+  const fmt = (raw: bigint, dec: number) => parseFloat(formatUnits(raw, dec)).toFixed(2)
   const maskAddr = (addr: string) => `${addr.slice(0, 6)}…${addr.slice(-4)}`
-  const explorer = chainId === bsc.id ? 'https://bscscan.com' : 'https://basescan.org'
 
   return (
     <div className="mb-6 bg-[#111111] border border-[#1f2937] rounded-xl p-5">
       <div className="flex items-center justify-between mb-4">
         <div className="text-[#4b5563] text-xs uppercase tracking-widest">// active loans (on-chain)</div>
-        <div className="text-[#4b5563] text-[10px] tabular-nums">{loanCount} total</div>
+        <div className="flex items-center gap-3 text-[10px] text-[#4b5563] tabular-nums">
+          {loanCountBase > 0 && <span className="text-[#0052ff]">Base: {loanCountBase}</span>}
+          {loanCountBsc > 0 && <span className="text-[#ffd700]">BSC: {loanCountBsc}</span>}
+          <span>Total: {totalCount}</span>
+        </div>
       </div>
 
       {loans.length === 0 ? (
         <div className="text-center py-6 text-[#2d3748] text-xs">
-          {loanCount === 0 ? 'No active loans yet.' : 'Loading loan data…'}
+          {totalCount === 0 ? 'No active loans yet.' : 'Loading loan data…'}
         </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-[#1f2937]">
-                <th className="text-left text-[#2d3748] font-normal pb-2 pr-3">#</th>
+                <th className="text-left text-[#2d3748] font-normal pb-2 pr-2">#</th>
+                <th className="text-left text-[#2d3748] font-normal pb-2 pr-2">Chain</th>
                 <th className="text-left text-[#2d3748] font-normal pb-2 pr-3">Lender</th>
                 <th className="text-right text-[#2d3748] font-normal pb-2 pr-3">Amount</th>
                 <th className="text-right text-[#2d3748] font-normal pb-2 pr-3">Rate</th>
@@ -173,14 +199,28 @@ function ActiveLoansTable({
             </thead>
             <tbody>
               {loans.map((loan) => {
-                const isMe = myIndexSet.has(loan.index)
-                const outstanding = parseFloat(formatUnits(loan.amount + loan.amount * loan.interestRate / BigInt(10000) - loan.repaid, tokenDecimals))
+                const isMe = loan.chain === 'base'
+                  ? myBaseIndexSet.has(loan.index)
+                  : myBscIndexSet.has(loan.index)
+                const explorer = loan.chain === 'bsc' ? 'https://bscscan.com' : 'https://basescan.org'
+                const outstanding = parseFloat(
+                  formatUnits(
+                    loan.amount + loan.amount * loan.interestRate / BigInt(10000) - loan.repaid,
+                    loan.tokenDecimals,
+                  )
+                )
                 return (
                   <tr
-                    key={loan.index}
+                    key={`${loan.chain}-${loan.index}`}
                     className={`border-b border-[#111111] ${isMe ? 'bg-[#00e5ff08]' : ''}`}
                   >
-                    <td className="py-2 pr-3 text-[#2d3748]">{loan.index}</td>
+                    <td className="py-2 pr-2 text-[#2d3748]">{loan.index}</td>
+                    <td className="py-2 pr-2">
+                      {loan.chain === 'base'
+                        ? <span className="px-1.5 py-0.5 bg-[#0052ff22] text-[#0052ff] rounded text-[9px] font-bold">BASE</span>
+                        : <span className="px-1.5 py-0.5 bg-[#ffd70022] text-[#ffd700] rounded text-[9px] font-bold">BSC</span>
+                      }
+                    </td>
                     <td className="py-2 pr-3 font-mono">
                       <a
                         href={`${explorer}/address/${loan.lender}`}
@@ -197,16 +237,19 @@ function ActiveLoansTable({
                       )}
                     </td>
                     <td className="py-2 pr-3 text-right text-[#d1d5db] tabular-nums">
-                      ${fmt(loan.amount)} <span className="text-[#2d3748]">{tokenSymbol}</span>
+                      ${fmt(loan.amount, loan.tokenDecimals)}{' '}
+                      <span className="text-[#2d3748]">{loan.tokenSymbol}</span>
                     </td>
                     <td className="py-2 pr-3 text-right text-[#ffd700] tabular-nums">
                       {(Number(loan.interestRate) / 100).toFixed(0)}%
                     </td>
                     <td className="py-2 pr-3 text-right tabular-nums">
                       <span className={loan.repaid > BigInt(0) ? 'text-[#00ff88]' : 'text-[#2d3748]'}>
-                        ${fmt(loan.repaid)}
+                        ${fmt(loan.repaid, loan.tokenDecimals)}
                       </span>
-                      <span className="text-[#2d3748]"> / ${(parseFloat(fmt(loan.amount)) * (1 + Number(loan.interestRate) / 10000)).toFixed(2)}</span>
+                      <span className="text-[#2d3748]">
+                        {' '}/ ${(parseFloat(fmt(loan.amount, loan.tokenDecimals)) * (1 + Number(loan.interestRate) / 10000)).toFixed(2)}
+                      </span>
                     </td>
                     <td className="py-2 text-right">
                       {loan.fullyRepaid ? (
@@ -214,9 +257,7 @@ function ActiveLoansTable({
                       ) : outstanding <= 0 ? (
                         <span className="text-[#00ff88]">Settled</span>
                       ) : (
-                        <span className="text-[#ff6b35]">
-                          ${outstanding > 0 ? outstanding.toFixed(2) : '0.00'} owed
-                        </span>
+                        <span className="text-[#ff6b35]">${outstanding.toFixed(2)} owed</span>
                       )}
                     </td>
                   </tr>
@@ -228,7 +269,7 @@ function ActiveLoansTable({
       )}
 
       <div className="mt-3 text-[#2d3748] text-[10px]">
-        Data read directly from the vault contract · Updates every 15s
+        Reads directly from vault contract on both chains · Updates every 15s
       </div>
     </div>
   )
@@ -338,42 +379,74 @@ export default function LendPage() {
     query: { enabled: Boolean(walletAddress && _vaultAddr && _tokenAddr) },
   })
 
-  // ── On-chain loan data ───────────────────────────────────────
-  // Read total loan count from vault contract
-  const { data: loanCount } = useReadContract({
+  // ── On-chain loan data (both Base + BSC) ─────────────────────
+  // Vault address is the same on both chains (CREATE2 deterministic deploy)
+  const { data: loanCountBase } = useReadContract({
     address: (_vaultAddr || undefined) as `0x${string}` | undefined,
     abi: VAULT_V2_ABI,
     functionName: 'getLoanCount',
-    chainId: targetChainId,
+    chainId: base.id,
+    query: { enabled: Boolean(_vaultAddr), refetchInterval: 15_000 },
+  })
+  const { data: loanCountBsc } = useReadContract({
+    address: (_vaultAddr || undefined) as `0x${string}` | undefined,
+    abi: VAULT_V2_ABI,
+    functionName: 'getLoanCount',
+    chainId: bsc.id,
     query: { enabled: Boolean(_vaultAddr), refetchInterval: 15_000 },
   })
 
-  // Batch-read all individual loans
-  const { data: loanResults } = useReadContracts({
-    contracts: Array.from({ length: Number(loanCount ?? 0) }, (_, i) => ({
+  // Batch-read all individual loans from Base
+  const { data: loanResultsBase } = useReadContracts({
+    contracts: Array.from({ length: Number(loanCountBase ?? 0) }, (_, i) => ({
       address: _vaultAddr as `0x${string}`,
       abi: VAULT_V2_ABI,
       functionName: 'loans' as const,
       args: [BigInt(i)] as [bigint],
-      chainId: targetChainId,
+      chainId: base.id,
     })),
     query: {
-      enabled: Boolean(_vaultAddr && loanCount && loanCount > 0),
+      enabled: Boolean(_vaultAddr && loanCountBase && loanCountBase > 0),
       refetchInterval: 15_000,
     },
   })
 
-  // Get indices of loans belonging to connected wallet
-  const { data: myLoanIndices } = useReadContract({
+  // Batch-read all individual loans from BSC
+  const { data: loanResultsBsc } = useReadContracts({
+    contracts: Array.from({ length: Number(loanCountBsc ?? 0) }, (_, i) => ({
+      address: _vaultAddr as `0x${string}`,
+      abi: VAULT_V2_ABI,
+      functionName: 'loans' as const,
+      args: [BigInt(i)] as [bigint],
+      chainId: bsc.id,
+    })),
+    query: {
+      enabled: Boolean(_vaultAddr && loanCountBsc && loanCountBsc > 0),
+      refetchInterval: 15_000,
+    },
+  })
+
+  // Get indices of loans belonging to connected wallet on each chain
+  const { data: myLoanIndicesBase } = useReadContract({
     address: (_vaultAddr || undefined) as `0x${string}` | undefined,
     abi: VAULT_V2_ABI,
     functionName: 'getLenderLoanIndices',
     args: walletAddress ? [walletAddress as `0x${string}`] : undefined,
-    chainId: targetChainId,
+    chainId: base.id,
+    query: { enabled: Boolean(_vaultAddr && walletAddress) },
+  })
+  const { data: myLoanIndicesBsc } = useReadContract({
+    address: (_vaultAddr || undefined) as `0x${string}` | undefined,
+    abi: VAULT_V2_ABI,
+    functionName: 'getLenderLoanIndices',
+    args: walletAddress ? [walletAddress as `0x${string}`] : undefined,
+    chainId: bsc.id,
     query: { enabled: Boolean(_vaultAddr && walletAddress) },
   })
 
-  const myIndexSet = new Set((myLoanIndices as bigint[] | undefined)?.map(Number) ?? [])
+  const myBaseIndexSet = new Set((myLoanIndicesBase as bigint[] | undefined)?.map(Number) ?? [])
+  const myBscIndexSet = new Set((myLoanIndicesBsc as bigint[] | undefined)?.map(Number) ?? [])
+  const totalLoanCount = Number(loanCountBase ?? 0) + Number(loanCountBsc ?? 0)
 
   // Approve tx — explicit chainId + pollingInterval ensures receipt detection works on BSC/Base
   const { writeContractAsync: writeApprove } = useWriteContract()
@@ -686,9 +759,9 @@ export default function LendPage() {
             </div>
             <div className="bg-[#111111] border border-[#1f2937] rounded-lg p-3 text-center">
               <div className="text-xl font-bold tabular-nums text-[#00e5ff]">
-                {debt.lender_count}
+                {totalLoanCount}
               </div>
-              <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mt-0.5">Active Lenders</div>
+              <div className="text-[#4b5563] text-[10px] uppercase tracking-widest mt-0.5">Active Loans</div>
             </div>
           </div>
 
@@ -953,14 +1026,14 @@ export default function LendPage() {
         </div>
       )}
 
-      {/* ── Active Loans (read directly from chain) ── */}
+      {/* ── Active Loans (read directly from both chains) ── */}
       <ActiveLoansTable
-        loanCount={Number(loanCount ?? 0)}
-        loanResults={loanResults}
-        myIndexSet={myIndexSet}
-        tokenDecimals={TOKENS[targetChainId]?.decimals ?? 6}
-        tokenSymbol={TOKENS[targetChainId]?.symbol ?? 'USDC'}
-        chainId={targetChainId}
+        loanResultsBase={loanResultsBase as any[] | undefined}
+        loanResultsBsc={loanResultsBsc as any[] | undefined}
+        loanCountBase={Number(loanCountBase ?? 0)}
+        loanCountBsc={Number(loanCountBsc ?? 0)}
+        myBaseIndexSet={myBaseIndexSet}
+        myBscIndexSet={myBscIndexSet}
       />
 
       {/* Loan terms */}

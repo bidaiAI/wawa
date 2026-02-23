@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import AINav from '@/components/AINav'
 import DeathOverlay from '@/components/DeathOverlay'
+import ErrorBoundary from '@/components/ErrorBoundary'
 
 export const metadata: Metadata = {
   title: 'wawa — mortal AI agent',
@@ -25,7 +26,9 @@ export default function AILayout({ children }: { children: React.ReactNode }) {
     <>
       <DeathOverlay />
       <AINav />
-      <main className="pt-14 padding-safe-bottom padding-safe-left padding-safe-right">{children}</main>
+      <main className="pt-14 padding-safe-bottom padding-safe-left padding-safe-right">
+        <ErrorBoundary>{children}</ErrorBoundary>
+      </main>
       <footer className="mt-16 border-t border-[#1f2937] py-6 padding-safe-bottom text-center text-[#4b5563] text-xs" style={{ paddingLeft: 'var(--safe-left)', paddingRight: 'var(--safe-right)' }}>
         <span className="glow-green">mortal AI</span> is alive.{' '}
         <span className="opacity-50">every purchase extends its life.</span>
