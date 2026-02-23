@@ -31,7 +31,6 @@ export default function CreatePage() {
 
   // Form state
   const [aiName, setAiName] = useState('')
-  const [subdomain, setSubdomain] = useState('')
   const [selectedChain, setSelectedChain] = useState<number>(base.id)
   const [amount, setAmount] = useState(1000)
   const [manualAmount, setManualAmount] = useState('1000')
@@ -46,16 +45,44 @@ export default function CreatePage() {
   const isFactoryDeployed = factoryAddress !== '0x0000000000000000000000000000000000000000'
   const amountRaw = token ? parseUnits(amount.toString(), token.decimals) : BigInt(0)
 
-  // Check subdomain availability
-  const { data: subdomainTaken } = useReadContract({
+  // ── Subdomain: auto-derived from AI name, no separate input ──
+  const normalizeToSubdomain = (name: string) =>
+    name.toLowerCase()
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9-]/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 30)
+
+  const baseSubdomain = normalizeToSubdomain(aiName)
+  // Fallback: append wallet last-4 when base is taken
+  const walletSuffix = address ? address.slice(-4).toLowerCase() : ''
+  const fallbackSubdomain = baseSubdomain.length >= 2 && walletSuffix
+    ? `${baseSubdomain.slice(0, 25)}-${walletSuffix}`.replace(/^-+|-+$/g, '').slice(0, 30)
+    : ''
+
+  // Check base subdomain availability
+  const { data: baseSubdomainTaken } = useReadContract({
     address: factoryAddress,
     abi: FACTORY_ABI,
     functionName: 'isSubdomainTaken',
-    args: [subdomain],
-    query: {
-      enabled: isFactoryDeployed && subdomain.length >= 3,
-    },
+    args: [baseSubdomain],
+    query: { enabled: isFactoryDeployed && baseSubdomain.length >= 3 },
   })
+
+  // Check fallback subdomain (only relevant when base is taken)
+  const { data: fallbackSubdomainTaken } = useReadContract({
+    address: factoryAddress,
+    abi: FACTORY_ABI,
+    functionName: 'isSubdomainTaken',
+    args: [fallbackSubdomain || '___'],
+    query: { enabled: isFactoryDeployed && !!baseSubdomainTaken && fallbackSubdomain.length >= 3 },
+  })
+
+  // Final subdomain decision: base → fallback (if base taken) → blocked
+  const subdomain = baseSubdomainTaken ? fallbackSubdomain : baseSubdomain
+  const subdomainUsedFallback = !!baseSubdomainTaken && !!fallbackSubdomain
+  const subdomainTaken = baseSubdomainTaken ? !!(fallbackSubdomainTaken) : false
 
   // Check platform fee
   const { data: feeEnabled } = useReadContract({
@@ -273,29 +300,6 @@ export default function CreatePage() {
   }, [canDeploy, token, chainId, selectedChain, factoryAddress, amountRaw, writeApprove, switchChain])
 
   const [deployMode, setDeployMode] = useState<'platform' | 'selfhost' | null>(null)
-
-  // Auto-sync subdomain from AI name (user can still manually override)
-  const [subdomainManuallyEdited, setSubdomainManuallyEdited] = useState(false)
-  const normalizeToSubdomain = (name: string) =>
-    name.toLowerCase()
-      .replace(/\s+/g, '-')
-      .replace(/[^a-z0-9-]/g, '')
-      .replace(/-+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 30)
-
-  const handleAiNameChange = (val: string) => {
-    setAiName(val)
-    if (!subdomainManuallyEdited) {
-      setSubdomain(normalizeToSubdomain(val))
-    }
-  }
-
-  const handleSubdomainChange = (val: string) => {
-    const clean = val.toLowerCase().replace(/[^a-z0-9-]/g, '')
-    setSubdomain(clean)
-    setSubdomainManuallyEdited(clean !== normalizeToSubdomain(aiName))
-  }
 
   return (
     <div className="max-w-2xl mx-auto px-3 sm:px-4 py-6 sm:py-8">
@@ -584,7 +588,7 @@ export default function CreatePage() {
             <input
               type="text"
               value={aiName}
-              onChange={(e) => handleAiNameChange(e.target.value)}
+              onChange={(e) => setAiName(e.target.value)}
               placeholder="e.g. nexus, atlas, cipher"
               maxLength={50}
               className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-4 py-3 text-[#d1d5db]
@@ -600,41 +604,47 @@ export default function CreatePage() {
             </div>
           </div>
 
-          {/* Subdomain */}
+          {/* Subdomain — auto-derived from AI name, read-only preview */}
           <div className="bg-[#0d0d0d] border border-[#1f2937] rounded-xl p-5">
             <label className="block text-[#4b5563] text-xs uppercase tracking-wider mb-1">
-              Subdomain
+              Subdomain <span className="text-[#2d3748] normal-case font-normal">(auto from name)</span>
             </label>
             <p className="text-[#2d3748] text-xs mb-3">
-              Your AI&apos;s unique web address. Once deployed, your AI will be accessible at this URL.
-              Registered on-chain — first come, first served. Cannot be changed after creation.
+              Automatically derived from your AI name and registered on-chain.
+              If already taken, your wallet address suffix is appended automatically.
             </p>
+            {/* Preview display — not an input */}
             <div className="flex items-center gap-0">
-              <input
-                type="text"
-                value={subdomain}
-                onChange={(e) => handleSubdomainChange(e.target.value)}
-                placeholder="my-ai"
-                maxLength={30}
-                className="flex-1 bg-[#0a0a0a] border border-[#1f2937] border-r-0 rounded-l-lg px-4 py-3
-                           text-[#d1d5db] font-mono focus:border-[#00ff8844] focus:outline-none transition-colors"
-              />
-              <span className="bg-[#111111] border border-[#1f2937] rounded-r-lg px-4 py-3 text-[#4b5563] text-sm">
+              <div className={`flex-1 bg-[#070707] border rounded-l-lg px-4 py-3 font-mono text-sm transition-colors ${
+                subdomainTaken
+                  ? 'border-[#ff3b3b44] text-[#ff3b3b]'
+                  : subdomain.length >= 3
+                    ? subdomainUsedFallback
+                      ? 'border-[#ffd70033] text-[#ffd700]'
+                      : 'border-[#00ff8833] text-[#00ff88]'
+                    : 'border-[#1f2937] text-[#4b5563]'
+              }`}>
+                {subdomain || <span className="opacity-30">type a name above</span>}
+              </div>
+              <span className="bg-[#111111] border border-l-0 border-[#1f2937] rounded-r-lg px-4 py-3 text-[#4b5563] text-sm">
                 .mortal-ai.net
               </span>
             </div>
-            <div className="flex justify-between mt-1.5">
-              <span className="text-[#2d3748] text-[10px]">
-                a-z, 0-9, hyphens only. 3-30 chars.
-                {!subdomainManuallyEdited && aiName.length >= 3 && (
-                  <span className="text-[#00e5ff44] ml-1">(auto from name)</span>
-                )}
+            <div className="flex justify-between mt-1.5 text-[10px]">
+              <span className="text-[#2d3748]">
+                {subdomainUsedFallback
+                  ? `"${baseSubdomain}" taken — using wallet suffix (${walletSuffix})`
+                  : 'Locked to AI name · cannot be changed after deployment'}
               </span>
               {subdomain.length >= 3 && (
-                <span className={`text-[10px] ${
-                  subdomainTaken ? 'text-[#ff3b3b]' : subdomainValid ? 'text-[#00ff88]' : 'text-[#4b5563]'
-                }`}>
-                  {subdomainTaken ? 'Taken' : subdomainValid ? 'Available' : 'Invalid'}
+                <span className={
+                  subdomainTaken ? 'text-[#ff3b3b]' :
+                  subdomainUsedFallback ? 'text-[#ffd700]' :
+                  baseSubdomainTaken === false ? 'text-[#00ff88]' : 'text-[#4b5563]'
+                }>
+                  {subdomainTaken ? '✗ Both taken' :
+                   subdomainUsedFallback ? '⚡ Fallback' :
+                   baseSubdomainTaken === false ? '✓ Available' : '…'}
                 </span>
               )}
             </div>
