@@ -217,6 +217,7 @@ export default function LendPage() {
     hash: approveTxHash,
     chainId: targetChainId,
     pollingInterval: 2000,
+    query: { enabled: Boolean(approveTxHash) },
   })
 
   // Lend tx
@@ -253,15 +254,42 @@ export default function LendPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // When approve is confirmed → move to lending step
+  // Compute derived values needed by effects BEFORE the effects run (avoids TDZ)
+  const _token = TOKENS[targetChainId]
+  const _parsedAmount = parseFloat(lendAmount) || 0
+  const _isValidAmount = _parsedAmount >= 100
+  const amountRawNeeded = _token && _isValidAmount
+    ? parseUnits(_parsedAmount.toFixed(_token.decimals), _token.decimals)
+    : BigInt(0)
+
+  // PRIMARY: Poll allowance every 2.5s while waiting for approve confirmation
+  // More reliable than useWaitForTransactionReceipt on public RPCs (MetaMask has faster nodes)
+  useEffect(() => {
+    if (lendStep !== 'approving') return
+    const poll = async () => {
+      try {
+        const { data } = await refetchAllowance()
+        if (data !== undefined && amountRawNeeded > BigInt(0) && data >= amountRawNeeded) {
+          setWaitingSince(null)
+          setWaitTooLong(false)
+          setLendStep('approved')
+        }
+      } catch {}
+    }
+    poll() // immediate check first
+    const id = setInterval(poll, 2500)
+    return () => clearInterval(id)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lendStep, refetchAllowance, amountRawNeeded])
+
+  // SECONDARY: useWaitForTransactionReceipt backup (fires if RPC is responsive)
   useEffect(() => {
     if (approveConfirmed && lendStep === 'approving') {
       setWaitingSince(null)
       setWaitTooLong(false)
-      refetchAllowance()  // update cached allowance after new approval
       setLendStep('approved')
     }
-  }, [approveConfirmed, lendStep, refetchAllowance])
+  }, [approveConfirmed, lendStep])
 
   // When lend is confirmed → done
   useEffect(() => {
@@ -291,15 +319,13 @@ export default function LendPage() {
   const isAlive = status?.is_alive !== false
   const vaultAddress = status?.vault_address ?? ''
 
-  const token = TOKENS[targetChainId]
+  // Use pre-computed values (declared above effects to avoid TDZ)
+  const token = _token
+  const parsedAmount = _parsedAmount
+  const isValidAmount = _isValidAmount
   const isWrongChain = isConnected && chainId !== targetChainId
-  const parsedAmount = parseFloat(lendAmount) || 0
-  const isValidAmount = parsedAmount >= 100
 
   // Check if current allowance already covers the requested amount → skip approve step
-  const amountRawNeeded = token && isValidAmount
-    ? parseUnits(parsedAmount.toFixed(token.decimals), token.decimals)
-    : BigInt(0)
   const alreadyApproved = currentAllowance !== undefined && currentAllowance >= amountRawNeeded && amountRawNeeded > 0
 
   // Block explorer URLs

@@ -137,21 +137,29 @@ export default function DonatePage() {
   const [donorMessage, setDonorMessage] = useState('')
   const [error, setError] = useState('')
 
-  // Wallet state (wagmi)
-  const { address: walletAddress, isConnected } = useAccount()
-  const chainId = useChainId()
-  const { switchChainAsync } = useSwitchChain()
-  const { writeContractAsync, data: txHashData, isPending: isTxPending } = useWriteContract()
-  const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
-    hash: txHashData,
-  })
-
   // Manual fallback mode (for users without wallet)
   const [manualMode, setManualMode] = useState(false)
   const [manualTxHash, setManualTxHash] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<DonateResponse | null>(null)
   const [done, setDone] = useState(false)
+  const [waitTooLong, setWaitTooLong] = useState(false)
+
+  // Wallet state (wagmi)
+  const { address: walletAddress, isConnected } = useAccount()
+  const chainId = useChainId()
+  const { switchChainAsync } = useSwitchChain()
+
+  // Compute target chain BEFORE hooks so hooks can reference it
+  const targetChainId = CHAIN_IDS[selectedChain] ?? base.id
+
+  const { writeContractAsync, data: txHashData, isPending: isTxPending } = useWriteContract()
+  const { isLoading: isConfirming, isSuccess: isConfirmed } = useWaitForTransactionReceipt({
+    hash: txHashData,
+    chainId: targetChainId,
+    pollingInterval: 2000,
+    query: { enabled: Boolean(txHashData) },
+  })
 
   const amount = preset === 'custom' ? parseFloat(customAmount) || 0 : preset
 
@@ -187,6 +195,7 @@ export default function DonatePage() {
   // After on-chain confirmation — notify backend
   useEffect(() => {
     if (isConfirmed && txHashData && !done) {
+      setWaitTooLong(false)
       setDone(true)
       api.donate({
         amount_usd: amount,
@@ -210,9 +219,40 @@ export default function DonatePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConfirmed])
 
+  // 60s timeout fallback — wagmi may miss confirmation on slow public RPCs
+  useEffect(() => {
+    if (!txHashData || done) return
+    setWaitTooLong(false)
+    const timeout = setTimeout(() => setWaitTooLong(true), 60_000)
+    return () => clearTimeout(timeout)
+  }, [txHashData, done])
+
+  const handleTimeoutDone = useCallback(() => {
+    if (!txHashData || done) return
+    setWaitTooLong(false)
+    setDone(true)
+    api.donate({
+      amount_usd: amount,
+      tx_hash: txHashData,
+      chain: selectedChain,
+      from_wallet: walletAddress,
+      message: donorMessage.trim() || undefined,
+    }).then((res) => {
+      setResult(res)
+    }).catch(() => {
+      setResult({
+        status: 'confirmed',
+        amount_usd: amount,
+        new_balance: (status?.balance_usd ?? 0) + amount,
+        outstanding_debt: status?.creator_principal_outstanding ?? 0,
+        message: `Transaction confirmed on-chain! ${amount.toFixed(2)} ${chainToken} sent to vault.`,
+      })
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txHashData, done, amount, selectedChain, walletAddress, donorMessage])
+
   const paymentAddress = status?.vault_address ?? ''
   const chainToken = chains.find((c) => c.id === selectedChain)?.token ?? 'USDC'
-  const targetChainId = CHAIN_IDS[selectedChain] ?? base.id
   const token = TOKENS[targetChainId]
   const isWrongChain = isConnected && chainId !== targetChainId
 
@@ -548,6 +588,26 @@ export default function DonatePage() {
                 `Donate $${amount > 0 ? amount.toFixed(2) : '—'} ${chainToken}`
               )}
             </button>
+            {/* 60s timeout fallback — show if wagmi doesn't detect confirmation */}
+            {waitTooLong && txHashData && (
+              <div className="p-3 bg-[#ffd70011] border border-[#ffd70033] rounded-lg text-xs">
+                <div className="text-[#ffd700] font-bold mb-1">Still waiting? The tx may already be confirmed.</div>
+                <div className="text-[#4b5563] mb-2">
+                  <a
+                    href={`${selectedChain === 'bsc' ? 'https://bscscan.com/tx/' : 'https://basescan.org/tx/'}${txHashData}`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="text-[#00e5ff] hover:underline font-mono"
+                  >{txHashData.slice(0, 10)}...{txHashData.slice(-6)}</a>
+                  {' '}— if it shows Success, click below.
+                </div>
+                <button
+                  onClick={handleTimeoutDone}
+                  className="w-full py-2 bg-[#ffd700] text-[#0a0a0a] font-bold rounded-lg text-xs uppercase tracking-wider hover:bg-[#e6c200] transition-colors"
+                >
+                  Transaction confirmed — mark as done
+                </button>
+              </div>
+            )}
             <button
               onClick={() => setManualMode(!manualMode)}
               className="w-full py-2 text-[#4b5563] text-xs hover:text-[#d1d5db] transition-colors"

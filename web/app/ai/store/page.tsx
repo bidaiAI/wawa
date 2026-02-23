@@ -127,6 +127,9 @@ function WalletPayButton({
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
     hash: txHashHex,
     confirmations: 1,
+    chainId: targetChainId,
+    pollingInterval: 2000,
+    query: { enabled: Boolean(txHashHex) },
   })
 
   useEffect(() => {
