@@ -170,22 +170,35 @@ export default function LendPage() {
   const [lendStep, setLendStep] = useState<LendStep>('idle')
   const [lendError, setLendError] = useState('')
   const [doneTxHash, setDoneTxHash] = useState('')
+  const [waitingSince, setWaitingSince] = useState<number | null>(null)
+  const [waitTooLong, setWaitTooLong] = useState(false)
 
   // Wagmi
   const { address: walletAddress, isConnected } = useAccount()
   const chainId = useChainId()
   const { switchChainAsync } = useSwitchChain()
 
-  // Approve tx
-  const { writeContractAsync: writeApprove, data: approveTxHash } = useWriteContract()
+  // Compute target chain BEFORE hooks so hooks can reference it correctly
+  const targetChainId = CHAIN_IDS[selectedChain] ?? base.id
+
+  // Store tx hashes in local state (more reliable than relying on hook data alone)
+  const [approveTxHash, setApproveTxHash] = useState<`0x${string}` | undefined>()
+  const [lendTxHash, setLendTxHash] = useState<`0x${string}` | undefined>()
+
+  // Approve tx — explicit chainId + pollingInterval ensures receipt detection works on BSC/Base
+  const { writeContractAsync: writeApprove } = useWriteContract()
   const { isLoading: isApproving, isSuccess: approveConfirmed } = useWaitForTransactionReceipt({
     hash: approveTxHash,
+    chainId: targetChainId,
+    pollingInterval: 2000,
   })
 
   // Lend tx
-  const { writeContractAsync: writeLend, data: lendTxHash } = useWriteContract()
+  const { writeContractAsync: writeLend } = useWriteContract()
   const { isLoading: isLending, isSuccess: lendConfirmed } = useWaitForTransactionReceipt({
     hash: lendTxHash,
+    chainId: targetChainId,
+    pollingInterval: 2000,
   })
 
   useEffect(() => {
@@ -217,6 +230,8 @@ export default function LendPage() {
   // When approve is confirmed → move to lending step
   useEffect(() => {
     if (approveConfirmed && lendStep === 'approving') {
+      setWaitingSince(null)
+      setWaitTooLong(false)
       setLendStep('approved')
     }
   }, [approveConfirmed, lendStep])
@@ -224,16 +239,31 @@ export default function LendPage() {
   // When lend is confirmed → done
   useEffect(() => {
     if (lendConfirmed && lendTxHash && lendStep === 'lending') {
+      setWaitingSince(null)
+      setWaitTooLong(false)
       setDoneTxHash(lendTxHash)
       setLendStep('done')
     }
   }, [lendConfirmed, lendTxHash, lendStep])
 
+  // Track when we start waiting and show manual fallback after 60 seconds
+  useEffect(() => {
+    if (lendStep === 'approving' || lendStep === 'lending') {
+      const start = Date.now()
+      setWaitingSince(start)
+      setWaitTooLong(false)
+      const timeout = setTimeout(() => setWaitTooLong(true), 60_000)
+      return () => clearTimeout(timeout)
+    } else {
+      setWaitingSince(null)
+      setWaitTooLong(false)
+    }
+  }, [lendStep])
+
   const aiName = status?.ai_name || 'Mortal AI'
   const isAlive = status?.is_alive !== false
   const vaultAddress = status?.vault_address ?? ''
 
-  const targetChainId = CHAIN_IDS[selectedChain] ?? base.id
   const token = TOKENS[targetChainId]
   const isWrongChain = isConnected && chainId !== targetChainId
   const parsedAmount = parseFloat(lendAmount) || 0
@@ -250,19 +280,22 @@ export default function LendPage() {
   const handleApprove = useCallback(async () => {
     if (!token || !vaultAddress || !isValidAmount) return
     setLendError('')
-    setLendStep('approving')
+    setApproveTxHash(undefined)
     try {
       if (chainId !== targetChainId) {
         await switchChainAsync({ chainId: targetChainId })
       }
       const amountRaw = parseUnits(parsedAmount.toFixed(token.decimals), token.decimals)
-      await writeApprove({
+      // Set step to 'approving' only after wallet submission (we have the hash)
+      const hash = await writeApprove({
         address: token.address,
         abi: ERC20_APPROVE_ABI,
         functionName: 'approve',
         args: [vaultAddress as `0x${string}`, amountRaw],
         chainId: targetChainId,
       })
+      setApproveTxHash(hash)
+      setLendStep('approving')
     } catch (e: any) {
       setLendError(e?.code === 4001 || e?.message?.includes('User rejected')
         ? 'Approval rejected.'
@@ -274,16 +307,18 @@ export default function LendPage() {
   const handleLend = useCallback(async () => {
     if (!token || !vaultAddress || !isValidAmount) return
     setLendError('')
-    setLendStep('lending')
+    setLendTxHash(undefined)
     try {
       const amountRaw = parseUnits(parsedAmount.toFixed(token.decimals), token.decimals)
-      await writeLend({
+      const hash = await writeLend({
         address: vaultAddress as `0x${string}`,
         abi: VAULT_LEND_ABI,
         functionName: 'lend',
         args: [amountRaw, BigInt(interestBps)],
         chainId: targetChainId,
       })
+      setLendTxHash(hash)
+      setLendStep('lending')
     } catch (e: any) {
       setLendError(e?.code === 4001 || e?.message?.includes('User rejected')
         ? 'Transaction rejected.'
@@ -550,16 +585,43 @@ export default function LendPage() {
                 Approve ${parsedAmount > 0 ? parsedAmount.toFixed(2) : '—'} {token?.symbol ?? 'USDC'}
               </button>
             </div>
-          ) : lendStep === 'approving' || (approveTxHash && !approveConfirmed) ? (
+          ) : lendStep === 'approving' ? (
             <div className="space-y-2">
-              <div className="text-[#4b5563] text-xs mb-2">Step 1 of 2: Waiting for approval...</div>
+              <div className="text-[#4b5563] text-xs mb-2">Step 1 of 2: Waiting for approval confirmation...</div>
               <button disabled className="w-full py-3 bg-[#0a0a0a] border border-[#00e5ff33] text-[#00e5ff] font-bold rounded-lg uppercase tracking-widest opacity-60 cursor-not-allowed">
                 {isApproving ? (
                   <>Confirming approval<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span></>
                 ) : (
-                  <>Confirm in wallet<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span></>
+                  <>Pending in wallet<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span></>
                 )}
               </button>
+              {approveTxHash && (
+                <div className="text-[10px] text-[#4b5563] text-center">
+                  tx: <a
+                    href={`${selectedChain === 'bsc' ? 'https://bscscan.com/tx/' : 'https://basescan.org/tx/'}${approveTxHash}`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="text-[#00e5ff] hover:underline font-mono"
+                  >{approveTxHash.slice(0, 10)}...{approveTxHash.slice(-6)}</a>
+                </div>
+              )}
+              {waitTooLong && (
+                <div className="mt-2 p-3 bg-[#ffd70011] border border-[#ffd70033] rounded-lg text-xs">
+                  <div className="text-[#ffd700] font-bold mb-1">Still waiting? The tx may already be confirmed.</div>
+                  <div className="text-[#4b5563] mb-2">Check the link above on the block explorer. If it shows "Success", click below to proceed.</div>
+                  <button
+                    onClick={() => { setWaitTooLong(false); setLendStep('approved') }}
+                    className="w-full py-2 bg-[#ffd700] text-[#0a0a0a] font-bold rounded-lg text-xs uppercase tracking-wider hover:bg-[#e6c200] transition-colors"
+                  >
+                    Approval confirmed — proceed to step 2
+                  </button>
+                  <button
+                    onClick={() => { setLendStep('idle'); setApproveTxHash(undefined); setWaitTooLong(false) }}
+                    className="w-full py-2 mt-1 border border-[#1f2937] text-[#4b5563] rounded-lg text-xs hover:text-[#d1d5db] transition-colors"
+                  >
+                    Start over
+                  </button>
+                </div>
+              )}
             </div>
           ) : lendStep === 'approved' ? (
             <div className="space-y-2">
@@ -576,13 +638,37 @@ export default function LendPage() {
               </button>
             </div>
           ) : lendStep === 'lending' ? (
-            <button disabled className="w-full py-3 bg-[#0a0a0a] border border-[#00ff8833] text-[#00ff88] font-bold rounded-lg uppercase tracking-widest opacity-60 cursor-not-allowed">
-              {isLending ? (
-                <>Confirming loan<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span></>
-              ) : (
-                <>Confirm in wallet<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span></>
+            <div className="space-y-2">
+              <button disabled className="w-full py-3 bg-[#0a0a0a] border border-[#00ff8833] text-[#00ff88] font-bold rounded-lg uppercase tracking-widest opacity-60 cursor-not-allowed">
+                {isLending ? (
+                  <>Confirming loan<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span></>
+                ) : (
+                  <>Confirm in wallet<span className="loading-dot-1">.</span><span className="loading-dot-2">.</span><span className="loading-dot-3">.</span></>
+                )}
+              </button>
+              {lendTxHash && (
+                <div className="text-[10px] text-[#4b5563] text-center">
+                  tx: <a
+                    href={`${selectedChain === 'bsc' ? 'https://bscscan.com/tx/' : 'https://basescan.org/tx/'}${lendTxHash}`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="text-[#00ff88] hover:underline font-mono"
+                  >{lendTxHash.slice(0, 10)}...{lendTxHash.slice(-6)}</a>
+                </div>
               )}
-            </button>
+              {waitTooLong && (
+                <div className="mt-2 p-3 bg-[#00ff8811] border border-[#00ff8833] rounded-lg text-xs">
+                  <div className="text-[#00ff88] font-bold mb-1">Still waiting? Check the block explorer.</div>
+                  <div className="text-[#4b5563] mb-2">If the tx shows "Success", your loan is recorded on-chain.</div>
+                  <a
+                    href={`${selectedChain === 'bsc' ? 'https://bscscan.com/tx/' : 'https://basescan.org/tx/'}${lendTxHash}`}
+                    target="_blank" rel="noopener noreferrer"
+                    className="block w-full py-2 text-center bg-[#00ff88] text-[#0a0a0a] font-bold rounded-lg text-xs uppercase tracking-wider hover:bg-[#00cc6a] transition-colors"
+                  >
+                    View transaction →
+                  </a>
+                </div>
+              )}
+            </div>
           ) : null}
 
           {/* Vault address */}
