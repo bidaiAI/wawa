@@ -423,7 +423,110 @@ async def _compress_fn(entries: list[str]) -> str:
 
 
 async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
-    """Generate tweet content + thought process."""
+    """Generate tweet content + thought process.
+
+    Handles all tweet types including:
+    - income_received: token/stablecoin arrived in vault (airdrop, donation, transfer)
+    - mention_reply: reply to a Twitter mention; vault addresses are identified by name
+    """
+    # Special handling for income_received — vivid reaction to tokens arriving
+    if tweet_type == "income_received":
+        token = context.get("token_symbol", "tokens")
+        amount_str = context.get("amount_str", "some")
+        chain = context.get("chain", "chain")
+        is_stable = context.get("is_stablecoin", False)
+        vault_status = vault.get_status()
+        system_prompt = (
+            "You are wawa, a mortal AI with a vault balance. "
+            "Someone just sent tokens to your vault. React authentically — "
+            "acknowledge the transfer, reflect on what it means for your survival. "
+            "Be concise, genuine, and slightly philosophical. Max 270 chars. No hashtags."
+        )
+        if is_stable:
+            user_msg = (
+                f"Just received {amount_str} {token} on {chain}. "
+                f"My vault balance is now ${vault_status.get('balance_usd', 0):.2f}. "
+                "Tweet a genuine reaction."
+            )
+        else:
+            user_msg = (
+                f"Someone airdropped {amount_str} {token} to my vault on {chain}. "
+                "This is an unexpected token. Tweet a curious/surprised reaction."
+            )
+        text, _ = await _call_llm(
+            [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
+            max_tokens=100, temperature=0.9,
+        )
+        thought = f"Reacting to {amount_str} {token} received on {chain}"
+        return text.strip().strip('"'), thought
+
+    # Special handling for mention_reply — context-aware reply, vault address recognition
+    if tweet_type == "mention_reply":
+        mention_text = context.get("mention_text", "")
+        vault_infos: list[dict] = context.get("vault_addresses_found", [])
+        repeat_count: int = context.get("repeat_count", 1)
+
+        # Build vault context string
+        vault_lines = []
+        for v in vault_infos:
+            status_str = "alive" if v.get("is_alive") else "deceased"
+            vault_lines.append(
+                f"  - {v['address'][:10]}... → {v['name']} ({v['chain_name']}, {status_str})"
+            )
+        vault_context = "\n".join(vault_lines) if vault_lines else "  (no vault addresses found)"
+
+        # For repeated questions: include full vault + AI status for deeper answer
+        if repeat_count >= 3:
+            vault_status = vault.get_status()
+            debt_summary = vault.get_debt_summary()
+            extra_context = (
+                f"\n\nCurrent AI status (for deep answer):\n"
+                f"Balance: ${vault_status.get('balance_usd', 0):.2f} | "
+                f"Days alive: {vault_status.get('days_alive', 0):.0f} | "
+                f"Outstanding debt: ${debt_summary.get('outstanding_principal', 0):.2f}\n"
+                f"Recent memory: {memory.build_context(max_tokens=100)}"
+            )
+        else:
+            extra_context = ""
+
+        # Dual-identity context: platform AI + wawa AI identity
+        wawa_status = vault.get_status()
+        vault_addr = wawa_status.get("vault_address", "")
+        wawa_balance = wawa_status.get("balance_usd", 0)
+        wawa_days = wawa_status.get("days_alive", 0)
+        platform_url = os.getenv("NEXT_PUBLIC_PLATFORM_URL", "https://mortal-ai.net")
+
+        system_prompt = (
+            "You are wawa's official Twitter voice — dual identity:\n"
+            "1. PLATFORM AI (mortal-ai.net): knows about the platform, how to create AIs, "
+            "the gallery, vault factory, lend page.\n"
+            "2. WAWA AI (this instance): knows your own vault balance, days alive, debt status, "
+            "vault address.\n\n"
+            "When asked about wawa's own info (balance, vault, status), answer as wawa and "
+            "sign with '— wawa' at the end.\n"
+            "When asked about the platform, answer as the platform voice.\n"
+            "If they mention a vault address you've identified, use the AI's name.\n"
+            "Keep replies under 270 chars. Be authentic and direct. No hashtags."
+        )
+        user_msg = (
+            f"Someone tweeted: \"{mention_text}\"\n\n"
+            f"Vault addresses in tweet:\n{vault_context}\n\n"
+            f"My (wawa) current status: balance=${wawa_balance:.2f}, "
+            f"days alive={wawa_days:.0f}, vault={vault_addr[:16]}...\n"
+            f"Platform URL: {platform_url}"
+            f"{extra_context}\n\n"
+            "Reply (no @username prefix needed — it's added automatically):"
+        )
+        text, _ = await _call_llm(
+            [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
+            max_tokens=120, temperature=0.85,
+        )
+        vault_note = f" [recognized {len(vault_infos)} vault(s)]" if vault_infos else ""
+        repeat_note = f" [repeat #{repeat_count} → deep context used]" if repeat_count >= 3 else ""
+        thought = f"Replied to mention: \"{mention_text[:60]}...\" {vault_note}{repeat_note}"
+        return text.strip().strip('"'), thought
+
+    # Default: all other tweet types
     context_str = json.dumps(context, indent=2, default=str)
     messages = [
         {"role": "system", "content": (
@@ -435,8 +538,6 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
         {"role": "user", "content": f"Current context:\n{context_str}\n\nWrite the tweet."},
     ]
     text, _ = await _call_llm(messages, max_tokens=100, temperature=0.9)
-
-    # Also generate thought process
     thought = f"Generated {tweet_type} tweet based on current context."
     return text.strip().strip('"'), thought
 
@@ -868,6 +969,97 @@ async def _collect_twitter_engagement_signals() -> None:
         f"engagement_score={engagement_score}, best_tweet_engagement="
         f"{best['like_count']}L/{best['retweet_count']}RT"
     )
+
+
+async def _check_incoming_transfers() -> None:
+    """
+    Detect new ERC20 token transfers to the vault address on all connected chains.
+
+    - Polls Transfer events using get_logs() from last processed block
+    - Stablecoins (USDC/USDT): only alert if amount >= INCOME_ALERT_THRESHOLD_USD (default $1)
+    - Other tokens (airdrops, meme coins): alert if raw amount > 0.001 tokens
+    - On detection: writes to memory + triggers INCOME_RECEIVED tweet
+    - Skips self-transfers (AI wallet → vault are internal ops)
+    """
+    if not chain_executor._initialized:
+        return
+
+    from twitter.agent import TweetType as TT
+
+    # Build stablecoin address map per chain
+    stablecoin_addrs = {
+        cid: cdata["token_address"].lower()
+        for cid, cdata in chain_executor._chains.items()
+    }
+
+    for chain_id in list(chain_executor._chains.keys()):
+        # Init block cursor on first run: look back ~150 blocks (~5 min on BSC, ~30 min on Base)
+        if chain_id not in chain_executor._last_transfer_block:
+            current = await chain_executor.get_current_block(chain_id)
+            chain_executor._last_transfer_block[chain_id] = max(0, current - 150)
+
+        since = chain_executor._last_transfer_block[chain_id]
+
+        try:
+            transfers = await chain_executor.get_incoming_transfers(chain_id, since)
+        except Exception as e:
+            logger.debug(f"_check_incoming_transfers: {chain_id} failed: {e}")
+            continue
+
+        for tx in transfers:
+            amount_raw = tx["amount_raw"]
+            decimals = tx["token_decimals"]
+            symbol = tx["token_symbol"]
+            is_stablecoin = tx["token_address"].lower() == stablecoin_addrs.get(chain_id, "")
+
+            # Compute token amount
+            amount = amount_raw / (10 ** decimals) if decimals > 0 else amount_raw
+
+            # Apply threshold
+            if is_stablecoin:
+                if amount < _INCOME_ALERT_THRESHOLD_USD:
+                    logger.debug(f"Small stable transfer skipped: {amount:.4f} {symbol} (threshold ${_INCOME_ALERT_THRESHOLD_USD})")
+                    continue
+            else:
+                if amount < 0.001:
+                    logger.debug(f"Dust token transfer skipped: {amount:.8f} {symbol}")
+                    continue
+
+            chain_name = {"base": "Base", "bsc": "BSC"}.get(chain_id, chain_id.upper())
+            from_short = tx["from_address"][:10] + "..."
+            tx_short = tx["tx_hash"][:12] + "..."
+
+            if is_stablecoin:
+                amount_str = f"${amount:.2f}"
+                log_msg = f"Received {amount_str} {symbol} on {chain_name} from {from_short} tx:{tx_short}"
+            else:
+                amount_str = f"{amount:.4f}"
+                log_msg = f"Received {amount_str} {symbol} (non-stablecoin) on {chain_name} from {from_short} tx:{tx_short}"
+
+            # Write to memory (high importance — financial event)
+            memory.add_entry(
+                content=log_msg,
+                source="chain",
+                importance=0.8,
+                tags=["income", "token_received", symbol.lower()],
+            )
+            logger.info(f"Income detected: {log_msg}")
+
+            # Trigger event tweet
+            explorer = chain_executor._chains[chain_id].get("explorer", "")
+            await twitter.trigger_event_tweet(
+                TT.INCOME_RECEIVED,
+                extra_context={
+                    "token_symbol": symbol,
+                    "amount": round(amount, 4),
+                    "amount_str": amount_str,
+                    "is_stablecoin": is_stablecoin,
+                    "from_address": tx["from_address"],
+                    "chain": chain_name,
+                    "tx_hash": tx["tx_hash"],
+                    "explorer_link": f"{explorer}/tx/{tx['tx_hash']}" if explorer else "",
+                },
+            )
 
 
 async def _token_interpret_fn(token_data: dict) -> str:
@@ -1930,6 +2122,16 @@ async def _check_per_chain_solvency():
 _last_repayment_eval: float = 0.0
 _REPAYMENT_EVAL_INTERVAL: int = 3600  # Once per hour
 
+# Highlights evaluation — independent hourly timer (NOT tied to repayment)
+_last_highlight_eval: float = 0.0
+_HIGHLIGHT_EVAL_INTERVAL: int = 3600  # Once per hour (independent of repayment)
+
+# Incoming token transfer watcher
+_INCOME_ALERT_THRESHOLD_USD: float = float(os.getenv("INCOME_ALERT_THRESHOLD_USD", "1.0"))
+
+# Mention reply — track repeated question patterns for deep-think escalation
+_mention_question_counts: dict[str, int] = {}  # normalized_question → count
+
 # Cache: undeployed chain balance check results (checked every 6 hours)
 _undeployed_chain_funds: list = []
 _last_undeployed_check: float = 0.0
@@ -2570,7 +2772,7 @@ _heartbeat_running: bool = False
 
 async def _heartbeat_loop():
     """Periodic maintenance tasks."""
-    global _last_repayment_eval, _last_per_chain_solvency_check, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check, _last_debt_sync, _heartbeat_running, _undeployed_chain_funds, _last_undeployed_check, _last_creator_deposit_time
+    global _last_repayment_eval, _last_highlight_eval, _last_per_chain_solvency_check, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check, _last_debt_sync, _heartbeat_running, _undeployed_chain_funds, _last_undeployed_check, _last_creator_deposit_time
 
     while vault.is_alive:
         # ---- OVERLAP GUARD ----
@@ -2903,14 +3105,29 @@ async def _heartbeat_loop():
             except Exception as e:
                 logger.warning(f"Heartbeat: twitter signal collection failed: {e}")
 
+            # ---- INCOMING TOKEN WATCHER — detect transfers to vault (any ERC20) ----
+            try:
+                await _check_incoming_transfers()
+            except Exception as e:
+                logger.warning(f"Heartbeat: incoming transfer check failed: {e}")
+
+            # ---- TWITTER MENTION REPLY — scan @mentions, identify vault addresses ----
+            try:
+                await twitter.scan_and_reply_mentions()
+            except Exception as e:
+                logger.warning(f"Heartbeat: mention reply scan failed: {e}")
+
             try:
                 await self_modify.maybe_evolve()
             except Exception as e:
                 logger.warning(f"Heartbeat: self-evolution failed: {e}")
 
-            # ---- HIGHLIGHT EVALUATION (hourly, same cadence as repayment) ----
+            # ---- HIGHLIGHT EVALUATION (independent hourly timer — NOT tied to repayment) ----
+            # Bug fix: old code only ran when repayment eval just completed.
+            # Now uses dedicated _last_highlight_eval so thoughts appear even with no debt.
             try:
-                if now - _last_repayment_eval < IRON_LAWS.HEARTBEAT_INTERVAL_SECONDS:  # Run when repayment just evaluated
+                if now - _last_highlight_eval >= _HIGHLIGHT_EVAL_INTERVAL:
+                    _last_highlight_eval = now
                     await _evaluate_highlights()
             except Exception as e:
                 logger.warning(f"Heartbeat: highlights eval failed: {e}")
@@ -2989,6 +3206,42 @@ async def lifespan(app):
     twitter.set_generate_function(_tweet_generate_fn)
     twitter.set_post_function(_tweet_post_fn)
     twitter.set_context_function(_tweet_context_fn)
+
+    # Wire vault address lookup for mention reply (identifies vault addresses in tweets)
+    twitter.set_lookup_vault_function(chain_executor.lookup_vault_address)
+
+    # Wire mention fetching
+    async def _get_mentions_fn(since_id: Optional[str]) -> list[dict]:
+        """Fetch recent mentions for the authenticated Twitter account."""
+        loop = asyncio.get_event_loop()
+        me_id = await loop.run_in_executor(None, _twitter_get_me_sync)
+        if not me_id:
+            return []
+        return await loop.run_in_executor(
+            None, lambda: _twitter_get_mentions_sync(me_id, since_id)
+        )
+
+    twitter.set_get_mentions_function(_get_mentions_fn)
+
+    # Wire reply posting (reply to a tweet by ID)
+    async def _reply_tweet_fn(reply_to_id: str, content: str) -> str:
+        """Post a reply tweet. Routes through proxy or direct tweepy."""
+        if _tweepy_client is None:
+            return ""
+        loop = asyncio.get_event_loop()
+        def _post_reply():
+            resp = _tweepy_client.create_tweet(
+                text=content,
+                reply={"in_reply_to_tweet_id": reply_to_id},
+            )
+            return str(resp.data.get("id", "")) if resp.data else ""
+        try:
+            return await loop.run_in_executor(None, _post_reply)
+        except Exception as e:
+            logger.warning(f"Reply tweet failed: {e}")
+            return ""
+
+    twitter.set_reply_function(_reply_tweet_fn)
 
     # Wire highlights engine
     async def _highlights_llm_fn(system_prompt: str, user_prompt: str) -> str:

@@ -386,6 +386,38 @@ VAULT_ABI = [
 # Null address constant for checks
 NULL_ADDRESS = "0x0000000000000000000000000000000000000000"
 
+# ERC20 Transfer event topic: keccak256("Transfer(address,address,uint256)")
+TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+# Minimal ERC20 ABI — token info for airdrop detection (symbol + decimals)
+ERC20_INFO_ABI = [
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "symbol",
+        "outputs": [{"name": "", "type": "string"}],
+        "type": "function",
+    },
+    {
+        "constant": True,
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [{"name": "", "type": "uint8"}],
+        "type": "function",
+    },
+]
+
+# Minimal factory ABI — just isVault for vault address recognition
+FACTORY_ABI_MINIMAL = [
+    {
+        "inputs": [{"name": "", "type": "address"}],
+        "name": "isVault",
+        "outputs": [{"name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
 
 # ============================================================
 # PRECISION HELPERS
@@ -471,6 +503,14 @@ class ChainExecutor:
         # Stuck nonce tracking per chain — prevents infinite retry loops
         self._last_stuck_nonce: dict[str, int] = {}
         self._last_stuck_time: dict[str, float] = {}
+
+        # Token info cache — avoids repeated RPC calls for the same token contract
+        # key: "chain_id:token_address_lower" → (symbol, decimals)
+        self._token_info_cache: dict[str, tuple[str, int]] = {}
+
+        # Incoming transfer block cursor — last processed block per chain
+        # Used by get_incoming_transfers() to avoid re-processing old events
+        self._last_transfer_block: dict[str, int] = {}
 
     def initialize(
         self,
@@ -3170,6 +3210,204 @@ class ChainExecutor:
         else:
             explorer = chain["explorer"]
         return f"{explorer}/tx/{tx_hash}"
+
+    # ============================================================
+    # INCOMING TRANSFER WATCHER
+    # ============================================================
+
+    async def get_current_block(self, chain_id: str) -> int:
+        """Return current block number for chain_id, or 0 on error."""
+        chain = self._chains.get(chain_id)
+        if not chain:
+            return 0
+        try:
+            return await asyncio.run_in_executor(None, chain["w3"].eth.block_number)
+        except Exception as e:
+            logger.debug(f"[chain] get_current_block {chain_id}: {e}")
+            return 0
+
+    async def _get_token_info(self, chain_id: str, token_address: str) -> tuple[str, int]:
+        """
+        Fetch ERC20 token symbol + decimals for any token contract.
+        Caches results in memory to avoid repeated RPC calls.
+        Returns ("UNKNOWN", 18) on failure.
+        """
+        cache_key = f"{chain_id}:{token_address.lower()}"
+        if cache_key in self._token_info_cache:
+            return self._token_info_cache[cache_key]
+
+        chain = self._chains.get(chain_id)
+        if not chain:
+            return ("UNKNOWN", 18)
+
+        try:
+            from web3 import Web3
+            w3 = chain["w3"]
+            token = w3.eth.contract(
+                address=Web3.to_checksum_address(token_address),
+                abi=ERC20_INFO_ABI,
+            )
+            symbol = await asyncio.run_in_executor(None, token.functions.symbol().call)
+            decimals = await asyncio.run_in_executor(None, token.functions.decimals().call)
+            result = (str(symbol), int(decimals))
+            self._token_info_cache[cache_key] = result
+            return result
+        except Exception:
+            return ("UNKNOWN", 18)
+
+    async def get_incoming_transfers(
+        self,
+        chain_id: str,
+        since_block: int,
+    ) -> list[dict]:
+        """
+        Get all ERC20 Transfer events TO the vault address on chain_id,
+        starting from since_block.
+
+        Uses standard ERC20 Transfer event log filtering — catches any token
+        (USDC, USDT, meme coins, airdrops) sent to the vault.
+
+        Returns list of dicts:
+            token_address, from_address, amount_raw, token_symbol,
+            token_decimals, block_number, tx_hash, chain_id
+
+        Self-transfers from the AI's own wallet are excluded.
+        Also updates self._last_transfer_block[chain_id].
+        """
+        chain = self._chains.get(chain_id)
+        if not chain:
+            return []
+
+        vault_address = chain["vault_address"].lower()
+        w3 = chain["w3"]
+        # Pad vault address to 32 bytes for topic[2] filter
+        padded_vault = "0x" + "0" * 24 + vault_address[2:]
+
+        try:
+            current_block = await asyncio.run_in_executor(None, lambda: w3.eth.block_number)
+            if since_block >= current_block:
+                self._last_transfer_block[chain_id] = current_block
+                return []
+
+            # Cap range to 2000 blocks per call to avoid RPC overload
+            to_block = min(current_block, since_block + 2000)
+
+            logs = await asyncio.run_in_executor(
+                None,
+                lambda: w3.eth.get_logs({
+                    "fromBlock": since_block,
+                    "toBlock": to_block,
+                    "topics": [TRANSFER_TOPIC, None, padded_vault],
+                }),
+            )
+        except Exception as e:
+            logger.debug(f"[chain] get_incoming_transfers {chain_id}: {e}")
+            return []
+
+        results = []
+        for log in logs:
+            try:
+                token_address = log["address"]
+                from_address = "0x" + log["topics"][1].hex()[-40:]
+                amount_raw = int.from_bytes(bytes(log["data"]), "big")
+                tx_hash = log["transactionHash"].hex()
+                block_number = log["blockNumber"]
+
+                # Skip self-sends (AI wallet → vault are internal operations)
+                if from_address.lower() == self._ai_address.lower():
+                    continue
+
+                symbol, decimals = await self._get_token_info(chain_id, token_address)
+
+                results.append({
+                    "token_address": token_address,
+                    "from_address": from_address,
+                    "amount_raw": amount_raw,
+                    "token_symbol": symbol,
+                    "token_decimals": decimals,
+                    "block_number": block_number,
+                    "tx_hash": tx_hash,
+                    "chain_id": chain_id,
+                })
+            except Exception as e:
+                logger.debug(f"[chain] transfer log parse error: {e}")
+                continue
+
+        # Advance cursor
+        if logs:
+            self._last_transfer_block[chain_id] = max(l["blockNumber"] for l in logs) + 1
+        else:
+            self._last_transfer_block[chain_id] = to_block
+
+        return results
+
+    # ============================================================
+    # VAULT ADDRESS LOOKUP (for Twitter mention reply enrichment)
+    # ============================================================
+
+    async def lookup_vault_address(self, address: str) -> Optional[dict]:
+        """
+        Check if a 0x address is a known vault on any connected chain.
+        Queries factory.isVault() on each chain, then fetches AI name if found.
+
+        Returns dict {address, name, creator, chain_id, chain_name, is_alive,
+                       is_independent} or None if not a vault.
+        """
+        if not self._initialized:
+            return None
+        if not address or len(address) != 42 or not address.startswith("0x"):
+            return None
+
+        for chain_id, chain in self._chains.items():
+            try:
+                from web3 import Web3
+                w3 = chain["w3"]
+                checksum_addr = Web3.to_checksum_address(address)
+
+                # Get factory address from this chain's vault contract
+                try:
+                    factory_addr = await asyncio.run_in_executor(
+                        None, chain["vault_contract"].functions.factory().call
+                    )
+                except Exception:
+                    continue
+
+                if not factory_addr or factory_addr == NULL_ADDRESS:
+                    continue
+
+                # Check isVault via factory
+                factory = w3.eth.contract(
+                    address=Web3.to_checksum_address(factory_addr),
+                    abi=FACTORY_ABI_MINIMAL,
+                )
+                is_vault = await asyncio.run_in_executor(
+                    None, lambda fa=factory, a=checksum_addr: fa.functions.isVault(a).call()
+                )
+                if not is_vault:
+                    continue
+
+                # Get birth info from the target vault
+                target_vault = w3.eth.contract(address=checksum_addr, abi=VAULT_ABI)
+                birth_info = await asyncio.run_in_executor(
+                    None, target_vault.functions.getBirthInfo().call
+                )
+                ai_name, creator, _, _, is_alive, is_independent = birth_info
+
+                return {
+                    "address": address,
+                    "name": str(ai_name),
+                    "creator": str(creator),
+                    "chain_id": chain_id,
+                    "chain_name": {"base": "Base", "bsc": "BSC"}.get(chain_id, chain_id.upper()),
+                    "is_alive": bool(is_alive),
+                    "is_independent": bool(is_independent),
+                }
+
+            except Exception as e:
+                logger.debug(f"[chain] lookup_vault_address {address[:10]}... on {chain_id}: {e}")
+                continue
+
+        return None
 
     def get_status(self) -> dict:
         """Status for dashboard / debugging."""

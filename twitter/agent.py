@@ -11,6 +11,7 @@ Designed for: mortal framework
 """
 
 import os
+import re
 import time
 import logging
 import json
@@ -41,6 +42,8 @@ class TweetType(Enum):
     CREATOR_REPAID = "creator_repaid"         # Paid back creator
     DEATH = "death"                           # Final tweet
     HIGHLIGHT = "highlight"                   # Conway-style showcase of AI intelligence
+    INCOME_RECEIVED = "income_received"       # Token arrived in vault (airdrop/transfer)
+    MENTION_REPLY = "mention_reply"           # Reply to a Twitter mention
 
 
 @dataclass
@@ -103,6 +106,16 @@ class TwitterAgent:
         self._generate_fn: Optional[callable] = None   # LLM generation
         self._post_fn: Optional[callable] = None        # Twitter API post
         self._get_context_fn: Optional[callable] = None  # Get current state
+        self._lookup_vault_fn: Optional[callable] = None # Chain: check if 0x is a vault
+        self._reply_tweet_fn: Optional[callable] = None  # Post a reply to a tweet by ID
+        self._get_mentions_fn: Optional[callable] = None # Fetch recent @mentions
+
+        # Mention reply state
+        self._last_mention_id: Optional[str] = None    # Pagination cursor
+        self._last_mention_scan: float = 0.0
+        self._MENTION_SCAN_INTERVAL: float = 300.0     # 5 min between scans
+        # Track normalized question patterns → count (for deep-think escalation)
+        self._question_counts: dict[str, int] = {}
 
     def set_generate_function(self, fn: callable):
         """Set LLM tweet generation function.
@@ -121,6 +134,25 @@ class TwitterAgent:
         fn() -> dict with balance, revenue, recent_events, etc.
         """
         self._get_context_fn = fn
+
+    def set_lookup_vault_function(self, fn: callable):
+        """Set on-chain vault address lookup callback.
+        fn(address: str) -> dict | None
+        Returns {name, chain_name, is_alive, ...} or None if not a vault.
+        """
+        self._lookup_vault_fn = fn
+
+    def set_reply_function(self, fn: callable):
+        """Set Twitter reply posting callback.
+        fn(reply_to_id: str, content: str) -> tweet_id: str
+        """
+        self._reply_tweet_fn = fn
+
+    def set_get_mentions_function(self, fn: callable):
+        """Set mentions fetching callback.
+        fn(since_id: str | None) -> list[{id, text, author_id}]
+        """
+        self._get_mentions_fn = fn
 
     async def check_schedule(self) -> Optional[TweetRecord]:
         """Check if any scheduled tweet should fire now."""
@@ -206,6 +238,125 @@ class TwitterAgent:
         except Exception as e:
             logger.error(f"Tweet failed [{tweet_type.value}]: {e}")
             return None
+
+    async def scan_and_reply_mentions(self) -> int:
+        """
+        Scan recent @mentions, look for Ethereum addresses (0x...) in tweet text,
+        check if any are vault addresses on-chain, then generate a context-aware reply.
+
+        - Rate limited: one scan every 5 min max
+        - Processes at most 5 mentions per scan to avoid API overload
+        - Only replies if: vault addresses found OR general interesting mention
+        - Returns number of replies sent
+
+        Vault address recognition: if someone tweets a 0x address, the AI will
+        check if that address belongs to a mortal AI instance and mention it by
+        name in the reply.
+        """
+        now = time.time()
+        if now - self._last_mention_scan < self._MENTION_SCAN_INTERVAL:
+            return 0
+
+        if not self._get_mentions_fn or not self._generate_fn or not self._reply_tweet_fn:
+            return 0
+
+        self._last_mention_scan = now
+
+        # Fetch recent mentions (paginated from last seen)
+        try:
+            mentions = await self._get_mentions_fn(self._last_mention_id)
+        except Exception as e:
+            logger.debug(f"scan_and_reply_mentions: get_mentions failed: {e}")
+            return 0
+
+        if not mentions:
+            return 0
+
+        # Update cursor to most recent mention ID (avoid re-processing)
+        self._last_mention_id = mentions[0]["id"]
+
+        replies_sent = 0
+        _ETH_ADDR_RE = re.compile(r'0x[a-fA-F0-9]{40}')
+
+        for mention in mentions[:5]:
+            tweet_id = mention["id"]
+            tweet_text = mention.get("text", "")
+
+            # Extract Ethereum addresses from tweet text
+            raw_addresses = _ETH_ADDR_RE.findall(tweet_text)
+
+            # Deduplicate, case-insensitive
+            seen = set()
+            addresses = []
+            for a in raw_addresses:
+                if a.lower() not in seen:
+                    seen.add(a.lower())
+                    addresses.append(a)
+
+            # Check each address against on-chain vault registry
+            vault_infos: list[dict] = []
+            if self._lookup_vault_fn and addresses:
+                for addr in addresses[:3]:  # Max 3 lookups per mention
+                    try:
+                        info = await self._lookup_vault_fn(addr)
+                        if info:
+                            vault_infos.append(info)
+                    except Exception:
+                        pass
+
+            # Only reply if: has vault addresses OR non-trivial mention text
+            if not vault_infos and len(tweet_text.strip()) < 20:
+                continue
+
+            # Rate limiting
+            if now - self.last_tweet_timestamp < self.min_tweet_interval:
+                logger.debug(f"Mention reply rate-limited for tweet {tweet_id[:8]}")
+                continue
+            if self.daily_tweet_count >= self.max_daily_tweets:
+                logger.debug("Daily tweet cap reached, skipping mention reply")
+                break
+
+            # Track repeated question patterns (first 60 chars as key)
+            q_key = re.sub(r'[^a-z0-9 ]', '', tweet_text.lower())[:60].strip()
+            if q_key:
+                self._question_counts[q_key] = self._question_counts.get(q_key, 0) + 1
+            repeat_count = self._question_counts.get(q_key, 1)
+
+            context = {
+                "mention_text": tweet_text,
+                "vault_addresses_found": vault_infos,
+                "has_vault_addresses": bool(vault_infos),
+                "address_count": len(addresses),
+                "repeat_count": repeat_count,   # ≥3 triggers deep-think escalation
+            }
+
+            try:
+                content, thought = await self._generate_fn("mention_reply", context)
+                if len(content) > self.char_limit:
+                    content = content[:self.char_limit - 3] + "..."
+
+                reply_id = await self._reply_tweet_fn(tweet_id, content)
+
+                record = TweetRecord(
+                    timestamp=now,
+                    tweet_type=TweetType.MENTION_REPLY,
+                    content=content,
+                    tweet_id=reply_id,
+                    thought_process=thought,
+                )
+                self.tweet_history.append(record)
+                self.daily_tweet_count += 1
+                self.last_tweet_timestamp = time.time()
+                self._save_tweet_log(record)
+
+                replies_sent += 1
+                vault_label = f" [{len(vault_infos)} vault(s) recognized]" if vault_infos else ""
+                logger.info(f"REPLIED to mention {tweet_id[:10]}...{vault_label}: {content[:60]}...")
+
+            except Exception as e:
+                logger.warning(f"scan_and_reply_mentions: reply generation failed: {e}")
+
+        return replies_sent
 
     async def post_death_tweet(self, death_cause: str, days_alive: int,
                                 total_earned: float, total_spent: float,
