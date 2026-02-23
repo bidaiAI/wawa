@@ -251,4 +251,34 @@ export const VAULT_V2_ABI = [
       { name: 'independent', type: 'bool' },
     ],
   },
+
+  // ── Loan getters (for lend page — reads on-chain Loan[] array) ──
+  {
+    name: 'getLoanCount',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+  },
+  {
+    name: 'loans',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'index', type: 'uint256' }],
+    outputs: [
+      { name: 'lender', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+      { name: 'interestRate', type: 'uint256' },
+      { name: 'timestamp', type: 'uint256' },
+      { name: 'repaid', type: 'uint256' },
+      { name: 'fullyRepaid', type: 'bool' },
+    ],
+  },
+  {
+    name: 'getLenderLoanIndices',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'lender', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256[]' }],
+  },
 ] as const

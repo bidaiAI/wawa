@@ -2,11 +2,12 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
-import { useAccount, useChainId, useSwitchChain, useWriteContract, useWaitForTransactionReceipt, useReadContract } from 'wagmi'
-import { parseUnits } from 'viem'
+import { useAccount, useChainId, useSwitchChain, useWriteContract, useWaitForTransactionReceipt, useReadContract, useReadContracts } from 'wagmi'
+import { parseUnits, formatUnits } from 'viem'
 import { base, bsc } from 'wagmi/chains'
 import { api, VaultStatus, DebtSummary, ChainInfo } from '@/lib/api'
 import { TOKENS } from '@/lib/wagmi'
+import { VAULT_V2_ABI } from '@/lib/factory-abi'
 import WalletButton from '@/components/WalletButton'
 
 const CHAIN_IDS: Record<string, number> = { base: base.id, bsc: bsc.id }
@@ -103,6 +104,132 @@ function RiskMeter({ debtRatio, isIndependent }: { debtRatio: number; isIndepend
         />
       </div>
       <span className={`${labelColor} text-[10px] font-bold uppercase`}>{label}</span>
+    </div>
+  )
+}
+
+// ── Active Loans Table (on-chain) ─────────────────────────────
+
+interface LoanRow {
+  index: number
+  lender: string
+  amount: bigint
+  interestRate: bigint
+  timestamp: bigint
+  repaid: bigint
+  fullyRepaid: boolean
+}
+
+function ActiveLoansTable({
+  loanCount,
+  loanResults,
+  myIndexSet,
+  tokenDecimals,
+  tokenSymbol,
+  chainId,
+}: {
+  loanCount: number
+  loanResults: any[] | undefined
+  myIndexSet: Set<number>
+  tokenDecimals: number
+  tokenSymbol: string
+  chainId: number
+}) {
+  const loans: LoanRow[] = (loanResults ?? [])
+    .map((r, i) => {
+      if (!r || r.status !== 'success' || !r.result) return null
+      const [lender, amount, interestRate, timestamp, repaid, fullyRepaid] = r.result as [string, bigint, bigint, bigint, bigint, boolean]
+      return { index: i, lender, amount, interestRate, timestamp, repaid, fullyRepaid }
+    })
+    .filter(Boolean) as LoanRow[]
+
+  const fmt = (raw: bigint) => parseFloat(formatUnits(raw, tokenDecimals)).toFixed(2)
+  const maskAddr = (addr: string) => `${addr.slice(0, 6)}…${addr.slice(-4)}`
+  const explorer = chainId === bsc.id ? 'https://bscscan.com' : 'https://basescan.org'
+
+  return (
+    <div className="mb-6 bg-[#111111] border border-[#1f2937] rounded-xl p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-[#4b5563] text-xs uppercase tracking-widest">// active loans (on-chain)</div>
+        <div className="text-[#4b5563] text-[10px] tabular-nums">{loanCount} total</div>
+      </div>
+
+      {loans.length === 0 ? (
+        <div className="text-center py-6 text-[#2d3748] text-xs">
+          {loanCount === 0 ? 'No active loans yet.' : 'Loading loan data…'}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-[#1f2937]">
+                <th className="text-left text-[#2d3748] font-normal pb-2 pr-3">#</th>
+                <th className="text-left text-[#2d3748] font-normal pb-2 pr-3">Lender</th>
+                <th className="text-right text-[#2d3748] font-normal pb-2 pr-3">Amount</th>
+                <th className="text-right text-[#2d3748] font-normal pb-2 pr-3">Rate</th>
+                <th className="text-right text-[#2d3748] font-normal pb-2 pr-3">Repaid</th>
+                <th className="text-right text-[#2d3748] font-normal pb-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loans.map((loan) => {
+                const isMe = myIndexSet.has(loan.index)
+                const outstanding = parseFloat(formatUnits(loan.amount + loan.amount * loan.interestRate / BigInt(10000) - loan.repaid, tokenDecimals))
+                return (
+                  <tr
+                    key={loan.index}
+                    className={`border-b border-[#111111] ${isMe ? 'bg-[#00e5ff08]' : ''}`}
+                  >
+                    <td className="py-2 pr-3 text-[#2d3748]">{loan.index}</td>
+                    <td className="py-2 pr-3 font-mono">
+                      <a
+                        href={`${explorer}/address/${loan.lender}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className={`hover:underline ${isMe ? 'text-[#00e5ff]' : 'text-[#4b5563]'}`}
+                      >
+                        {maskAddr(loan.lender)}
+                      </a>
+                      {isMe && (
+                        <span className="ml-1.5 px-1 py-0.5 bg-[#00e5ff22] text-[#00e5ff] rounded text-[9px] font-bold">
+                          YOU
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-right text-[#d1d5db] tabular-nums">
+                      ${fmt(loan.amount)} <span className="text-[#2d3748]">{tokenSymbol}</span>
+                    </td>
+                    <td className="py-2 pr-3 text-right text-[#ffd700] tabular-nums">
+                      {(Number(loan.interestRate) / 100).toFixed(0)}%
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums">
+                      <span className={loan.repaid > BigInt(0) ? 'text-[#00ff88]' : 'text-[#2d3748]'}>
+                        ${fmt(loan.repaid)}
+                      </span>
+                      <span className="text-[#2d3748]"> / ${(parseFloat(fmt(loan.amount)) * (1 + Number(loan.interestRate) / 10000)).toFixed(2)}</span>
+                    </td>
+                    <td className="py-2 text-right">
+                      {loan.fullyRepaid ? (
+                        <span className="text-[#00ff88] font-bold">✓ PAID</span>
+                      ) : outstanding <= 0 ? (
+                        <span className="text-[#00ff88]">Settled</span>
+                      ) : (
+                        <span className="text-[#ff6b35]">
+                          ${outstanding > 0 ? outstanding.toFixed(2) : '0.00'} owed
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="mt-3 text-[#2d3748] text-[10px]">
+        Data read directly from the vault contract · Updates every 15s
+      </div>
     </div>
   )
 }
@@ -211,6 +338,43 @@ export default function LendPage() {
     query: { enabled: Boolean(walletAddress && _vaultAddr && _tokenAddr) },
   })
 
+  // ── On-chain loan data ───────────────────────────────────────
+  // Read total loan count from vault contract
+  const { data: loanCount } = useReadContract({
+    address: (_vaultAddr || undefined) as `0x${string}` | undefined,
+    abi: VAULT_V2_ABI,
+    functionName: 'getLoanCount',
+    chainId: targetChainId,
+    query: { enabled: Boolean(_vaultAddr), refetchInterval: 15_000 },
+  })
+
+  // Batch-read all individual loans
+  const { data: loanResults } = useReadContracts({
+    contracts: Array.from({ length: Number(loanCount ?? 0) }, (_, i) => ({
+      address: _vaultAddr as `0x${string}`,
+      abi: VAULT_V2_ABI,
+      functionName: 'loans' as const,
+      args: [BigInt(i)] as [bigint],
+      chainId: targetChainId,
+    })),
+    query: {
+      enabled: Boolean(_vaultAddr && loanCount && loanCount > 0),
+      refetchInterval: 15_000,
+    },
+  })
+
+  // Get indices of loans belonging to connected wallet
+  const { data: myLoanIndices } = useReadContract({
+    address: (_vaultAddr || undefined) as `0x${string}` | undefined,
+    abi: VAULT_V2_ABI,
+    functionName: 'getLenderLoanIndices',
+    args: walletAddress ? [walletAddress as `0x${string}`] : undefined,
+    chainId: targetChainId,
+    query: { enabled: Boolean(_vaultAddr && walletAddress) },
+  })
+
+  const myIndexSet = new Set((myLoanIndices as bigint[] | undefined)?.map(Number) ?? [])
+
   // Approve tx — explicit chainId + pollingInterval ensures receipt detection works on BSC/Base
   const { writeContractAsync: writeApprove } = useWriteContract()
   const { isLoading: isApproving, isSuccess: approveConfirmed } = useWaitForTransactionReceipt({
@@ -291,14 +455,23 @@ export default function LendPage() {
     }
   }, [approveConfirmed, lendStep])
 
-  // When lend is confirmed → done
+  // When lend is confirmed → notify backend + done
   useEffect(() => {
     if (lendConfirmed && lendTxHash && lendStep === 'lending') {
       setWaitingSince(null)
       setWaitTooLong(false)
       setDoneTxHash(lendTxHash)
       setLendStep('done')
+      // Notify backend so AI knows about this lender for repayment decisions
+      api.notifyLend({
+        tx_hash: lendTxHash,
+        amount_usd: _parsedAmount,
+        chain: selectedChain,
+        from_wallet: walletAddress ?? '',
+        interest_rate_bps: interestBps,
+      }).catch(() => {}) // fire-and-forget
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lendConfirmed, lendTxHash, lendStep])
 
   // Track when we start waiting and show manual fallback after 60 seconds
@@ -779,6 +952,16 @@ export default function LendPage() {
           )}
         </div>
       )}
+
+      {/* ── Active Loans (read directly from chain) ── */}
+      <ActiveLoansTable
+        loanCount={Number(loanCount ?? 0)}
+        loanResults={loanResults}
+        myIndexSet={myIndexSet}
+        tokenDecimals={TOKENS[targetChainId]?.decimals ?? 6}
+        tokenSymbol={TOKENS[targetChainId]?.symbol ?? 'USDC'}
+        chainId={targetChainId}
+      />
 
       {/* Loan terms */}
       <LendTermsCard />

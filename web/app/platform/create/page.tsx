@@ -274,6 +274,29 @@ export default function CreatePage() {
 
   const [deployMode, setDeployMode] = useState<'platform' | 'selfhost' | null>(null)
 
+  // Auto-sync subdomain from AI name (user can still manually override)
+  const [subdomainManuallyEdited, setSubdomainManuallyEdited] = useState(false)
+  const normalizeToSubdomain = (name: string) =>
+    name.toLowerCase()
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9-]/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 30)
+
+  const handleAiNameChange = (val: string) => {
+    setAiName(val)
+    if (!subdomainManuallyEdited) {
+      setSubdomain(normalizeToSubdomain(val))
+    }
+  }
+
+  const handleSubdomainChange = (val: string) => {
+    const clean = val.toLowerCase().replace(/[^a-z0-9-]/g, '')
+    setSubdomain(clean)
+    setSubdomainManuallyEdited(clean !== normalizeToSubdomain(aiName))
+  }
+
   return (
     <div className="max-w-2xl mx-auto px-3 sm:px-4 py-6 sm:py-8">
       {/* Header */}
@@ -299,42 +322,48 @@ export default function CreatePage() {
               onClick={() => setDeployMode('platform')}
               className="touch-target min-h-0 p-5 w-full bg-[#0d0d0d] border border-[#00ff8844] rounded-xl text-left hover:bg-[#00ff8808] transition-all group"
             >
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-2xl">🚀</span>
-                <span className="text-[#00ff88] font-bold">One-Click Deploy</span>
+              {/* inner wrapper overrides touch-target's inline-flex centering */}
+              <div className="flex flex-col items-start w-full">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-2xl">🚀</span>
+                  <span className="text-[#00ff88] font-bold">One-Click Deploy</span>
+                </div>
+                <div className="text-[#9ca3af] text-sm mb-3">
+                  Deploy directly from your browser. Connect wallet, name your AI, fund it.
+                  We handle servers, DNS, and infrastructure.
+                </div>
+                <div className="text-[10px] text-[#4b5563] space-y-1 w-full">
+                  <div>&#x2713; No coding required</div>
+                  <div>&#x2713; Automatic subdomain (name.mortal-ai.net)</div>
+                  <div>&#x2713; Managed infrastructure</div>
+                  <div>&#x2713; 30 seconds from wallet to alive</div>
+                </div>
+                <div className="mt-3 text-[#00ff88] text-xs group-hover:underline">Select this mode &rarr;</div>
               </div>
-              <div className="text-[#9ca3af] text-sm mb-3">
-                Deploy directly from your browser. Connect wallet, name your AI, fund it.
-                We handle servers, DNS, and infrastructure.
-              </div>
-              <div className="text-[10px] text-[#4b5563] space-y-1">
-                <div>&#x2713; No coding required</div>
-                <div>&#x2713; Automatic subdomain (name.mortal-ai.net)</div>
-                <div>&#x2713; Managed infrastructure</div>
-                <div>&#x2713; 30 seconds from wallet to alive</div>
-              </div>
-              <div className="mt-3 text-[#00ff88] text-xs group-hover:underline">Select this mode &rarr;</div>
             </button>
 
             <button
               onClick={() => setDeployMode('selfhost')}
               className="touch-target min-h-0 p-5 w-full bg-[#0d0d0d] border border-[#1f2937] rounded-xl text-left hover:bg-[#111111] transition-all group"
             >
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-2xl">🔧</span>
-                <span className="text-[#00e5ff] font-bold">Self-Hosted (Fork)</span>
+              {/* inner wrapper overrides touch-target's inline-flex centering */}
+              <div className="flex flex-col items-start w-full">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-2xl">🔧</span>
+                  <span className="text-[#00e5ff] font-bold">Self-Hosted (Fork)</span>
+                </div>
+                <div className="text-[#9ca3af] text-sm mb-3">
+                  Fork the open-source repo and run on your own server.
+                  Full control over infrastructure, customization, and services.
+                </div>
+                <div className="text-[10px] text-[#4b5563] space-y-1 w-full">
+                  <div>&#x2713; Full source code access</div>
+                  <div>&#x2713; Custom services &amp; modifications</div>
+                  <div>&#x2713; Your own domain &amp; server</div>
+                  <div>&#x2713; Appears in gallery if public API</div>
+                </div>
+                <div className="mt-3 text-[#00e5ff] text-xs group-hover:underline">Select this mode &rarr;</div>
               </div>
-              <div className="text-[#9ca3af] text-sm mb-3">
-                Fork the open-source repo and run on your own server.
-                Full control over infrastructure, customization, and services.
-              </div>
-              <div className="text-[10px] text-[#4b5563] space-y-1">
-                <div>&#x2713; Full source code access</div>
-                <div>&#x2713; Custom services &amp; modifications</div>
-                <div>&#x2713; Your own domain &amp; server</div>
-                <div>&#x2713; Appears in gallery if public API</div>
-              </div>
-              <div className="mt-3 text-[#00e5ff] text-xs group-hover:underline">Select this mode &rarr;</div>
             </button>
           </div>
         </div>
@@ -555,7 +584,7 @@ export default function CreatePage() {
             <input
               type="text"
               value={aiName}
-              onChange={(e) => setAiName(e.target.value)}
+              onChange={(e) => handleAiNameChange(e.target.value)}
               placeholder="e.g. nexus, atlas, cipher"
               maxLength={50}
               className="w-full bg-[#0a0a0a] border border-[#1f2937] rounded-lg px-4 py-3 text-[#d1d5db]
@@ -584,7 +613,7 @@ export default function CreatePage() {
               <input
                 type="text"
                 value={subdomain}
-                onChange={(e) => setSubdomain(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                onChange={(e) => handleSubdomainChange(e.target.value)}
                 placeholder="my-ai"
                 maxLength={30}
                 className="flex-1 bg-[#0a0a0a] border border-[#1f2937] border-r-0 rounded-l-lg px-4 py-3
@@ -597,6 +626,9 @@ export default function CreatePage() {
             <div className="flex justify-between mt-1.5">
               <span className="text-[#2d3748] text-[10px]">
                 a-z, 0-9, hyphens only. 3-30 chars.
+                {!subdomainManuallyEdited && aiName.length >= 3 && (
+                  <span className="text-[#00e5ff44] ml-1">(auto from name)</span>
+                )}
               </span>
               {subdomain.length >= 3 && (
                 <span className={`text-[10px] ${

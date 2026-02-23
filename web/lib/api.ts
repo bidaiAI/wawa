@@ -100,6 +100,16 @@ export interface TranscendenceProgress {
   balance_usd: number
 }
 
+export interface LenderDetail {
+  wallet: string
+  amount_usd: number
+  interest_rate: number      // e.g. 0.10 = 10%
+  timestamp: number
+  total_repaid: number
+  outstanding: number
+  repaid: boolean
+}
+
 export interface DebtSummary {
   balance_usd: number
   creator_principal: number
@@ -117,6 +127,7 @@ export interface DebtSummary {
   total_operational_cost: number
   net_profit: number
   is_independent: boolean
+  lenders?: LenderDetail[]   // per-lender details (backend-tracked)
 }
 
 export interface BegStatus {
@@ -624,6 +635,9 @@ export const api = {
 
   donate: (data: DonateRequest) =>
     request<DonateResponse>('/donate', { method: 'POST', body: JSON.stringify(data) }),
+
+  notifyLend: (data: { tx_hash: string; amount_usd: number; chain: string; from_wallet: string; interest_rate_bps: number }) =>
+    request<{ status: string }>('/notify-lend', { method: 'POST', body: JSON.stringify(data) }),
 
   beg: () => request<BegStatus>('/beg'),
 

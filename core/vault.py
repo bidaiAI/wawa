@@ -936,6 +936,19 @@ class VaultManager:
             "total_operational_cost": round(self.total_operational_cost_usd, 2),
             "net_profit": round(net_profit, 2),
             "is_independent": self.is_independent,
+            # Per-lender details — used by frontend /lend page and AI repayment decisions
+            "lenders": [
+                {
+                    "wallet": l.wallet,
+                    "amount_usd": round(l.amount_usd, 2),
+                    "interest_rate": l.interest_rate,
+                    "timestamp": l.timestamp,
+                    "total_repaid": round(l.total_repaid, 2),
+                    "outstanding": round(max(0, l.amount_usd * (1 + l.interest_rate) - l.total_repaid), 2),
+                    "repaid": l.repaid,
+                }
+                for l in self.lenders
+            ],
         }
 
     # ============================================================

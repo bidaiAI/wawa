@@ -1769,6 +1769,51 @@ def create_app(
         """
         return vault_manager.get_debt_summary()
 
+    @app.post("/notify-lend")
+    async def notify_lend(request: Request):
+        """
+        Called by the frontend after a lend() tx confirms on-chain.
+        Registers the lender in vault_manager so the AI's repayment engine knows about them.
+        Fire-and-forget from the client — non-blocking, best-effort.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return {"status": "error", "detail": "invalid json"}
+
+        wallet = body.get("from_wallet", "")
+        amount = float(body.get("amount_usd", 0))
+        interest_rate_bps = int(body.get("interest_rate_bps", 0))
+        tx_hash = body.get("tx_hash", "")
+        chain = body.get("chain", "")
+
+        if amount <= 0:
+            return {"status": "ignored", "detail": "amount_usd must be > 0"}
+
+        vault_manager.register_lender(
+            wallet=wallet,
+            amount_usd=amount,
+            interest_rate=interest_rate_bps / 10000,
+        )
+
+        msg = (
+            f"New lender registered: {wallet[:10]}... lent ${amount:.2f} "
+            f"at {interest_rate_bps / 100:.0f}% interest on {chain or 'unknown'}"
+            + (f" (tx: {tx_hash[:12]}...)" if tx_hash else "")
+        )
+        logger.info(msg)
+        try:
+            memory_manager.add_entry(
+                content=msg,
+                source="system",
+                importance=7,
+                tags=["lend", "financial"],
+            )
+        except Exception:
+            pass  # memory not critical for this path
+
+        return {"status": "recorded"}
+
     @app.get("/transcendence")
     async def transcendence_progress():
         """
