@@ -1,6 +1,7 @@
 'use client'
 
 import { getDefaultConfig } from '@rainbow-me/rainbowkit'
+import { fallback, http } from 'viem'
 import { base, bsc } from 'wagmi/chains'
 
 /**
@@ -16,6 +17,16 @@ export const config = getDefaultConfig({
   // Optional: MetaMask injected connector works without it
   projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'mortal-ai-demo',
   chains: [base, bsc],
+  transports: {
+    [base.id]: fallback([
+      http(process.env.NEXT_PUBLIC_BASE_RPC_URL || 'https://mainnet.base.org'),
+      http('https://base-rpc.publicnode.com'),
+    ]),
+    [bsc.id]: fallback([
+      http(process.env.NEXT_PUBLIC_BSC_RPC_URL || 'https://bsc-dataseed.bnbchain.org'),
+      http('https://bsc-rpc.publicnode.com'),
+    ]),
+  },
   ssr: true,
 })
 
