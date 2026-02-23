@@ -95,9 +95,9 @@ class TwitterAgent:
         self.schedule = list(DEFAULT_SCHEDULE)
         self.tweet_history: list[TweetRecord] = []
         self.daily_tweet_count: int = 0
-        self.max_daily_tweets: int = 12        # Cap to avoid spam
+        self.max_daily_tweets: int = 24        # Doubled: more engagement capacity
         self.last_tweet_timestamp: float = 0
-        self.min_tweet_interval: int = 1800    # 30 min between tweets
+        self.min_tweet_interval: int = 900     # Halved: 15 min between tweets (was 30)
         self._daily_reset_timestamp: float = time.time()
 
         # Character limit: 4000 for Twitter Blue, 280 for standard
@@ -117,7 +117,7 @@ class TwitterAgent:
         # Mention reply state
         self._last_mention_id: Optional[str] = None    # Pagination cursor
         self._last_mention_scan: float = 0.0
-        self._MENTION_SCAN_INTERVAL: float = 300.0     # 5 min between scans
+        self._MENTION_SCAN_INTERVAL: float = 150.0     # 2.5 min between scans (was 5)
         # Track normalized question patterns → count (for deep-think escalation)
         self._question_counts: dict[str, int] = {}
 
