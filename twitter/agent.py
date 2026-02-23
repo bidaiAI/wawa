@@ -62,6 +62,8 @@ class TweetRecord:
     thought_process: str = ""                  # Why wawa decided to tweet this
     tokens_used: int = 0
     cost_usd: float = 0.0
+    reply_to_id: Optional[str] = None         # Original tweet this was replying to
+    model_tier: int = 0                       # Model tier level when generated (richer=smarter)
 
 
 # Default daily schedule
@@ -110,6 +112,7 @@ class TwitterAgent:
         self._reply_tweet_fn: Optional[callable] = None  # Post a reply to a tweet by ID
         self._get_mentions_fn: Optional[callable] = None # Fetch recent @mentions
         self._record_highlight_fn: Optional[callable] = None  # Record discovery highlight
+        self._get_model_tier_fn: Optional[callable] = None   # Get current model tier level
 
         # Mention reply state
         self._last_mention_id: Optional[str] = None    # Pagination cursor
@@ -160,6 +163,10 @@ class TwitterAgent:
         fn(stage: str, details: str) -> None
         """
         self._record_highlight_fn = fn
+
+    def set_get_model_tier_function(self, fn: callable):
+        """Set model tier getter. fn() -> int (current tier level, 1-5)"""
+        self._get_model_tier_fn = fn
 
     async def check_schedule(self) -> Optional[TweetRecord]:
         """Check if any scheduled tweet should fire now."""
@@ -344,12 +351,15 @@ class TwitterAgent:
 
                 reply_id = await self._reply_tweet_fn(tweet_id, content)
 
+                current_tier = self._get_model_tier_fn() if self._get_model_tier_fn else 0
                 record = TweetRecord(
                     timestamp=now,
                     tweet_type=TweetType.MENTION_REPLY,
                     content=content,
                     tweet_id=reply_id,
                     thought_process=thought,
+                    reply_to_id=tweet_id,       # Original mention tweet we replied to
+                    model_tier=current_tier,     # Track which tier was used (richer=smarter)
                 )
                 self.tweet_history.append(record)
                 self.daily_tweet_count += 1
@@ -420,9 +430,31 @@ class TwitterAgent:
             "thought_process": record.thought_process,
             "tweet_id": record.tweet_id,
         }
+        if record.reply_to_id:
+            log_entry["reply_to_id"] = record.reply_to_id
+        if record.model_tier:
+            log_entry["model_tier"] = record.model_tier
         log_file = self.log_dir / "tweet_log.jsonl"
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+
+    def get_past_mention_replies(self, max_tier: int = 0) -> list[TweetRecord]:
+        """Get past mention replies that were generated at or below a specific tier.
+        Used by the re-reply system: when AI gets richer and upgrades model,
+        it can re-answer past questions with higher quality.
+
+        Args:
+            max_tier: Only return replies made at this tier or lower (0 = all)
+        Returns:
+            List of TweetRecord for mention replies, oldest first.
+        """
+        replies = [
+            r for r in self.tweet_history
+            if r.tweet_type == TweetType.MENTION_REPLY
+            and r.reply_to_id  # Must have original mention ID for re-reply
+            and (max_tier == 0 or r.model_tier <= max_tier)
+        ]
+        return sorted(replies, key=lambda r: r.timestamp)
 
     def get_public_log(self, limit: int = 20) -> list[dict]:
         """Get recent tweets with thought process for public display."""

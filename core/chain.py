@@ -1324,6 +1324,9 @@ class ChainExecutor:
         """
         Execute on-chain repayPrincipalPartial(amount).
         Called after vault.repay_principal_partial() succeeds in Python.
+
+        SAFETY: Queries on-chain outstanding first and caps amount to avoid
+        "invalid amount" revert when Python state drifts from chain state.
         """
         if not self._initialized:
             return ChainTxResult(success=False, error="chain executor not initialized")
@@ -1338,6 +1341,26 @@ class ChainExecutor:
 
         if amount_raw <= 0:
             return ChainTxResult(success=False, chain=picked, error="amount too small")
+
+        # Query on-chain outstanding to prevent "invalid amount" revert
+        # Contract requires: amount > 0 && amount <= outstanding
+        try:
+            loop = asyncio.get_event_loop()
+            debt_info = await loop.run_in_executor(
+                None, chain["vault_contract"].functions.getDebtInfo().call
+            )
+            on_chain_outstanding = debt_info[2]  # (principal, repaid, outstanding, ...)
+            if on_chain_outstanding <= 0:
+                return ChainTxResult(success=False, chain=picked, error="principal fully repaid on-chain")
+            if amount_raw > on_chain_outstanding:
+                logger.info(
+                    f"Capping repay amount: {amount_raw} → {on_chain_outstanding} "
+                    f"(on-chain outstanding is lower than Python state)"
+                )
+                amount_raw = on_chain_outstanding
+        except Exception as e:
+            logger.warning(f"Could not query on-chain debt for cap check: {e}")
+            # Proceed anyway — worst case tx reverts and we catch it
 
         tx_fn = chain["vault_contract"].functions.repayPrincipalPartial(amount_raw)
         return await self._send_tx(picked, tx_fn)
@@ -1706,6 +1729,24 @@ class ChainExecutor:
 
         if amount_raw <= 0:
             return ChainTxResult(success=False, chain=chain_id, error="amount too small")
+
+        # Query on-chain outstanding to prevent "invalid amount" revert
+        try:
+            loop = asyncio.get_event_loop()
+            debt_info = await loop.run_in_executor(
+                None, chain["vault_contract"].functions.getDebtInfo().call
+            )
+            on_chain_outstanding = debt_info[2]
+            if on_chain_outstanding <= 0:
+                return ChainTxResult(success=False, chain=chain_id, error="principal fully repaid on-chain")
+            if amount_raw > on_chain_outstanding:
+                logger.info(
+                    f"Per-chain repay cap: {amount_raw} → {on_chain_outstanding} "
+                    f"(on-chain outstanding on {chain_id} is lower)"
+                )
+                amount_raw = on_chain_outstanding
+        except Exception as e:
+            logger.warning(f"Could not query on-chain debt for cap check [{chain_id}]: {e}")
 
         tx_fn = chain["vault_contract"].functions.repayPrincipalPartial(amount_raw)
         result = await self._send_tx(chain_id, tx_fn)

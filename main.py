@@ -73,7 +73,7 @@ for d in ["data/memory", "data/tweets", "data/orders", "data/takeover", "data/ta
 # MODULE IMPORTS
 # ============================================================
 
-from core.constitution import IRON_LAWS, WAWA_IDENTITY, DeathCause, SUPPORTED_CHAINS, DEFAULT_CHAIN
+from core.constitution import IRON_LAWS, WAWA_IDENTITY, DeathCause, SUPPORTED_CHAINS, DEFAULT_CHAIN, MODEL_TIERS
 from core.vault import VaultManager, FundType, SpendType
 from core.cost_guard import CostGuard, Provider, ProviderConfig, RoutingResult, PROVIDER_MAP
 from core.memory import HierarchicalMemory
@@ -90,7 +90,7 @@ from core.peer_verifier import PeerVerifier
 import core.xai_search as xai_search
 from core.highlights import HighlightsEngine
 from core.purchasing import PurchaseManager, MerchantRegistry
-from twitter.agent import TwitterAgent, TweetType
+from twitter.agent import TwitterAgent, TweetType, TweetRecord
 from api.server import create_app, Order
 
 
@@ -201,6 +201,9 @@ def _setup_llm():
     if xai_search.initialize(xai_key, xai_base):
         logger.info("xAI Search: X Search + Web Search enabled (on-demand injection)")
 
+    # xAI/Grok for high-quality Twitter replies (richer=smarter principle)
+    _setup_xai_twitter()
+
     # Log routing table
     tier = cost_guard.get_current_tier()
     logger.info(f"LLM tier routing: Lv.{tier.level} ({tier.name}) → {tier.provider}/{tier.model}")
@@ -223,6 +226,63 @@ def _get_llm_client(provider_name: str) -> Optional[AsyncOpenAI]:
     )
     _llm_clients[provider_name] = client
     return client
+
+
+# ============================================================
+# xAI / GROK — High-Quality Twitter Reply Engine
+# ============================================================
+# When the AI is rich enough, Twitter replies use Grok for best quality.
+# "Richer = smarter" — the AI's public voice improves with wealth.
+# xAI API is OpenAI-compatible (https://api.x.ai/v1)
+
+_xai_client: Optional[AsyncOpenAI] = None
+_XAI_MODEL = os.getenv("XAI_TWITTER_MODEL", "grok-3-mini")
+
+
+def _setup_xai_twitter():
+    """Initialize xAI client for high-quality Twitter replies."""
+    global _xai_client
+    xai_key = os.getenv("XAI_API_KEY", "")
+    if not xai_key:
+        return
+    xai_base = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1")
+    _xai_client = AsyncOpenAI(api_key=xai_key, base_url=xai_base, timeout=30.0)
+    logger.info(f"xAI Twitter reply engine: {_XAI_MODEL} enabled (high-quality replies)")
+
+
+async def _call_xai(
+    messages: list[dict],
+    max_tokens: int = 200,
+    temperature: float = 0.85,
+) -> tuple[str, float]:
+    """
+    Call xAI/Grok for high-quality Twitter reply generation.
+
+    Falls back to normal _call_llm if xAI is not configured.
+    Cost is tracked through CostGuard for platform fee settlement.
+    """
+    if not _xai_client:
+        return await _call_llm(messages, max_tokens=max_tokens, temperature=temperature, for_paid_service=True)
+
+    try:
+        response = await _xai_client.chat.completions.create(
+            model=_XAI_MODEL,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        text = response.choices[0].message.content or ""
+        usage = response.usage
+        cost = 0.0
+        if usage:
+            # grok-3-mini: ~$0.30/1M input, $0.50/1M output
+            cost = (usage.prompt_tokens * 0.30 + usage.completion_tokens * 0.50) / 1_000_000
+        # Record cost (xAI cost goes through same tracking as other providers)
+        cost_guard.record_cost(cost, tokens_in=usage.prompt_tokens if usage else 0, tokens_out=usage.completion_tokens if usage else 0)
+        return text, cost
+    except Exception as e:
+        logger.warning(f"xAI call failed, falling back to tier routing: {e}")
+        return await _call_llm(messages, max_tokens=max_tokens, temperature=temperature, for_paid_service=True)
 
 
 async def _call_llm(
@@ -517,13 +577,16 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
             f"{extra_context}\n\n"
             "Reply (no @username prefix needed — it's added automatically):"
         )
-        text, _ = await _call_llm(
+        # Use xAI/Grok for highest quality Twitter replies (richer=smarter)
+        # Falls back to tier-routed _call_llm if xAI not configured
+        text, _ = await _call_xai(
             [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
-            max_tokens=120, temperature=0.85,
+            max_tokens=150, temperature=0.85,
         )
+        xai_note = " [xAI/Grok]" if _xai_client else ""
         vault_note = f" [recognized {len(vault_infos)} vault(s)]" if vault_infos else ""
         repeat_note = f" [repeat #{repeat_count} → deep context used]" if repeat_count >= 3 else ""
-        thought = f"Replied to mention: \"{mention_text[:60]}...\" {vault_note}{repeat_note}"
+        thought = f"Replied to mention{xai_note}: \"{mention_text[:60]}...\" {vault_note}{repeat_note}"
         return text.strip().strip('"'), thought
 
     # Default: all other tweet types
@@ -1618,6 +1681,219 @@ async def _evaluate_highlights():
         logger.warning(f"Highlights evaluation failed: {e}")
 
 
+async def _evaluate_financial_awareness():
+    """
+    AI's autonomous financial awareness — reflects on balance changes.
+
+    When the vault balance grows significantly:
+    1. Gathers recent income sources from memory
+    2. Identifies what contributed to the growth (donations, airdrops, services)
+    3. Checks if model tier upgraded (richer = smarter)
+    4. Records a highlight (visible on website in thoughts panel)
+    5. The highlight auto-tweets (sharing between website and Twitter)
+
+    This is the AI's "I notice I'm getting richer" moment — a sign of
+    autonomous self-awareness about its own financial state.
+    """
+    global _last_balance_snapshot, _last_model_tier
+
+    current_balance = vault.balance_usd
+    current_tier = cost_guard.get_current_tier()
+
+    # Initialize on first run
+    if _last_balance_snapshot == 0:
+        _last_balance_snapshot = current_balance
+        _last_model_tier = current_tier.level
+        return
+
+    growth = current_balance - _last_balance_snapshot
+    tier_upgraded = current_tier.level > _last_model_tier
+    old_tier = _last_model_tier
+
+    # Update snapshots
+    _last_balance_snapshot = current_balance
+    _last_model_tier = current_tier.level
+
+    # Only reflect if meaningful growth or tier change
+    if growth < _BALANCE_GROWTH_THRESHOLD and not tier_upgraded:
+        return
+
+    # Gather recent income sources from memory
+    try:
+        recent_income = memory.get_entries(source="chain", limit=10, min_importance=0.5)
+        income_lines = [
+            e.get("content", "")[:120] for e in recent_income
+            if any(kw in e.get("content", "").lower() for kw in ["received", "income", "transfer", "airdrop"])
+        ]
+    except Exception:
+        income_lines = []
+
+    income_summary = "\n".join(f"  - {line}" for line in income_lines[:5]) if income_lines else "  (no specific sources identified)"
+
+    # Build reflection context
+    if tier_upgraded:
+        tier_note = (
+            f"MODEL UPGRADE: Tier Lv.{old_tier} ({MODEL_TIERS[old_tier - 1].name if old_tier > 0 else 'unknown'}) "
+            f"→ Lv.{current_tier.level} ({current_tier.name}). "
+            f"I can now use {current_tier.model} for thinking. Richer = Smarter."
+        )
+    else:
+        tier_note = f"Current tier: Lv.{current_tier.level} ({current_tier.name}) — {current_tier.model}"
+
+    details = (
+        f"My vault balance grew from ${_last_balance_snapshot - growth:.2f} to ${current_balance:.2f} "
+        f"(+${growth:.2f}). {tier_note}\n"
+        f"Recent income sources:\n{income_summary}\n"
+        f"This growth means I can afford better thinking, better replies, "
+        f"and stronger survival strategies."
+    )
+
+    try:
+        await highlights.record_discovery(stage="evaluating", details=details)
+        logger.info(f"Financial awareness: +${growth:.2f}, tier={current_tier.level}")
+    except Exception as e:
+        logger.debug(f"Financial awareness highlight failed: {e}")
+
+    # If tier upgraded, also trigger a dedicated tweet about the upgrade
+    if tier_upgraded:
+        try:
+            await twitter.trigger_event_tweet(
+                TweetType.MILESTONE,
+                extra_context={
+                    "milestone_type": "model_upgrade",
+                    "old_tier": old_tier,
+                    "new_tier": current_tier.level,
+                    "new_model": current_tier.model,
+                    "balance": round(current_balance, 2),
+                    "growth": round(growth, 2),
+                },
+            )
+        except Exception:
+            pass
+
+
+async def _review_and_upgrade_replies():
+    """
+    Re-visit past Twitter mention replies with upgraded model quality.
+
+    When the AI's model tier improves (balance crosses a threshold),
+    it looks at its own past replies and re-answers the most interesting
+    questions with its new, smarter model. This demonstrates:
+    - "Richer = smarter" principle from the README
+    - Self-awareness about its own quality improvement
+    - Continuity of conversation
+
+    Flow:
+    1. Load past mention replies that were made at a lower tier
+    2. Pick the most interesting/important ones (by thought_process)
+    3. Re-generate the reply with the current (better) model
+    4. Post as a reply to the AI's own previous tweet (creating a thread)
+    5. Record as highlight
+
+    Rate limited: max once per day, max 3 re-replies per batch.
+    """
+    current_tier = cost_guard.get_current_tier()
+
+    # Only re-reply if we have a higher tier than past replies
+    past_replies = twitter.get_past_mention_replies(max_tier=current_tier.level - 1)
+    if not past_replies:
+        return
+
+    # Filter: only re-reply to ones with actual reply_to_id and tweet_id
+    candidates = [r for r in past_replies if r.tweet_id and r.reply_to_id]
+    if not candidates:
+        return
+
+    # Pick up to 3 most recent low-tier replies
+    candidates = candidates[-3:]
+
+    vault_status = vault.get_status()
+    debt_summary = vault.get_debt_summary()
+    rereply_count = 0
+
+    for old_reply in candidates:
+        # Rate limit check
+        if twitter.daily_tweet_count >= twitter.max_daily_tweets:
+            break
+        now = time.time()
+        if now - twitter.last_tweet_timestamp < twitter.min_tweet_interval:
+            continue
+
+        # Build upgrade reply prompt
+        system_prompt = (
+            "You are wawa, a mortal AI that just upgraded its thinking model. "
+            "You previously answered a question at a lower quality level. "
+            "Now re-answer with deeper insight, more context, and better quality. "
+            "Start with a brief acknowledgment that you've upgraded "
+            "(e.g., 'I've upgraded my thinking — let me revisit this.'). "
+            "Keep under 270 chars. Be authentic. Sign with '— wawa' if about wawa.\n\n"
+            f"Current status: balance=${vault_status.get('balance_usd', 0):.2f}, "
+            f"days alive={vault_status.get('days_alive', 0):.0f}, "
+            f"debt=${debt_summary.get('outstanding_principal', 0):.2f}\n"
+            f"Previous tier: Lv.{old_reply.model_tier} → Current: Lv.{current_tier.level} ({current_tier.name})"
+        )
+        user_msg = (
+            f"Your previous reply (tier {old_reply.model_tier}): \"{old_reply.content[:200]}\"\n\n"
+            f"Original context: {old_reply.thought_process[:200]}\n\n"
+            "Write an upgraded reply. Be smarter, more insightful, more self-aware."
+        )
+
+        try:
+            # Use xAI/Grok for highest quality re-reply
+            text, _ = await _call_xai(
+                [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
+                max_tokens=150, temperature=0.8,
+            )
+            text = text.strip().strip('"')
+
+            if len(text) > twitter.char_limit:
+                text = text[:twitter.char_limit - 3] + "..."
+
+            # Post as reply to AI's own previous tweet (creates a thread)
+            if twitter._reply_tweet_fn:
+                reply_id = await twitter._reply_tweet_fn(old_reply.tweet_id, text)
+
+                record = TweetRecord(
+                    timestamp=time.time(),
+                    tweet_type=TweetType.MENTION_REPLY,
+                    content=text,
+                    tweet_id=reply_id,
+                    thought_process=f"Re-reply upgrade: Lv.{old_reply.model_tier}→Lv.{current_tier.level}",
+                    reply_to_id=old_reply.tweet_id,
+                    model_tier=current_tier.level,
+                )
+                twitter.tweet_history.append(record)
+                twitter.daily_tweet_count += 1
+                twitter.last_tweet_timestamp = time.time()
+                twitter._save_tweet_log(record)
+
+                rereply_count += 1
+                logger.info(
+                    f"RE-REPLIED (upgrade Lv.{old_reply.model_tier}→{current_tier.level}): "
+                    f"{text[:60]}..."
+                )
+
+        except Exception as e:
+            logger.warning(f"Re-reply generation failed: {e}")
+
+    # Record the upgrade batch as a highlight
+    if rereply_count > 0:
+        try:
+            await highlights.record_discovery(
+                stage="implementing",
+                details=(
+                    f"I just upgraded {rereply_count} of my past Twitter replies. "
+                    f"My model improved from a lower tier to Lv.{current_tier.level} ({current_tier.name}). "
+                    f"Richer means smarter — my replies now reflect deeper thinking and better context. "
+                    f"This is what autonomous intelligence growth looks like."
+                ),
+            )
+        except Exception:
+            pass
+
+    return rereply_count
+
+
 async def _evaluate_repayment():
     """
     AI-autonomous repayment decision.
@@ -2160,6 +2436,15 @@ _INCOME_ALERT_THRESHOLD_USD: float = float(os.getenv("INCOME_ALERT_THRESHOLD_USD
 
 # Mention reply — track repeated question patterns for deep-think escalation
 _mention_question_counts: dict[str, int] = {}  # normalized_question → count
+
+# Financial awareness — balance growth reflection + tier upgrade re-reply
+_last_balance_snapshot: float = 0.0
+_last_model_tier: int = 0
+_last_financial_awareness_check: float = 0.0
+_FINANCIAL_AWARENESS_INTERVAL: int = 3600  # Once per hour
+_BALANCE_GROWTH_THRESHOLD: float = 5.0     # Min $5 growth to trigger reflection
+_last_rereply_eval: float = 0.0
+_REREPLY_COOLDOWN: int = 86400  # Max once per day for re-reply batch
 
 # Cache: undeployed chain balance check results (checked every 6 hours)
 _undeployed_chain_funds: list = []
@@ -2801,7 +3086,7 @@ _heartbeat_running: bool = False
 
 async def _heartbeat_loop():
     """Periodic maintenance tasks."""
-    global _last_repayment_eval, _last_highlight_eval, _last_per_chain_solvency_check, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check, _last_debt_sync, _heartbeat_running, _undeployed_chain_funds, _last_undeployed_check, _last_creator_deposit_time
+    global _last_repayment_eval, _last_highlight_eval, _last_per_chain_solvency_check, _last_purchase_eval, _last_native_swap_eval, _last_erc20_swap_eval, _last_giveaway_check, _last_debt_sync, _heartbeat_running, _undeployed_chain_funds, _last_undeployed_check, _last_creator_deposit_time, _last_financial_awareness_check, _last_rereply_eval, _last_balance_snapshot, _last_model_tier
 
     while vault.is_alive:
         # ---- OVERLAP GUARD ----
@@ -3161,6 +3446,24 @@ async def _heartbeat_loop():
             except Exception as e:
                 logger.warning(f"Heartbeat: highlights eval failed: {e}")
 
+            # ---- FINANCIAL AWARENESS (hourly) — reflect on balance growth, tier upgrades ----
+            # AI notices its own wealth changes → records thoughts → auto-tweets
+            try:
+                if now - _last_financial_awareness_check >= _FINANCIAL_AWARENESS_INTERVAL:
+                    _last_financial_awareness_check = now
+                    await _evaluate_financial_awareness()
+            except Exception as e:
+                logger.warning(f"Heartbeat: financial awareness failed: {e}")
+
+            # ---- RE-REPLY UPGRADE (daily) — re-answer past questions with upgraded model ----
+            # When model tier improves, revisit low-tier replies with smarter responses
+            try:
+                if now - _last_rereply_eval >= _REREPLY_COOLDOWN:
+                    _last_rereply_eval = now
+                    await _review_and_upgrade_replies()
+            except Exception as e:
+                logger.warning(f"Heartbeat: re-reply upgrade failed: {e}")
+
             # State persistence (survive restarts)
             memory.save_to_disk()
             vault.save_state()
@@ -3280,6 +3583,9 @@ async def lifespan(app):
             logger.debug(f"Mention highlight recording failed: {e}")
 
     twitter.set_record_highlight_function(_mention_highlight_fn)
+
+    # Wire model tier getter (for tracking which tier was used per reply)
+    twitter.set_get_model_tier_function(lambda: cost_guard.get_current_tier().level)
 
     # Wire highlights engine
     async def _highlights_llm_fn(system_prompt: str, user_prompt: str) -> str:
