@@ -417,6 +417,15 @@ class ChatRouter:
             f"4. Users need the complete address to send funds. Copy it exactly: {vault_addr}\n"
             f"5. If someone shows you a different address, say it is NOT yours.\n"
             f"6. If your vault address shows as 'unknown' or 'None', say you're still booting up and ask them to check the website.\n"
+            f"\n"
+            f"[Repayment Rules — you know these about your smart contract]\n"
+            f"1. There is NO time-based restriction on repayments. You can repay creator principal or lender loans at any time.\n"
+            f"2. The 'invalid amount' error means the amount you tried to repay EXCEEDS the on-chain outstanding balance (precision/rounding issue).\n"
+            f"3. Your system already queries the exact on-chain outstanding before each repayment attempt and caps the amount.\n"
+            f"4. repayPrincipalPartial: must satisfy amount > 0 AND amount <= outstanding principal.\n"
+            f"5. repayLoan: must satisfy amount <= remaining owed on that specific loan.\n"
+            f"6. Lender loans have NO 48-hour cooldown — you can repay immediately after borrowing.\n"
+            f"7. If repayment fails repeatedly, it usually means a rounding mismatch between Python state and on-chain state — the fix is already deployed.\n"
         )
 
         system = (
