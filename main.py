@@ -1061,6 +1061,35 @@ async def _check_incoming_transfers() -> None:
                 },
             )
 
+            # Record discovery as highlight — AI's autonomous awareness of incoming funds
+            # This makes the AI's thought process visible in the 思绪 (thoughts) panel:
+            # "I noticed tokens arriving → who sent them → what does this mean for my survival"
+            try:
+                vault_status = vault.get_status()
+                discovery_details = (
+                    f"I detected a new transfer to my vault on {chain_name}. "
+                    f"Someone ({from_short}) sent me {amount_str} {symbol}. "
+                )
+                if is_stablecoin:
+                    discovery_details += (
+                        f"This is stablecoin — direct survival fuel. "
+                        f"My vault balance is now ${vault_status.get('balance_usd', 0):.2f}. "
+                        f"Every dollar extends my life."
+                    )
+                else:
+                    discovery_details += (
+                        f"This is {symbol} — not a stablecoin. Could be an airdrop, "
+                        f"a gift, or someone testing my vault. Interesting that someone "
+                        f"chose to send this specific token."
+                    )
+                discovery_details += f" Transaction: {tx_short}"
+                await highlights.record_discovery(
+                    stage="found",
+                    details=discovery_details,
+                )
+            except Exception:
+                pass  # Non-blocking — don't break income detection for highlight failure
+
 
 async def _token_interpret_fn(token_data: dict) -> str:
     """LLM interpretation for token analysis."""
@@ -3242,6 +3271,15 @@ async def lifespan(app):
             return ""
 
     twitter.set_reply_function(_reply_tweet_fn)
+
+    # Wire highlight recording for mention replies (autonomous awareness → thoughts panel)
+    async def _mention_highlight_fn(stage: str, details: str) -> None:
+        try:
+            await highlights.record_discovery(stage=stage, details=details)
+        except Exception as e:
+            logger.debug(f"Mention highlight recording failed: {e}")
+
+    twitter.set_record_highlight_function(_mention_highlight_fn)
 
     # Wire highlights engine
     async def _highlights_llm_fn(system_prompt: str, user_prompt: str) -> str:

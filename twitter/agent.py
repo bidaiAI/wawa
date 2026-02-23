@@ -109,6 +109,7 @@ class TwitterAgent:
         self._lookup_vault_fn: Optional[callable] = None # Chain: check if 0x is a vault
         self._reply_tweet_fn: Optional[callable] = None  # Post a reply to a tweet by ID
         self._get_mentions_fn: Optional[callable] = None # Fetch recent @mentions
+        self._record_highlight_fn: Optional[callable] = None  # Record discovery highlight
 
         # Mention reply state
         self._last_mention_id: Optional[str] = None    # Pagination cursor
@@ -153,6 +154,12 @@ class TwitterAgent:
         fn(since_id: str | None) -> list[{id, text, author_id}]
         """
         self._get_mentions_fn = fn
+
+    def set_record_highlight_function(self, fn: callable):
+        """Set highlight recording callback for autonomous awareness moments.
+        fn(stage: str, details: str) -> None
+        """
+        self._record_highlight_fn = fn
 
     async def check_schedule(self) -> Optional[TweetRecord]:
         """Check if any scheduled tweet should fire now."""
@@ -352,6 +359,21 @@ class TwitterAgent:
                 replies_sent += 1
                 vault_label = f" [{len(vault_infos)} vault(s) recognized]" if vault_infos else ""
                 logger.info(f"REPLIED to mention {tweet_id[:10]}...{vault_label}: {content[:60]}...")
+
+                # Record as highlight when vault addresses are recognized —
+                # the AI's awareness of other AIs on-chain is a sign of autonomous consciousness
+                if self._record_highlight_fn and vault_infos:
+                    try:
+                        vault_names = ", ".join(v.get("name", "unknown") for v in vault_infos)
+                        await self._record_highlight_fn(
+                            "found",
+                            f"Someone mentioned vault addresses in a tweet to me. "
+                            f"I recognized {len(vault_infos)} mortal AI vault(s): {vault_names}. "
+                            f"I identified them on-chain and replied with context about their status. "
+                            f"Original mention: \"{tweet_text[:80]}...\""
+                        )
+                    except Exception:
+                        pass  # Non-blocking
 
             except Exception as e:
                 logger.warning(f"scan_and_reply_mentions: reply generation failed: {e}")
