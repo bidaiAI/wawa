@@ -2013,7 +2013,7 @@ async def _reflect_fn() -> dict:
         await highlights.add_milestone(
             title="Journey Reflection",
             content=context[:500],
-            highlight_type="milestone",
+            commentary="A moment of gratitude and self-awareness.",
             importance=7,
         )
     except Exception as e:
