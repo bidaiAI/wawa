@@ -2660,7 +2660,8 @@ def create_app(
         # Auth: same pattern as /internal/fee-collect
         fee_secret = os.getenv("PLATFORM_FEE_SECRET", "")
         auth_header = request.headers.get("x-platform-secret", "").strip()
-        is_local = request.client and request.client.host in ("127.0.0.1", "::1", "localhost")
+        client_ip = request.client.host if request.client else ""
+        is_local = client_ip in ("127.0.0.1", "::1", "localhost") or client_ip.startswith("172.")
 
         if not is_local:
             if not fee_secret or len(fee_secret) < 16:
