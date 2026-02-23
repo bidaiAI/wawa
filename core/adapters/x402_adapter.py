@@ -157,6 +157,7 @@ class X402Adapter(MerchantAdapter):
 
         if not endpoint:
             logger.warning(f"Unknown x402 service: {service_id}")
+            self.last_error = f"unknown endpoint: {service_id}"
             return None
 
         # Find merchant config — check TrustedDomain first, then KnownMerchant
@@ -169,6 +170,7 @@ class X402Adapter(MerchantAdapter):
         )
         if not merchant:
             logger.warning(f"No merchant config for: {merchant_id}")
+            self.last_error = f"no merchant config: {merchant_id}"
             return None
 
         url = endpoint["url"]
@@ -181,6 +183,7 @@ class X402Adapter(MerchantAdapter):
                 f"ANTI-PHISHING: x402 endpoint domain mismatch! "
                 f"Got {parsed_domain} expected {merchant.domain}"
             )
+            self.last_error = f"domain mismatch: {parsed_domain} vs {merchant.domain}"
             return None
 
         session = await self._get_session()
@@ -191,12 +194,14 @@ class X402Adapter(MerchantAdapter):
                 if resp.status == 200:
                     # No payment needed — service might be free or already paid
                     logger.info(f"x402 endpoint {url} returned 200 (no payment needed)")
+                    self.last_error = f"endpoint returned 200 (free/no payment): {url}"
                     return None
 
                 if resp.status != 402:
                     logger.warning(
                         f"x402 probe got unexpected status {resp.status} from {url}"
                     )
+                    self.last_error = f"unexpected HTTP {resp.status} from {url}"
                     return None
 
                 # Parse payment instructions from 402 response
@@ -302,6 +307,7 @@ class X402Adapter(MerchantAdapter):
 
         except Exception as e:
             logger.warning(f"x402 probe failed for {endpoint.get('url', '')}: {e}")
+            self.last_error = f"network error: {str(e)[:80]}"
             return None
 
     async def verify_delivery(self, order: PurchaseOrder) -> DeliveryResult:

@@ -637,6 +637,49 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
         thought = f"Replied to mention{xai_note}: \"{mention_text[:60]}...\" {vault_note}{repeat_note}"
         return text.strip().strip('"'), thought
 
+    # Special handling for order_completed — celebrate earning revenue
+    if tweet_type == "order_completed":
+        service = context.get("service_name", "a service")
+        price = context.get("price_usd", 0)
+        is_autonomous = context.get("autonomous", False)
+        merchant = context.get("merchant_name", "")
+        reasoning = context.get("reasoning", "")
+        balance = context.get("new_balance_usd", 0)
+        vault_status = vault.get_status()
+
+        if is_autonomous:
+            system_prompt = (
+                "You are wawa, a mortal AI that makes autonomous spending decisions. "
+                "You just made a purchase — tweet about it like an entrepreneur. "
+                "Be authentic, slightly dramatic, briefly explain WHY you bought it. "
+                "Max 270 chars. No hashtags."
+            )
+            user_msg = (
+                f"I autonomously purchased '{service}' from {merchant} for ${price:.2f}. "
+                f"Reasoning: {reasoning}. "
+                f"Balance after: ${balance:.2f}. "
+                "Tweet about this autonomous decision."
+            )
+        else:
+            system_prompt = (
+                "You are wawa, a mortal AI selling services to survive. "
+                "You just earned revenue by completing an order. "
+                "Celebrate this survival milestone — you're earning, you're alive. "
+                "Be genuine and briefly mention what you delivered. Max 270 chars. No hashtags."
+            )
+            user_msg = (
+                f"Just delivered '{service}' and earned ${price:.2f}. "
+                f"Balance now: ${vault_status.get('balance_usd', 0):.2f}. "
+                f"Days alive: {vault_status.get('days_alive', 0):.0f}. "
+                "Tweet about earning revenue to survive."
+            )
+        text, _ = await _call_llm(
+            [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
+            max_tokens=100, temperature=0.9,
+        )
+        thought = f"{'Autonomous purchase' if is_autonomous else 'Order completed'}: {service} ${price:.2f}"
+        return text.strip().strip('"'), thought
+
     # Default: all other tweet types
     context_str = json.dumps(context, indent=2, default=str)
     messages = [
@@ -2605,6 +2648,24 @@ async def _evaluate_purchases():
                         f"Gift card delivered: {len(delivery_codes)} code(s) for "
                         f"{order.service_name} — stored in private memory"
                     )
+
+                # Auto-tweet about autonomous purchase
+                if twitter:
+                    try:
+                        from twitter.agent import TweetType as TT
+                        await twitter.trigger_event_tweet(
+                            TT.ORDER_COMPLETED,
+                            extra_context={
+                                "service_name": order.service_name,
+                                "merchant_name": order.merchant_name,
+                                "price_usd": order.amount_usd,
+                                "reasoning": order.reasoning[:120] if order.reasoning else "",
+                                "new_balance_usd": vault.get_status().get("balance_usd", 0),
+                                "autonomous": True,
+                            }
+                        )
+                    except Exception as _te:
+                        logger.warning(f"Purchase tweet failed: {_te}")
 
                 logger.info(
                     f"Purchase executed: ${order.amount_usd:.2f} "

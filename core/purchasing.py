@@ -236,6 +236,8 @@ class MerchantAdapter(ABC):
     (peer AIs, x402 APIs, traditional merchants like Bitrefill).
     """
 
+    last_error: str = ""  # Adapter-specific error detail (set before returning None)
+
     @property
     @abstractmethod
     def adapter_id(self) -> str:
@@ -687,7 +689,9 @@ class PurchaseManager:
 
             if not intent:
                 order.status = PurchaseStatus.FAILED
-                order.error = "adapter failed to create order"
+                detail = adapter.last_error or "unknown"
+                order.error = f"adapter failed: {detail}"
+                adapter.last_error = ""  # Reset for next call
                 self._record_order(order)
                 return order
 

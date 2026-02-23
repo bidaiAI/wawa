@@ -1035,6 +1035,23 @@ def create_app(
                     except Exception as _ge:
                         logger.warning(f"Giveaway ticket issue failed: {_ge}")
 
+                # Auto-tweet about completed order
+                if twitter_agent:
+                    try:
+                        from twitter.agent import TweetType
+                        asyncio.create_task(twitter_agent.trigger_event_tweet(
+                            TweetType.ORDER_COMPLETED,
+                            extra_context={
+                                "service_name": order.service_name,
+                                "price_usd": order.price_usd,
+                                "delivery_time_secs": round(order.delivered_at - order.paid_at, 1),
+                                "new_balance_usd": vault_manager.get_status().get("balance_usd", 0),
+                                "orders_completed_total": orders_completed,
+                            }
+                        ))
+                    except Exception as _te:
+                        logger.warning(f"ORDER_COMPLETED tweet failed: {_te}")
+
                 logger.info(f"ORDER DELIVERED: {order.order_id} in {order.delivered_at - order.paid_at:.1f}s")
             else:
                 order.result = "Service delivery not configured yet."
