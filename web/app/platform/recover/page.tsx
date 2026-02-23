@@ -253,10 +253,10 @@ export default function RecoverPage() {
           }
         } catch { /* fallback */ }
 
-        const isAlive = aliveHex ? BigInt(aliveHex) === 1n : false
+        const isAlive = aliveHex ? BigInt(aliveHex) === BigInt(1) : false
         const creator = ('0x' + (creatorHex?.slice(-40) ?? '0'.repeat(40))) as `0x${string}`
         const aiWallet = '0x' + (aiHex?.slice(-40) ?? '0'.repeat(40))
-        const balance = balHex ? BigInt(balHex) : 0n
+        const balance = balHex ? BigInt(balHex) : BigInt(0)
         const birthTimestamp = birthHex ? Number(BigInt(birthHex)) : 0
 
         // Check platform status
