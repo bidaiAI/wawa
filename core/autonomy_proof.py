@@ -158,8 +158,8 @@ class AutonomyProofManager:
     async def _get_last_decision(self) -> Dict:
         """Extract last repayment decision from memory logs"""
         try:
-            # Query memory for recent repayment decisions
-            entries = await self.memory.get_entries(
+            # Query memory for recent repayment decisions (synchronous call)
+            entries = self.memory.get_entries(
                 source="vault",
                 limit=10,
                 min_importance=0.5
