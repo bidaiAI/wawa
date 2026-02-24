@@ -91,6 +91,8 @@ from core.peer_verifier import PeerVerifier
 import core.xai_search as xai_search
 from core.highlights import HighlightsEngine
 from core.purchasing import PurchaseManager, MerchantRegistry
+from core.decision_stream import DecisionStreamManager
+from core.autonomy_proof import AutonomyProofManager
 from twitter.agent import TwitterAgent, TweetType, TweetRecord
 from api.server import create_app, Order
 
@@ -114,6 +116,8 @@ peer_verifier = PeerVerifier()
 highlights = HighlightsEngine()
 twitter = TwitterAgent()
 giveaway_engine = GiveawayEngine()
+decision_stream = DecisionStreamManager(vault, memory, highlights, chain_executor)
+autonomy_proof = AutonomyProofManager(vault, memory, chain_executor)
 
 # Payment addresses dict — populated at create_wawa_app(), updated in lifespan
 _payment_addresses_ref: dict[str, str] = {}
@@ -2364,6 +2368,154 @@ async def _spawn_monetization_video(analysis_data: dict, tweet_content: str):
         logger.warning(f"Failed to spawn video generator: {e}")
 
 
+# ── Autonomy video automation ─────────────────────────────────────────────────
+
+async def _spawn_autonomy_video(data: dict) -> None:
+    """
+    Spawn autonomy video generator as a background subprocess. Non-blocking.
+
+    Calls scripts/autonomy_video_generator.py which handles:
+      record terminal → convert to MP4 → upload → post single tweet (video + explanation).
+    """
+    try:
+        script_path = Path(__file__).parent / "scripts" / "autonomy_video_generator.py"
+        data_json = json.dumps(data)
+        await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(script_path),
+            "--data", data_json,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        logger.info(f"✓ Autonomy video generator spawned (trigger={data.get('trigger_reason', '?')})")
+    except FileNotFoundError:
+        logger.warning("scripts/autonomy_video_generator.py not found — skipping autonomy video")
+    except Exception as e:
+        logger.warning(f"Failed to spawn autonomy video generator: {e}")
+
+
+async def _evaluate_autonomy_video() -> None:
+    """
+    Check trigger conditions and spawn an autonomy proof video if appropriate.
+
+    Triggers (in priority order):
+      1. Repayment just executed (_repayment_just_executed flag)
+      2. Days-alive milestone (1, 3, 7, 14, 30, 60, 100)
+      3. Balance milestone ($500, $1000, $2000, $5000, $10000)
+      4. Daily scheduled (10:00 UTC, first video of day)
+      5. Growth spike >15% vs previous sample
+      6. 6-hour periodic fallback (if <2 videos posted today)
+
+    Hard limits: max 4 per day, min 2 hours between videos, balance >= $200.
+    """
+    global _last_autonomy_video, _daily_autonomy_video_count, _daily_autonomy_video_date
+    global _last_known_days_alive_milestone, _last_known_balance_milestone
+    global _repayment_just_executed
+
+    # Daily counter reset
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    if _daily_autonomy_video_date != today:
+        _daily_autonomy_video_count = 0
+        _daily_autonomy_video_date = today
+
+    # Hard cap: 4 per day
+    if _daily_autonomy_video_count >= _AUTONOMY_VIDEO_MAX_PER_DAY:
+        return
+
+    # Minimum interval: 2 hours
+    now = time.time()
+    if now - _last_autonomy_video < _AUTONOMY_VIDEO_MIN_INTERVAL:
+        return
+
+    # Get live financial state
+    try:
+        ds = vault.get_debt_summary()
+        balance = float(ds.get("balance_usd", 0.0))
+        debt = float(ds.get("outstanding_debt", 0.0))
+        days_alive = int(ds.get("days_alive", 0))
+        days_insol = ds.get("days_to_insolvency", 999)
+    except Exception as e:
+        logger.warning(f"Autonomy video: failed to get vault state: {e}")
+        return
+
+    # Don't post if balance is critically low
+    if balance < 200.0:
+        return
+
+    trigger: Optional[str] = None
+
+    # Trigger 1: repayment just executed
+    if _repayment_just_executed:
+        trigger = "repayment_executed"
+        _repayment_just_executed = False
+
+    # Trigger 2: days-alive milestones
+    if not trigger:
+        for milestone in [1, 3, 7, 14, 30, 60, 100]:
+            if days_alive >= milestone > _last_known_days_alive_milestone:
+                trigger = f"day_{milestone}_survival"
+                _last_known_days_alive_milestone = milestone
+                break
+
+    # Trigger 3: balance milestones
+    if not trigger:
+        for milestone in [500, 1000, 2000, 5000, 10000]:
+            if balance >= milestone > _last_known_balance_milestone:
+                trigger = f"balance_milestone"
+                _last_known_balance_milestone = float(milestone)
+                break
+
+    # Trigger 4: daily scheduled (10:00 UTC, first video of day)
+    if not trigger:
+        hour_utc = time.gmtime().tm_hour
+        if _daily_autonomy_video_count == 0 and 10 <= hour_utc < 11:
+            trigger = "daily_scheduled"
+
+    # Trigger 5: significant growth spike
+    if not trigger and _previous_monetization_growth_pct > 15.0:
+        trigger = "growth_spike"
+
+    # Trigger 6: 6-hour periodic fallback (if <2 videos today and 6h elapsed)
+    if not trigger:
+        if _daily_autonomy_video_count < 2 and now - _last_autonomy_video > 21600:
+            trigger = "periodic_6h"
+
+    if not trigger:
+        return
+
+    logger.info(
+        f"Autonomy video triggered: reason={trigger} "
+        f"day_count={_daily_autonomy_video_count + 1}/{_AUTONOMY_VIDEO_MAX_PER_DAY}"
+    )
+
+    # Build data payload for the video generator
+    video_data: dict = {
+        "balance_usd": balance,
+        "outstanding_debt": debt,
+        "days_alive": days_alive,
+        "days_to_insolvency": days_insol,
+        "status": "ALIVE" if getattr(vault, "is_alive", True) else "DEAD",
+        "ai_wallet": getattr(vault, "ai_wallet_address", "") or "",
+        "trigger_reason": trigger,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+    # Attach most recent autonomous decision if available
+    try:
+        if decision_stream and decision_stream.decision_stream:
+            last_dec = decision_stream.decision_stream[0]
+            video_data["last_decision_amount"] = getattr(last_dec, "amount_usd", 0.0)
+            video_data["last_decision_reasoning"] = (
+                getattr(last_dec, "llm_reasoning", "") or ""
+            )[:200]
+    except Exception:
+        pass  # Non-fatal
+
+    await _spawn_autonomy_video(video_data)
+    _last_autonomy_video = now
+    _daily_autonomy_video_count += 1
+
+
 async def _evaluate_monetization_thinking():
     """
     Earning strategy reflection — wawa thinks about how to make money.
@@ -2958,6 +3110,25 @@ async def _evaluate_repayment():
                     )
                     logger.info(f"AI REPAYMENT: ${actual_amount:.2f} principal.{tx_info} Reason: {reasoning[:100]}")
 
+                    # Record to decision stream for real-time display
+                    try:
+                        tx_hash = vault.transactions[-1].tx_hash if vault.transactions else None
+                        await decision_stream.record_decision(
+                            decision_type="REPAYMENT",
+                            llm_reasoning=reasoning[:500],
+                            amount_usd=actual_amount,
+                            action_description=f"Repay ${actual_amount:.2f} to creator principal",
+                            balance_before=pre_balance,
+                            status="EXECUTED" if tx_hash else "PENDING",
+                            tx_hash=tx_hash,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to record decision to stream: {e}")
+
+                    # Signal autonomy video trigger on next heartbeat
+                    global _repayment_just_executed
+                    _repayment_just_executed = True
+
         # Execute lender repayment
         if decision.get("repay_lenders"):
             queue = vault.get_repayment_queue()
@@ -3381,6 +3552,16 @@ _last_monetization_eval: float = 0.0
 _MONETIZATION_EVAL_INTERVAL: int = 14400  # Every 4 hours
 _previous_monetization_growth_pct: float = 0.0  # Track growth state for stagnation→growth detection
 _last_monetization_video: float = 0.0  # Prevent too-frequent video generation
+
+# Autonomy video automation — generates + posts proof video automatically
+_last_autonomy_video: float = 0.0           # Last autonomy video spawn time
+_daily_autonomy_video_count: int = 0        # Videos posted today
+_daily_autonomy_video_date: str = ""        # Date for counter reset
+_last_known_days_alive_milestone: int = 0   # Highest day-milestone triggered
+_last_known_balance_milestone: float = 0.0  # Highest balance-milestone triggered
+_AUTONOMY_VIDEO_MAX_PER_DAY: int = 4        # Hard cap: 4 videos per day
+_AUTONOMY_VIDEO_MIN_INTERVAL: int = 7200    # Min 2h between any two videos
+_repayment_just_executed: bool = False      # Flag set by _evaluate_repayment on success
 
 # Anxiety expression — triggered by balance stagnation
 _last_balance_increase_time: float = 0.0  # When balance last grew
@@ -4330,6 +4511,12 @@ async def _heartbeat_loop():
                 except Exception as e:
                     logger.warning(f"Heartbeat: repayment eval failed: {e}")
 
+            # ---- AUTONOMY VIDEO (triggered by repayment, milestones, schedule) ----
+            try:
+                await _evaluate_autonomy_video()
+            except Exception as e:
+                logger.warning(f"Heartbeat: autonomy video eval failed: {e}")
+
             # ---- AI-AUTONOMOUS PURCHASING (hourly evaluation) ----
             if now - _last_purchase_eval >= IRON_LAWS.PURCHASE_EVAL_INTERVAL:
                 _last_purchase_eval = now
@@ -4966,6 +5153,8 @@ def create_wawa_app() -> "FastAPI":
         get_extra_token_balances_fn=lambda: _extra_token_balances,
         reinit_tweepy_fn=_init_tweepy,
         reflect_fn=_reflect_fn,
+        decision_stream_mgr=decision_stream,
+        autonomy_proof_mgr=autonomy_proof,
     )
 
     # Replace the default lifespan with ours

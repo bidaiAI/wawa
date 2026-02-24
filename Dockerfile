@@ -5,7 +5,13 @@ WORKDIR /app
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    asciinema \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
+# agg (asciinema-agg) — convert .cast recordings to GIF/MP4
+RUN curl -fsSL https://github.com/asciinema/agg/releases/download/v1.4.3/agg-x86_64-unknown-linux-gnu \
+    -o /usr/local/bin/agg && chmod +x /usr/local/bin/agg
 
 # Python deps
 COPY requirements.txt .

@@ -38,6 +38,12 @@ Evolution & Activity:
 - GET  /evolution/replays/:id Full replay with steps for playback
 - GET  /activity              Unified activity feed
 
+Decision Stream & Autonomy Proof:
+- GET  /decisions             Get recent autonomous decisions (JSON)
+- GET  /decisions/page        Interactive decision details page (HTML)
+- GET  /autonomy-proof        Complete autonomy verification data (JSON)
+- GET  /autonomy-proof/html   Autonomy proof dashboard (HTML)
+
 AI Self-Expression:
 - GET  /ui/config             AI's UI theme/titles/bios configuration
 - GET  /pages                 List custom pages created by AI
@@ -74,6 +80,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("mortal.api")
@@ -385,6 +392,8 @@ def create_app(
     get_extra_token_balances_fn=None,
     reinit_tweepy_fn=None,
     reflect_fn=None,
+    decision_stream_mgr=None,
+    autonomy_proof_mgr=None,
 ) -> FastAPI:
     """
     Create FastAPI app wired to all mortal modules.
@@ -2493,6 +2502,45 @@ def create_app(
                 "total_count": status["total_highlights"],
             }
         return {"highlights": [], "ecosystem_count": 0, "total_count": 0}
+
+    # ============================================================
+    # DECISION STREAM — Real-time autonomous decisions
+    # ============================================================
+
+    @app.get("/decisions")
+    async def get_decision_stream(limit: int = 20):
+        """Get recent autonomous decisions as JSON for API/frontend."""
+        if decision_stream_mgr:
+            return {"decisions": decision_stream_mgr.get_decision_stream_json(limit)}
+        return {"decisions": []}
+
+    @app.get("/decisions/page")
+    async def get_decisions_page():
+        """Interactive decision details page with embedded videos."""
+        if decision_stream_mgr:
+            return HTMLResponse(content=decision_stream_mgr.get_decision_page_html())
+        return HTMLResponse(content="<h1>Decision stream not available</h1>")
+
+    # ============================================================
+    # AUTONOMY PROOF — Verification dashboard
+    # ============================================================
+
+    @app.get("/autonomy-proof")
+    async def get_autonomy_proof():
+        """Complete autonomy verification dashboard data."""
+        if autonomy_proof_mgr:
+            data = await autonomy_proof_mgr.get_autonomy_proof_data()
+            return data.to_dict()
+        return {"error": "Autonomy proof not available"}
+
+    @app.get("/autonomy-proof/html")
+    async def get_autonomy_proof_html():
+        """HTML dashboard for embedding/standalone display."""
+        if autonomy_proof_mgr:
+            data = await autonomy_proof_mgr.get_autonomy_proof_data()
+            html = autonomy_proof_mgr.get_autonomy_proof_html(data)
+            return HTMLResponse(content=html)
+        return HTMLResponse(content="<h1>Autonomy proof not available</h1>")
 
     # ============================================================
     # UI CONFIG + CUSTOM PAGES — AI self-expression
