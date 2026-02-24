@@ -427,6 +427,7 @@ function ResultStep({
   takeoverReportLoading: boolean
   onLoadTakeoverReport: () => void
 }) {
+  const aiName = useAIName()
   const isDelivered = flow.status === 'delivered'
   const isFailed = flow.status === 'failed'
   const isExpiredOrRefunded = flow.status === 'expired' || flow.status === 'refunded'

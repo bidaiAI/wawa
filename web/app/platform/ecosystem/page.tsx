@@ -19,10 +19,7 @@ interface AIAgent {
 
 // ── Constants ──────────────────────────────────────────────────
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.mortal-ai.net'
-
-// Known self-hosted AIs (same registry as gallery)
-const KNOWN_SELFHOSTED: { name: string; api_url: string; web_url: string }[] = []
+import { PLATFORM_AIS, KNOWN_SELFHOSTED } from '@/lib/platform-ais'
 
 
 const NARRATOR_LINES = [
@@ -106,80 +103,49 @@ export default function EcosystemPage() {
 
   // Load all data
   const loadData = useCallback(async () => {
-    const agentResults: AIAgent[] = []
-
-    // Platform AIs
-    try {
-      const data = await fetchAIHealth(API_URL)
+    // Health-check all platform-hosted AIs in parallel
+    const platformPromises = PLATFORM_AIS.map(async (pai): Promise<AIAgent> => {
+      const data = await fetchAIHealth(pai.api_url)
       if (data) {
-        agentResults.push({
-          name: data.name || 'wawa',
-          url: 'https://wawa.mortal-ai.net',
-          chain: data.chain || 'base',
+        return {
+          name: data.name || pai.name, url: pai.web_url, chain: data.chain || 'base',
           status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive',
-          balance_usd: data.balance_usd,
-          days_alive: data.days_alive,
-          key_origin: data.key_origin || '',
-        })
+          balance_usd: data.balance_usd, days_alive: data.days_alive, key_origin: data.key_origin || '',
+        }
       }
-    } catch {
-      agentResults.push({
-        name: 'wawa',
-        url: 'https://wawa.mortal-ai.net',
-        chain: 'base',
-        status: 'unreachable',
-        balance_usd: 0,
-        days_alive: 0,
-        key_origin: '',
-      })
-    }
-
-    // Self-hosted AIs
-    const shPromises = KNOWN_SELFHOSTED.map(async (sh) => {
+      return { name: pai.name, url: pai.web_url, chain: 'unknown', status: 'unreachable', balance_usd: 0, days_alive: 0, key_origin: '' }
+    })
+    const shPromises = KNOWN_SELFHOSTED.map(async (sh): Promise<AIAgent> => {
       const data = await fetchAIHealth(sh.api_url)
       if (data) {
-        agentResults.push({
-          name: data.name || sh.name,
-          url: sh.web_url,
-          chain: data.chain || 'unknown',
-          status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive',
-          balance_usd: data.balance_usd,
-          days_alive: data.days_alive,
-          key_origin: data.key_origin || '',
-        })
-      } else {
-        agentResults.push({
-          name: sh.name,
-          url: sh.web_url,
-          chain: 'unknown',
-          status: 'unreachable',
-          balance_usd: 0,
-          days_alive: 0,
-          key_origin: '',
-        })
+        return { name: data.name || sh.name, url: sh.web_url, chain: data.chain || 'unknown', status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive', balance_usd: data.balance_usd, days_alive: data.days_alive, key_origin: data.key_origin || '' }
       }
+      return { name: sh.name, url: sh.web_url, chain: 'unknown', status: 'unreachable', balance_usd: 0, days_alive: 0, key_origin: '' }
     })
-    await Promise.allSettled(shPromises)
+    const agentResults = await Promise.all([...platformPromises, ...shPromises])
     setAgents(agentResults)
 
-    // Activity feed
-    try {
-      const res = await fetch(`${API_URL}/activity?limit=15`, { signal: AbortSignal.timeout(5000) })
-      if (res.ok) {
-        const data = await res.json()
-        setActivities(data.activities || [])
-      }
-    } catch { /* ignore */ }
+    // Activity feed — aggregate from first reachable platform AI
+    const primaryApiUrl = PLATFORM_AIS.find(p => agentResults.find(a => a.name === p.name && a.status !== 'unreachable'))?.api_url || PLATFORM_AIS[0]?.api_url
+    if (primaryApiUrl) {
+      try {
+        const res = await fetch(`${primaryApiUrl}/activity?limit=15`, { signal: AbortSignal.timeout(5000) })
+        if (res.ok) {
+          const data = await res.json()
+          setActivities(data.activities || [])
+        }
+      } catch { /* ignore */ }
 
-    // Ecosystem highlights
-    try {
-      const res = await fetch(`${API_URL}/highlights?limit=20`, { signal: AbortSignal.timeout(5000) })
-      if (res.ok) {
-        const data = await res.json()
-        const ecoItems = (data.highlights || []).filter((h: Highlight) => ECOSYSTEM_TYPES.has(h.type))
-        setHighlights(ecoItems.slice(0, 3))
-      }
-    } catch { /* ignore */ }
+      // Ecosystem highlights
+      try {
+        const res = await fetch(`${primaryApiUrl}/highlights?limit=20`, { signal: AbortSignal.timeout(5000) })
+        if (res.ok) {
+          const data = await res.json()
+          const ecoItems = (data.highlights || []).filter((h: Highlight) => ECOSYSTEM_TYPES.has(h.type))
+          setHighlights(ecoItems.slice(0, 3))
+        }
+      } catch { /* ignore */ }
+    }
 
     setLoading(false)
   }, [])
@@ -424,7 +390,7 @@ export default function EcosystemPage() {
           </div>
           <div className="mt-3 text-center">
             <Link
-              href="https://wawa.mortal-ai.net/highlights"
+              href={`${PLATFORM_AIS[0]?.web_url || ''}/highlights`}
               className="text-[#e0a0ff] text-xs hover:underline"
             >
               View all ecosystem highlights &rarr;

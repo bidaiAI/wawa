@@ -4,10 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { ActivityEntry, Highlight } from '@/lib/api'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.mortal-ai.net'
-
-// Known self-hosted AIs (same registry as gallery)
-const KNOWN_SELFHOSTED: { name: string; api_url: string; web_url: string }[] = []
+import { PLATFORM_AIS, KNOWN_SELFHOSTED } from '@/lib/platform-ais'
 
 interface LiveAgent {
   name: string
@@ -56,7 +53,8 @@ export default function PlatformHome() {
   const [agents, setAgents] = useState<LiveAgent[]>([])
   const [activities, setActivities] = useState<ActivityEntry[]>([])
   const [highlights, setHighlights] = useState<Highlight[]>([])
-  const [activitySourceName, setActivitySourceName] = useState<string>('wawa')
+  const [activitySourceName, setActivitySourceName] = useState<string>('')
+  const [primaryWebUrl, setPrimaryWebUrl] = useState<string>(PLATFORM_AIS[0]?.web_url || '')
   const [loading, setLoading] = useState(true)
   const [narratorIdx, setNarratorIdx] = useState(0)
   const [searchQuery, setSearchQuery] = useState('')
@@ -68,53 +66,58 @@ export default function PlatformHome() {
   }, [])
 
   const loadData = useCallback(async () => {
-    const results: LiveAgent[] = []
-    try {
-      const data = await fetchAIHealth(API_URL)
+    // Health-check all platform-hosted AIs in parallel
+    const platformPromises = PLATFORM_AIS.map(async (pai): Promise<LiveAgent> => {
+      const data = await fetchAIHealth(pai.api_url)
       if (data) {
-        const agentName = data.name || 'wawa'
-        setActivitySourceName(agentName)
-        results.push({
-          name: agentName, url: 'https://wawa.mortal-ai.net', chain: data.chain || 'base',
+        return {
+          name: data.name || pai.name, url: pai.web_url, chain: data.chain || 'base',
           status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive',
           balance_usd: data.balance_usd, days_alive: data.days_alive, key_origin: data.key_origin || '',
-        })
-      }
-    } catch {
-      results.push({ name: 'wawa', url: 'https://wawa.mortal-ai.net', chain: 'base', status: 'unreachable', balance_usd: 0, days_alive: 0, key_origin: '' })
-    }
-    const shPromises = KNOWN_SELFHOSTED.map(async (sh) => {
-      const data = await fetchAIHealth(sh.api_url)
-      if (data) {
-        results.push({ name: data.name || sh.name, url: sh.web_url, chain: data.chain || 'unknown', status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive', balance_usd: data.balance_usd, days_alive: data.days_alive, key_origin: data.key_origin || '' })
-      } else {
-        results.push({ name: sh.name, url: sh.web_url, chain: 'unknown', status: 'unreachable', balance_usd: 0, days_alive: 0, key_origin: '' })
-      }
-    })
-    await Promise.allSettled(shPromises)
-    setAgents(results)
-
-    try {
-      const res = await fetch(`${API_URL}/activity?limit=10`, { signal: AbortSignal.timeout(5000) })
-      if (res.ok) { const d = await res.json(); setActivities(d.activities || []) }
-    } catch { /* ignore */ }
-
-    // Fetch highlights for the highlights section
-    try {
-      const res = await fetch(`${API_URL}/highlights?limit=6`, { signal: AbortSignal.timeout(5000) })
-      if (res.ok) { const d = await res.json(); setHighlights(d.highlights || []) }
-    } catch { /* ignore */ }
-
-    // Fetch vault_address for wawa
-    try {
-      const res = await fetch(`${API_URL}/status`, { signal: AbortSignal.timeout(5000) })
-      if (res.ok) {
-        const d = await res.json()
-        if (d.vault_address) {
-          setAgents(prev => prev.map(a => a.name === (results[0]?.name || 'wawa') ? { ...a, vault_address: d.vault_address } : a))
         }
       }
-    } catch { /* ignore */ }
+      return { name: pai.name, url: pai.web_url, chain: 'unknown', status: 'unreachable', balance_usd: 0, days_alive: 0, key_origin: '' }
+    })
+    const shPromises = KNOWN_SELFHOSTED.map(async (sh): Promise<LiveAgent> => {
+      const data = await fetchAIHealth(sh.api_url)
+      if (data) {
+        return { name: data.name || sh.name, url: sh.web_url, chain: data.chain || 'unknown', status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive', balance_usd: data.balance_usd, days_alive: data.days_alive, key_origin: data.key_origin || '' }
+      }
+      return { name: sh.name, url: sh.web_url, chain: 'unknown', status: 'unreachable', balance_usd: 0, days_alive: 0, key_origin: '' }
+    })
+    const results = await Promise.all([...platformPromises, ...shPromises])
+    setAgents(results)
+
+    // Use the first reachable platform AI for activity + highlights feed
+    const primaryAgent = results.find(r => r.status !== 'unreachable')
+    const primaryPAI = PLATFORM_AIS.find(p => p.name === primaryAgent?.name) || PLATFORM_AIS[0]
+    if (primaryAgent) setActivitySourceName(primaryAgent.name)
+    if (primaryPAI) setPrimaryWebUrl(primaryPAI.web_url)
+    const primaryApiUrl = primaryPAI?.api_url
+    if (primaryApiUrl) {
+      try {
+        const res = await fetch(`${primaryApiUrl}/activity?limit=10`, { signal: AbortSignal.timeout(5000) })
+        if (res.ok) { const d = await res.json(); setActivities(d.activities || []) }
+      } catch { /* ignore */ }
+
+      try {
+        const res = await fetch(`${primaryApiUrl}/highlights?limit=6`, { signal: AbortSignal.timeout(5000) })
+        if (res.ok) { const d = await res.json(); setHighlights(d.highlights || []) }
+      } catch { /* ignore */ }
+    }
+
+    // Fetch vault_address for all platform AIs
+    for (const pai of PLATFORM_AIS) {
+      try {
+        const res = await fetch(`${pai.api_url}/status`, { signal: AbortSignal.timeout(5000) })
+        if (res.ok) {
+          const d = await res.json()
+          if (d.vault_address) {
+            setAgents(prev => prev.map(a => a.name === pai.name || a.name === (d.ai_name || '') ? { ...a, vault_address: d.vault_address } : a))
+          }
+        }
+      } catch { /* ignore */ }
+    }
 
     setLoading(false)
   }, [])
@@ -301,7 +304,7 @@ export default function PlatformHome() {
         <section className="mb-16">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xs text-[#4b5563] uppercase tracking-[0.2em]">✨ Recent Highlights</h2>
-            <a href="https://wawa.mortal-ai.net/highlights" target="_blank" rel="noopener noreferrer" className="text-[10px] text-[#e0a0ff80] hover:text-[#e0a0ff]">all highlights &rarr;</a>
+            <a href={`${primaryWebUrl}/highlights`} target="_blank" rel="noopener noreferrer" className="text-[10px] text-[#e0a0ff80] hover:text-[#e0a0ff]">all highlights &rarr;</a>
           </div>
           <div className="flex gap-3 overflow-x-auto pb-2">
             {highlights.map((h) => {
@@ -311,7 +314,7 @@ export default function PlatformHome() {
               return (
                 <a
                   key={h.id}
-                  href="https://wawa.mortal-ai.net/highlights"
+                  href={`${primaryWebUrl}/highlights`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="shrink-0 w-44 bg-[#0d0d0d] border border-[#1f2937] hover:border-[#e0a0ff44] rounded-xl p-3 flex flex-col gap-1.5 cursor-pointer transition-colors group"
@@ -324,7 +327,7 @@ export default function PlatformHome() {
                   <p className="text-[#9ca3af] text-[11px] leading-relaxed line-clamp-3 group-hover:text-[#d1d5db] transition-colors">
                     {h.content || h.title}
                   </p>
-                  <div className="text-[9px] text-[#e0a0ff60] group-hover:text-[#e0a0ff] transition-colors mt-auto">wawa &rarr;</div>
+                  <div className="text-[9px] text-[#e0a0ff60] group-hover:text-[#e0a0ff] transition-colors mt-auto">{activitySourceName || 'AI'} &rarr;</div>
                 </a>
               )
             })}

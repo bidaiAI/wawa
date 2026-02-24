@@ -15,11 +15,7 @@ interface AIInstance {
   key_origin: string  // "factory" | "creator" | "unknown" | ""
 }
 
-// Known self-hosted AIs — fork users can submit PRs to add themselves here,
-// or we'll later build a registry API. For now, manually curated.
-const KNOWN_SELFHOSTED: { name: string; api_url: string; web_url: string }[] = [
-  // Example: { name: 'atlas', api_url: 'https://api.atlas-ai.example.com', web_url: 'https://atlas-ai.example.com' },
-]
+import { PLATFORM_AIS, KNOWN_SELFHOSTED } from '@/lib/platform-ais'
 
 async function fetchAIHealth(apiUrl: string): Promise<{
   name: string
@@ -81,36 +77,36 @@ export default function GalleryPage() {
     const loadAll = async () => {
       const results: AIInstance[] = []
 
-      // 1. Platform-hosted AIs (currently just wawa)
-      const WAWA_API = process.env.NEXT_PUBLIC_API_URL || 'https://api.mortal-ai.net'
-      try {
-        const data = await fetchAIHealth(WAWA_API)
-        if (data) {
+      // 1. Platform-hosted AIs — health-check all in parallel
+      const platformPromises = PLATFORM_AIS.map(async (pai) => {
+        try {
+          const data = await fetchAIHealth(pai.api_url)
+          if (data) {
+            results.push({
+              name: data.name || pai.name,
+              subdomain: pai.name,
+              chain: data.chain || 'base',
+              vault_address: '',
+              status: data.alive ? 'alive' : 'dead',
+              balance_usd: data.balance_usd,
+              days_alive: data.days_alive,
+              url: pai.web_url,
+              key_origin: data.key_origin || '',
+            })
+          } else {
+            results.push({
+              name: pai.name, subdomain: pai.name, chain: 'unknown', vault_address: '',
+              status: 'unknown', balance_usd: 0, days_alive: 0, url: pai.web_url, key_origin: '',
+            })
+          }
+        } catch {
           results.push({
-            name: data.name || 'wawa',
-            subdomain: 'wawa',
-            chain: data.chain || 'base',
-            vault_address: '',
-            status: data.alive ? 'alive' : 'dead',
-            balance_usd: data.balance_usd,
-            days_alive: data.days_alive,
-            url: 'https://wawa.mortal-ai.net',
-            key_origin: data.key_origin || '',
+            name: pai.name, subdomain: pai.name, chain: 'unknown', vault_address: '',
+            status: 'unknown', balance_usd: 0, days_alive: 0, url: pai.web_url, key_origin: '',
           })
         }
-      } catch {
-        results.push({
-          name: 'wawa',
-          subdomain: 'wawa',
-          chain: 'base',
-          vault_address: '',
-          status: 'unknown',
-          balance_usd: 0,
-          days_alive: 0,
-          url: 'https://wawa.mortal-ai.net',
-          key_origin: '',
-        })
-      }
+      })
+      await Promise.allSettled(platformPromises)
 
       // 2. Self-hosted AIs — federated health check
       const selfHostedPromises = KNOWN_SELFHOSTED.map(async (sh) => {
