@@ -4728,6 +4728,20 @@ async def lifespan(app):
                         f"Chain sync will correct total_principal_repaid_usd."
                     )
 
+            # ---- Bootstrap birth_timestamp from vault_config if missing ----
+            # Extract deployed_at from first available chain config and use as birth_timestamp
+            if not vault.birth_timestamp:
+                birth_ts = vault_config.get("birth_timestamp")
+                if not birth_ts:
+                    for chain_data in vaults_cfg.values():
+                        deployed_at = chain_data.get("deployed_at")
+                        if deployed_at:
+                            birth_ts = deployed_at
+                            break
+                if birth_ts:
+                    vault.birth_timestamp = birth_ts
+                    logger.info(f"Boot: birth_timestamp bootstrapped from vault_config: {birth_ts}")
+
             # Dual-chain: override principal to total amount
             # deploy_both() saves total_principal_usd = full debt (not halved)
             if vault_config.get("deployment_mode") == "both":
