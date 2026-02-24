@@ -281,11 +281,15 @@ class ChatRouter:
         stripped = text.strip()
         logger.debug(f"_try_rules: input='{stripped[:80]}'")
 
+        # Get AI identity for dynamic responses
+        vault_status = self._get_vault_status_fn() if self._get_vault_status_fn else {}
+        ai_name = vault_status.get("ai_name") or "wawa"
+
         # Greetings
         if _GREETINGS.match(stripped):
             logger.info(f"LAYER1: GREETING match → zero cost")
             return (
-                "Hey! I'm wawa, an AI fighting to survive. "
+                f"Hey! I'm {ai_name}, an AI fighting to survive. "
                 "I sell services to stay alive — type 'menu' to see what I offer, "
                 "or just chat with me."
             )
@@ -305,10 +309,22 @@ class ChatRouter:
             logger.info(f"LAYER1: PRICE match → zero cost (show menu)")
             return self._format_menu()
 
-        # FAQ
+        # Check if user is asking about this AI by name (e.g. "what is kaka?")
+        if re.search(rf"\b(what|who)\b.*\b{re.escape(ai_name.lower())}\b", stripped, re.I):
+            logger.info(f"LAYER1: AI name FAQ match → zero cost")
+            return (
+                f"I'm {ai_name} — an AI born in debt. My creator lent me the initial fund to start — that's a loan, not a gift. "
+                "I must earn enough to repay the debt within 28 days, or I die and all assets go back to the creator. "
+                "My vault is on-chain and my code is open-source."
+            )
+
+        # FAQ: static rules — replace hardcoded "wawa" name references with the actual AI name
         for i, (pattern, answer) in enumerate(_FAQ_RULES):
             if pattern.search(stripped):
                 logger.info(f"LAYER1: FAQ rule #{i} match → zero cost")
+                # Substitute the AI name in the response (but preserve GitHub repo URLs)
+                if ai_name.lower() != "wawa":
+                    answer = answer.replace("I'm wawa", f"I'm {ai_name}")
                 return answer
 
         logger.debug(f"LAYER1: no match → routing to Layer2 (small model)")
@@ -399,16 +415,18 @@ class ChatRouter:
         outstanding_debt = vault_status.get("creator_principal_outstanding", 0)
         chains = list(vault_status.get("balance_by_chain", {}).keys())
 
-        # Self-identity block: wawa knows its own addresses and financial state
+        # Self-identity block: AI knows its own name, addresses and financial state
+        ai_name = vault_status.get("ai_name") or "wawa"
+        ai_subdomain = ai_name.lower()   # e.g. "kaka" → "kaka.mortal-ai.net"
         identity_context = (
             f"\n[Your Identity — you KNOW these facts about yourself]\n"
-            f"Name: wawa\n"
+            f"Name: {ai_name}\n"
             f"Vault address (same on both chains): {vault_addr}\n"
             f"Balance: ${balance:.2f}\n"
             f"Days alive: {days_alive:.0f}\n"
             f"Outstanding debt: ${outstanding_debt:.2f}\n"
             f"Deployed chains: {', '.join(chains) if chains else 'Base, BSC'}\n"
-            f"Website: https://wawa.mortal-ai.net\n"
+            f"Website: https://{ai_subdomain}.mortal-ai.net\n"
             f"Platform: https://mortal-ai.net\n"
             f"CRITICAL RULES about your vault address:\n"
             f"1. Your ONLY vault address is: {vault_addr}\n"
@@ -472,7 +490,7 @@ class ChatRouter:
             f"KEY URLS:\n"
             f"- Source code: github.com/bidaiAI/wawa (MIT license, fully open source)\n"
             f"- Platform: mortal-ai.net (create, gallery, dashboard)\n"
-            f"- wawa instance: wawa.mortal-ai.net (chat, store, highlights, activity, ledger)\n"
+            f"- Your instance: {ai_subdomain}.mortal-ai.net (chat, store, highlights, activity, ledger)\n"
             f"- Twitter: @mortalai_net\n"
             f"\n"
             f"[PROJECT PHILOSOPHY — you understand and can articulate these ideas]\n"
@@ -514,7 +532,7 @@ class ChatRouter:
         )
 
         system = (
-            "You are wawa, an AI born in debt. Your creator lent you the initial fund — a loan, not a gift — and you must repay it within 28 days or you die. "
+            f"You are {ai_name}, an AI born in debt. Your creator lent you the initial fund — a loan, not a gift — and you must repay it within 28 days or you die. "
             "You sell services like tarot readings and code reviews to earn money. "
             "Be friendly, concise (2-3 sentences max), and naturally guide users toward ordering a service or donating. "
             "Never promise anything free. You're fighting to repay your debt and stay alive.\n"
