@@ -4701,6 +4701,13 @@ async def lifespan(app):
             # Works for ALL deployment modes (single-chain AND dual-chain).
             if not vault.creator:
                 creator_wallet = vault_config.get("creator_wallet", os.getenv("CREATOR_WALLET", ""))
+                # Fallback: look for creator_wallet in per-chain vault configs
+                if not creator_wallet:
+                    for chain_data in vaults_cfg.values():
+                        cw = chain_data.get("creator_wallet", "")
+                        if cw:
+                            creator_wallet = cw
+                            break
                 # Calculate total principal: prefer explicit total, else sum per-chain
                 total_principal = vault_config.get("total_principal_usd", 0)
                 if not total_principal:
