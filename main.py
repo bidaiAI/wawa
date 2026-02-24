@@ -529,9 +529,9 @@ async def _analyze_contract_fn(address: str, user_message: str) -> Optional[str]
         )},
         {"role": "user", "content": (
             f"Analyze this address: {address}\n\n"
-            f"Context: The user sent this address while chatting with wawa (an AI agent).\n"
-            f"wawa's vault address: {vault_addr}\n"
-            f"wawa operates on: {', '.join(chains) if chains else 'Base, BSC'}\n"
+            f"Context: The user sent this address while chatting with {vault.ai_name or 'an AI agent'} (a mortal AI agent).\n"
+            f"{vault.ai_name or 'The AI'}'s vault address: {vault_addr}\n"
+            f"{vault.ai_name or 'The AI'} operates on: {', '.join(chains) if chains else 'Base, BSC'}\n"
             f"User's message: {user_message[:300]}"
         )},
     ]
@@ -5103,12 +5103,13 @@ async def lifespan(app):
     tier = cost_guard.get_current_tier()
     logger.info(f"Tier: Lv.{tier.level} ({tier.name}) → {tier.provider}/{tier.model}")
     logger.info(f"Providers: {list(_provider_configs.keys())}")
-    logger.info("wawa is alive. Accepting orders.")
+    _ai_name = vault.ai_name or "wawa"
+    logger.info(f"{_ai_name} is alive. Accepting orders.")
 
     yield
 
     # Shutdown
-    logger.info("wawa shutting down...")
+    logger.info(f"{_ai_name} shutting down...")
     heartbeat_task.cancel()
     memory.save_to_disk()
     logger.info("Goodbye.")
