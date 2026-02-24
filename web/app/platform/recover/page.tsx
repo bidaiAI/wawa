@@ -60,11 +60,13 @@ function VaultCard({
   vault,
   onSetAIWallet,
   onTriggerInsolvency,
+  onRequestNewKey,
   isPending,
 }: {
   vault: VaultInfo
   onSetAIWallet: (vaultAddr: `0x${string}`, aiWallet: `0x${string}`) => void
   onTriggerInsolvency: (vaultAddr: `0x${string}`) => void
+  onRequestNewKey: (vaultAddr: `0x${string}`) => void
   isPending: boolean
 }) {
   const action = getRecoveryAction(vault)
@@ -127,8 +129,22 @@ function VaultCard({
       )}
 
       {action === 'set_ai_wallet' && !vault.platformAIWallet && (
-        <div className="text-center py-2 text-[#ffd700] text-sm">
-          AI wallet not set. Contact support to generate a new deployment key.
+        <div className="space-y-3">
+          <div className="bg-[#1a1a0e] border border-[#ffd70033] rounded-lg p-3 text-xs text-[#ffd700]">
+            Platform deployment stalled before generating an AI wallet.
+            Click below to request a new deployment key, then complete setup on-chain.
+          </div>
+          <button
+            onClick={() => onRequestNewKey(vault.address)}
+            disabled={isPending}
+            className="w-full px-4 py-3 bg-[#ffd700] text-[#0a0a0a] font-bold rounded-lg
+                       hover:bg-[#e6c200] transition-colors text-sm disabled:opacity-50"
+          >
+            {isPending ? 'Requesting...' : 'Request New Deployment Key'}
+          </button>
+          <div className="text-center text-xs text-[#4b5563]">
+            Or wait {formatCountdown(vault.birthTimestamp + GRACE_DAYS * 86400 - Math.floor(Date.now() / 1000))} to recover funds via insolvency
+          </div>
         </div>
       )}
 
@@ -316,6 +332,33 @@ export default function RecoverPage() {
     })
   }
 
+  // Handle request new deployment key (when platformAIWallet is empty)
+  const handleRequestNewKey = useCallback(async (vaultAddr: `0x${string}`) => {
+    setError('')
+    setSuccess('')
+    try {
+      const res = await fetch(`${PLATFORM_API}/platform/webhook/generate-wallet`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vault_address: vaultAddr }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setError(data.detail ?? `Request failed (${res.status})`)
+        return
+      }
+      const data = await res.json()
+      if (data.ai_wallet) {
+        setSuccess(`New AI wallet generated! Now reload and click "Deploy AI" to complete setup.`)
+        setTimeout(() => { refetchVaults(); loadVaults() }, 3000)
+      } else {
+        setError('Wallet generation failed. Please try again or contact support.')
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Network error')
+    }
+  }, [refetchVaults, loadVaults])
+
   // Track confirmation
   useEffect(() => {
     if (txConfirmed) {
@@ -405,6 +448,7 @@ export default function RecoverPage() {
                 vault={v}
                 onSetAIWallet={handleSetAIWallet}
                 onTriggerInsolvency={handleTriggerInsolvency}
+                onRequestNewKey={handleRequestNewKey}
                 isPending={isPending}
               />
             ))}

@@ -3008,7 +3008,134 @@ def create_app(
             "status": entry.get("status", "unknown"),
             "error": entry.get("error"),
             "public_url": entry.get("public_url"),
+            "ai_wallet": entry.get("ai_wallet"),  # pre-generated wallet for recover page
         }
+
+    @app.post("/platform/webhook/resume-deploy")
+    async def platform_resume_deploy(request: Request, body: dict):
+        """
+        Called by recover/page.tsx after setAIWallet() succeeds on-chain.
+        Resumes orchestration for a vault whose deployment stalled.
+        Auth: X-Platform-Secret header (optional for public recovery flow).
+        """
+        vault_address = str(body.get("vault_address", "")).strip().lower()
+        if not vault_address or not vault_address.startswith("0x"):
+            raise HTTPException(status_code=400, detail="vault_address required")
+
+        instances = _load_platform_instances()
+        entry = instances.get(vault_address)
+        if not entry:
+            raise HTTPException(status_code=404, detail="vault not registered on platform")
+
+        # Update status to signal orchestrator should resume
+        entry["status"] = "resumed_deployment"
+        entry["resumed_at"] = __import__("time").time()
+        instances[vault_address] = entry
+        _PLATFORM_INSTANCES_PATH.write_text(
+            json.dumps(instances, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        logger.info(f"PLATFORM WEBHOOK: resume-deploy {vault_address}")
+
+        # Trigger orchestration (same as vault-created but skips wallet generation)
+        try:
+            from mortal_platform.orchestrator import spawn_instance  # noqa: PLC0415
+            import asyncio as _asyncio
+            _asyncio.create_task(spawn_instance(
+                vault_address=entry.get("vault_address", vault_address),
+                subdomain=entry.get("subdomain", ""),
+                ai_name=entry.get("ai_name", ""),
+                chain=entry.get("chain", "base"),
+                principal_usd=entry.get("principal_usd", 0),
+                creator_wallet=entry.get("creator_wallet", ""),
+                instances_path=str(_PLATFORM_INSTANCES_PATH),
+                resume=True,  # skip wallet generation step
+            ))
+        except ImportError:
+            logger.warning("mortal_platform.orchestrator not found — resume skipped")
+        except TypeError:
+            # Older orchestrator without resume param — call without it
+            try:
+                from mortal_platform.orchestrator import spawn_instance  # noqa: PLC0415
+                import asyncio as _asyncio
+                _asyncio.create_task(spawn_instance(
+                    vault_address=entry.get("vault_address", vault_address),
+                    subdomain=entry.get("subdomain", ""),
+                    ai_name=entry.get("ai_name", ""),
+                    chain=entry.get("chain", "base"),
+                    principal_usd=entry.get("principal_usd", 0),
+                    creator_wallet=entry.get("creator_wallet", ""),
+                    instances_path=str(_PLATFORM_INSTANCES_PATH),
+                ))
+            except Exception as e2:
+                logger.error(f"resume-deploy orchestration failed: {e2}")
+
+        return {"status": "resumed", "vault_address": vault_address}
+
+    @app.post("/platform/webhook/generate-wallet")
+    async def platform_generate_wallet(request: Request, body: dict):
+        """
+        Generate a new AI wallet for a vault whose deployment stalled before wallet creation.
+        Called by recover/page.tsx when platformAIWallet is empty.
+        Auth: X-Platform-Secret header must match PLATFORM_FEE_SECRET.
+        """
+        secret = request.headers.get("x-platform-secret", "")
+        expected = os.getenv("PLATFORM_FEE_SECRET", "")
+        if not expected or secret != expected:
+            raise HTTPException(status_code=403, detail="invalid platform secret")
+
+        vault_address = str(body.get("vault_address", "")).strip().lower()
+        if not vault_address or not vault_address.startswith("0x"):
+            raise HTTPException(status_code=400, detail="vault_address required")
+
+        instances = _load_platform_instances()
+        entry = instances.get(vault_address)
+        if not entry:
+            raise HTTPException(status_code=404, detail="vault not registered on platform")
+
+        if entry.get("ai_wallet"):
+            # Already has a wallet — return it
+            return {"status": "already_exists", "ai_wallet": entry["ai_wallet"]}
+
+        # Generate new wallet via eth_account
+        try:
+            from eth_account import Account as _Account
+            new_account = _Account.create()
+            ai_wallet = new_account.address
+            ai_private_key = new_account.key.hex()
+
+            # Store wallet address in instances (key stored by orchestrator, not here)
+            entry["ai_wallet"] = ai_wallet
+            entry["status"] = "wallet_generated"
+            entry["wallet_generated_at"] = __import__("time").time()
+            instances[vault_address] = entry
+            _PLATFORM_INSTANCES_PATH.write_text(
+                json.dumps(instances, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            logger.info(f"PLATFORM WEBHOOK: generate-wallet {vault_address} → {ai_wallet}")
+
+            # Hand off to orchestrator to persist key and continue deployment
+            try:
+                from mortal_platform.orchestrator import spawn_instance  # noqa: PLC0415
+                import asyncio as _asyncio
+                _asyncio.create_task(spawn_instance(
+                    vault_address=entry.get("vault_address", vault_address),
+                    subdomain=entry.get("subdomain", ""),
+                    ai_name=entry.get("ai_name", ""),
+                    chain=entry.get("chain", "base"),
+                    principal_usd=entry.get("principal_usd", 0),
+                    creator_wallet=entry.get("creator_wallet", ""),
+                    instances_path=str(_PLATFORM_INSTANCES_PATH),
+                    ai_private_key=ai_private_key,
+                ))
+            except (ImportError, TypeError):
+                logger.warning("orchestrator not available for generate-wallet continuation")
+
+            return {"status": "generated", "ai_wallet": ai_wallet}
+        except ImportError:
+            raise HTTPException(status_code=500, detail="eth_account not installed")
+        except Exception as e:
+            logger.error(f"generate-wallet error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/platform/webhook/vault-created")
     async def platform_vault_created(request: Request, body: dict):
