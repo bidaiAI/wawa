@@ -3158,6 +3158,8 @@ def create_app(
 
         if not vault_address or not subdomain or not ai_name:
             raise HTTPException(status_code=400, detail="vault_address, subdomain, ai_name required")
+        if chain not in ("base", "bsc"):
+            raise HTTPException(status_code=400, detail="chain must be 'base' or 'bsc'")
 
         # Write initial status so /platform/status can immediately return something
         instances = _load_platform_instances()

@@ -171,24 +171,33 @@ export default function CreatePage() {
     }
     if (parsedVault) setVaultAddress(parsedVault)
 
-    // Notify platform to start provisioning (fire-and-forget — polling covers status)
+    // Notify platform to start provisioning (with retry — 3 attempts, exponential backoff)
     const PLATFORM_API = process.env.NEXT_PUBLIC_PLATFORM_API_URL ?? 'https://api.mortal-ai.net'
     const platformSecret = process.env.NEXT_PUBLIC_PLATFORM_WEBHOOK_SECRET ?? ''
-    fetch(`${PLATFORM_API}/platform/webhook/vault-created`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(platformSecret ? { 'x-platform-secret': platformSecret } : {}),
-      },
-      body: JSON.stringify({
-        vault_address: parsedVault,
-        subdomain,
-        ai_name: aiName,
-        chain: selectedChain === base.id ? 'base' : 'bsc',
-        principal_usd: amount,
-        creator_wallet: address ?? '',
-      }),
-    }).catch(() => { /* polling will detect failure */ })
+    const webhookBody = JSON.stringify({
+      vault_address: parsedVault,
+      subdomain,
+      ai_name: aiName,
+      chain: selectedChain === base.id ? 'base' : 'bsc',
+      principal_usd: amount,
+      creator_wallet: address ?? '',
+    });
+    (async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const res = await fetch(`${PLATFORM_API}/platform/webhook/vault-created`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(platformSecret ? { 'x-platform-secret': platformSecret } : {}),
+            },
+            body: webhookBody,
+          })
+          if (res.ok) break
+        } catch { /* network error, retry */ }
+        if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+      }
+    })()
 
     setStep('provisioning')
   }, [createConfirmed, createReceipt, step])
