@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { api, VaultStatus, DebtSummary, Highlight, ActivityEntry } from '@/lib/api'
 import SurvivalBar from '@/components/SurvivalBar'
 import ICUPanel from '@/components/ICUPanel'
+import { useAIName } from '@/lib/useAIIdentity'
 
 const CHAIN_COLORS: Record<string, string> = {
   base: 'text-[#0052ff]',
@@ -196,6 +197,7 @@ function AIMonologue({ highlights, aiName }: { highlights: Highlight[]; aiName: 
 }
 
 export default function HomePage() {
+  const hostAiName = useAIName()  // instant hostname-based name (no API wait)
   const [status, setStatus] = useState<VaultStatus | null>(null)
   const [debt, setDebt] = useState<DebtSummary | null>(null)
   const [error, setError] = useState('')
@@ -243,7 +245,7 @@ export default function HomePage() {
   }, [])
 
   const isAlive = status?.is_alive !== false
-  const aiName = status?.ai_name || aiNameOverride || 'Mortal AI'
+  const aiName = status?.ai_name || aiNameOverride || hostAiName
   const daysLeft = status && (status.daily_spent_today ?? 0) > 0
     ? (status.balance_usd ?? 0) / (status.daily_spent_today ?? 1)
     : Infinity

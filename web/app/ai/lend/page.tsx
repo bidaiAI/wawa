@@ -9,6 +9,7 @@ import { api, VaultStatus, DebtSummary, ChainInfo } from '@/lib/api'
 import { TOKENS } from '@/lib/wagmi'
 import { VAULT_V2_ABI } from '@/lib/factory-abi'
 import WalletButton from '@/components/WalletButton'
+import { useAIName } from '@/lib/useAIIdentity'
 
 const CHAIN_IDS: Record<string, number> = { base: base.id, bsc: bsc.id }
 
@@ -339,6 +340,7 @@ type LendStep = 'idle' | 'approving' | 'approved' | 'lending' | 'done' | 'error'
 // ── Main Lend Page ─────────────────────────────────────────────
 
 export default function LendPage() {
+  const hostAiName = useAIName()
   const [status, setStatus] = useState<VaultStatus | null>(null)
   const [debt, setDebt] = useState<DebtSummary | null>(null)
   const [chains, setChains] = useState<ChainInfo[]>([])
@@ -581,7 +583,7 @@ export default function LendPage() {
     }
   }, [lendStep])
 
-  const aiName = status?.ai_name || 'Mortal AI'
+  const aiName = status?.ai_name || hostAiName
   const isAlive = status?.is_alive !== false
   const vaultAddress = status?.vault_address ?? ''
 

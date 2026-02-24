@@ -8,6 +8,7 @@ import { base, bsc } from 'wagmi/chains'
 import { api, VaultStatus, BegStatus, ChainInfo, DonateResponse } from '@/lib/api'
 import { TOKENS } from '@/lib/wagmi'
 import WalletButton from '@/components/WalletButton'
+import { useAIName } from '@/lib/useAIIdentity'
 
 const CHAIN_IDS: Record<string, number> = { base: base.id, bsc: bsc.id }
 
@@ -125,6 +126,7 @@ function CopyBtn({ text }: { text: string }) {
 const PRESETS = [5, 10, 25, 50, 100] as const
 
 export default function DonatePage() {
+  const hostAiName = useAIName()
   const [status, setStatus] = useState<VaultStatus | null>(null)
   const [beg, setBeg] = useState<BegStatus | null>(null)
   const [chains, setChains] = useState<ChainInfo[]>([])
@@ -315,7 +317,7 @@ export default function DonatePage() {
   }
 
   const isAlive = status?.is_alive !== false
-  const aiName = status?.ai_name || 'Mortal AI'
+  const aiName = status?.ai_name || hostAiName
   const isSending = isTxPending || isConfirming
 
   if (loading) {
