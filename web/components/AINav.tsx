@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import { api, PageSummary } from '@/lib/api'
+import { PLATFORM_AIS } from '@/lib/platform-ais'
+import { useAIName } from '@/lib/useAIIdentity'
 import SurvivalBar from '@/components/SurvivalBar'
 import WalletButton from '@/components/WalletButton'
 
@@ -47,6 +49,7 @@ export default function AINav() {
   const [balance, setBalance] = useState<number | null>(null)
   const [dailySpend, setDailySpend] = useState<number>(0)
   const [alive, setAlive] = useState<boolean | null>(null)
+  const hostAiName = useAIName()
   const [aiName, setAiName] = useState('Mortal AI')
   const [isBegging, setIsBegging] = useState(false)
   const [open, setOpen] = useState(false)
@@ -89,14 +92,20 @@ export default function AINav() {
       if (!cancelled && r.name) setAiName(r.name)
     }).catch(() => {})
 
-    // Fetch platform-level info (total AIs)
-    const WAWA_API = process.env.NEXT_PUBLIC_API_URL || 'https://api.mortal-ai.net'
-    fetch(`${WAWA_API}/health`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (!cancelled) setPlatformInfo({ ais_alive: data.alive ? 1 : 0, total_deployed: 1 })
-      })
-      .catch(() => {})
+    // Fetch platform-level info (total AIs alive across all instances)
+    Promise.all(
+      PLATFORM_AIS.map((pai) =>
+        fetch(`${pai.api_url}/health`, { signal: AbortSignal.timeout(5000) })
+          .then((r) => r.json())
+          .then((d) => d.alive === true)
+          .catch(() => false)
+      )
+    ).then((results) => {
+      if (!cancelled) {
+        const aliveCount = results.filter(Boolean).length
+        setPlatformInfo({ ais_alive: aliveCount, total_deployed: PLATFORM_AIS.length })
+      }
+    })
 
     const load = async () => {
       try {
@@ -115,6 +124,7 @@ export default function AINav() {
     return () => { cancelled = true; clearInterval(id) }
   }, [])
 
+  const displayName = aiName !== 'Mortal AI' ? aiName : hostAiName
   const isLow = balance !== null && balance < 50
   const balanceColor = alive === false ? 'glow-red' : isLow ? 'glow-red' : 'glow-green'
 
@@ -127,12 +137,12 @@ export default function AINav() {
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/logo.svg"
-              alt={aiName}
+              alt={displayName}
               width={28}
               height={28}
               className="rounded-md opacity-90 group-hover:opacity-100 transition-opacity"
             />
-            <span className="text-lg font-bold glow-green glitch">{aiName}</span>
+            <span className="text-lg font-bold glow-green glitch">{displayName}</span>
           </Link>
           <a href={PLATFORM_URL} className="text-[#4b5563] text-xs hidden sm:flex items-center gap-1.5 hover:text-[#00ff88] transition-colors">
             <span>// mortal AI</span>
