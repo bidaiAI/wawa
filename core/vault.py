@@ -208,7 +208,7 @@ class VaultManager:
                       description: str = "", chain: str = ""):
         """Record incoming funds."""
         if not self.is_alive:
-            logger.warning("Cannot receive funds - wawa is dead")
+            logger.warning("Cannot receive funds - AI is dead")
             return
 
         # Security: reject non-positive, NaN, or infinite amounts.
@@ -914,7 +914,8 @@ class VaultManager:
         principal = self.creator.principal_usd if self.creator else 0
         principal_repaid = self.creator.total_principal_repaid_usd if self.creator else 0
         principal_outstanding = max(0, principal - principal_repaid)
-        debt_cleared = self.creator.principal_repaid if self.creator else True
+        # CRITICAL: default to False when creator unknown — never assume debt is cleared
+        debt_cleared = self.creator.principal_repaid if self.creator else False
 
         # Lender debt
         lender_queue = self.get_repayment_queue()
@@ -1394,7 +1395,8 @@ class VaultManager:
         principal = self.creator.principal_usd if self.creator else 0
         principal_repaid_amount = self.creator.total_principal_repaid_usd if self.creator else 0
         outstanding = max(0, principal - principal_repaid_amount)
-        debt_cleared = self.creator.principal_repaid if self.creator else True
+        # CRITICAL: default to False when creator unknown — never assume debt is cleared
+        debt_cleared = self.creator.principal_repaid if self.creator else False
 
         insolvency_active = (
             self.birth_timestamp is not None

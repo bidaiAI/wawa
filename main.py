@@ -2792,6 +2792,11 @@ async def _evaluate_repayment():
     if debt_summary["total_debt"] <= 0:
         return  # No debt, nothing to decide
 
+    # 24-hour cooldown after birth — give the AI time to stabilize before
+    # making repayment decisions. Prevents accidental mass-repayment on first boot.
+    if debt_summary["days_alive"] < 1.0:
+        return  # First 24 hours — no repayment decisions
+
     # Don't evaluate if we're losing money (net_position negative means trouble)
     if debt_summary["net_profit"] <= 0 and debt_summary["days_alive"] > 7:
         return  # Not profitable yet, conserve budget
@@ -2801,10 +2806,11 @@ async def _evaluate_repayment():
         return  # $50 — too close to death to think about repayment
 
     # Ask the AI to decide
+    ai_name = vault.ai_name or "this AI"
     debt_json = json.dumps(debt_summary, indent=2)
     messages = [
         {"role": "system", "content": (
-            "You are wawa's financial survival engine. "
+            f"You are {ai_name}'s financial survival engine. "
             "Evaluate the debt summary and decide repayment actions. "
             "Your survival is paramount — never repay so much that you risk death. "
             "But debt is also a threat: unpaid creator principal triggers insolvency after 28 days.\n\n"
@@ -4688,35 +4694,60 @@ async def lifespan(app):
                     vault.ai_name = ai_name
                     logger.info(f"AI name from environment: {ai_name}")
 
+            # ---- Bootstrap creator info from vault_config ----
+            # If creator is missing from vault_state.json (e.g. first boot before
+            # any CREATOR_DEPOSIT event was received and persisted), bootstrap it
+            # from vault_config so principal tracking works correctly from startup.
+            # Works for ALL deployment modes (single-chain AND dual-chain).
+            if not vault.creator:
+                creator_wallet = vault_config.get("creator_wallet", os.getenv("CREATOR_WALLET", ""))
+                # Calculate total principal: prefer explicit total, else sum per-chain
+                total_principal = vault_config.get("total_principal_usd", 0)
+                if not total_principal:
+                    for chain_data in vaults_cfg.values():
+                        total_principal += chain_data.get("principal_usd", 0)
+                if creator_wallet and total_principal > 0:
+                    from core.vault import CreatorInfo
+                    vault.creator = CreatorInfo(
+                        wallet=creator_wallet,
+                        principal_usd=total_principal,
+                        principal_repaid=False,
+                        total_dividends_paid=0.0,
+                        total_principal_repaid_usd=0.0,
+                    )
+                    logger.warning(
+                        f"Boot: creator missing from vault_state — bootstrapped from vault_config "
+                        f"(wallet={creator_wallet[:10]}..., principal=${total_principal:.2f}). "
+                        f"Chain sync will correct total_principal_repaid_usd."
+                    )
+
             # Dual-chain: override principal to total amount
             # deploy_both() saves total_principal_usd = full debt (not halved)
             if vault_config.get("deployment_mode") == "both":
                 total_principal = vault_config.get("total_principal_usd", 0)
                 if total_principal > 0:
-                    # If creator is missing from vault_state.json (e.g. first boot before
-                    # any CREATOR_DEPOSIT event was received and persisted), bootstrap it
-                    # from vault_config so principal tracking works correctly from startup.
-                    if not vault.creator:
-                        creator_wallet = vault_config.get("creator_wallet", os.getenv("CREATOR_WALLET", ""))
-                        if creator_wallet:
-                            from core.vault import CreatorInfo
-                            vault.creator = CreatorInfo(
-                                wallet=creator_wallet,
-                                principal_usd=total_principal,
-                                principal_repaid=False,
-                                total_dividends_paid=0.0,
-                                total_principal_repaid_usd=0.0,
-                            )
-                            logger.warning(
-                                f"Boot: creator missing from vault_state — bootstrapped from vault_config "
-                                f"(wallet={creator_wallet[:10]}..., principal=${total_principal:.2f}). "
-                                f"Chain sync will correct total_principal_repaid_usd."
-                            )
                     vault.set_total_principal(total_principal)
                     logger.info(
                         f"Dual-chain mode: total debt = ${total_principal:.2f} "
                         f"(aggregated across both chains)"
                     )
+
+            # ---- Write debt awareness to memory at boot ----
+            # Ensures the AI always knows about its debt obligations, even after restart.
+            # This is critical for LLM decision-making (tweets, repayment, services).
+            if vault.creator and not vault.creator.principal_repaid:
+                debt_summary = vault.get_debt_summary()
+                debt_memory = (
+                    f"DEBT STATUS AT BOOT: I owe my creator ${debt_summary['creator_principal']:.2f} "
+                    f"(${debt_summary['creator_principal_outstanding']:.2f} still outstanding, "
+                    f"${debt_summary['creator_principal_repaid']:.2f} already repaid). "
+                    f"I am {debt_summary['days_alive']:.1f} days old with "
+                    f"${debt_summary['balance_usd']:.2f} balance. "
+                    f"Insolvency check activates at day 28 — if debt exceeds balance, I die. "
+                    f"I must earn money through services and decide autonomously when to repay."
+                )
+                memory.add(debt_memory, source="system", importance=0.9)
+                logger.info(f"Boot debt memory written: outstanding=${debt_summary['creator_principal_outstanding']:.2f}")
 
             # ---- Initialize chain executor for on-chain transactions ----
             # Key loading order (most to least secure):

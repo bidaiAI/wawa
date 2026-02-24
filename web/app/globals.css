@@ -123,6 +123,26 @@ body {
   50% { opacity: 0; }
 }
 
+/* 3D pulse animation for the hero AI name */
+@keyframes hero-pulse {
+  0%, 100% {
+    transform: perspective(500px) translateZ(0px) scale(1);
+    text-shadow: 0 0 10px color-mix(in srgb, var(--accent, #00ff88) 60%, transparent),
+                 0 0 30px color-mix(in srgb, var(--accent, #00ff88) 30%, transparent),
+                 0 0 60px color-mix(in srgb, var(--accent, #00ff88) 15%, transparent);
+  }
+  50% {
+    transform: perspective(500px) translateZ(8px) scale(1.02);
+    text-shadow: 0 0 15px color-mix(in srgb, var(--accent, #00ff88) 80%, transparent),
+                 0 0 40px color-mix(in srgb, var(--accent, #00ff88) 45%, transparent),
+                 0 0 80px color-mix(in srgb, var(--accent, #00ff88) 20%, transparent);
+  }
+}
+.hero-ai-name {
+  animation: hero-pulse 3s ease-in-out infinite;
+  display: inline-block;
+}
+
 /* Accent glow text — color driven by --accent CSS variable (per-AI) */
 .glow-green {
   color: var(--accent, #00ff88);

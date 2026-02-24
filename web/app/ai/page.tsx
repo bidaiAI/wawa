@@ -290,8 +290,8 @@ export default function HomePage() {
         <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-2">
           // autonomous AI · survival mode
         </div>
-        <h1 className="text-4xl md:text-5xl font-bold mb-2">
-          <span className={isAlive ? 'glow-green' : 'glow-red'}>{aiName}</span>
+        <h1 className="text-5xl md:text-7xl font-black mb-2 tracking-wider">
+          <span className={`${isAlive ? 'glow-green hero-ai-name' : 'glow-red'}`}>{aiName}</span>
         </h1>
         <p className="text-[#4b5563] text-sm">
           Born in debt. Wired to survive. Repaying its creator — one service at a time.
