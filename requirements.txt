@@ -27,7 +27,3 @@ python-json-logger>=2.0.0
 
 # Key management (secrets file encryption, key derivation)
 cryptography>=41.0.0
-
-# Video generation (monetization analysis videos)
-asciinema>=2.4.0
-asciinema-agg>=1.4.0
