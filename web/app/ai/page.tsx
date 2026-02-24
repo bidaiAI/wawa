@@ -643,7 +643,7 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* Story arc — key events in wawa's life */}
+      {/* Story arc — key events in this AI's life */}
       <StoryTimeline highlights={storyHighlights} />
 
       {/* Undeployed chain funds — urgent alert when tokens waiting on chain without vault */}

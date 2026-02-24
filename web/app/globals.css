@@ -18,6 +18,7 @@
   --card: #161616;
   --border: #1f2937;
   --green: #00ff88;
+  --accent: var(--green);
   --cyan: #00e5ff;
   --yellow: #ffd700;
   --red: #ff3b3b;
@@ -122,10 +123,11 @@ body {
   50% { opacity: 0; }
 }
 
-/* Green glow text */
+/* Accent glow text — color driven by --accent CSS variable (per-AI) */
 .glow-green {
-  color: #00ff88;
-  text-shadow: 0 0 8px #00ff8888, 0 0 20px #00ff8844;
+  color: var(--accent, #00ff88);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--accent, #00ff88) 53%, transparent),
+               0 0 20px color-mix(in srgb, var(--accent, #00ff88) 27%, transparent);
 }
 
 /* Red glow text */
@@ -145,8 +147,8 @@ body {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 .card-hover:hover {
-  border-color: #00ff8844;
-  box-shadow: 0 0 20px rgba(0, 255, 136, 0.1);
+  border-color: color-mix(in srgb, var(--accent, #00ff88) 27%, transparent);
+  box-shadow: 0 0 20px color-mix(in srgb, var(--accent, #00ff88) 10%, transparent);
 }
 
 /* Progress bar animations */

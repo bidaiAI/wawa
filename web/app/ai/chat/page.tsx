@@ -32,7 +32,8 @@ const LAYER_COLORS: Record<string, string> = {
   big: 'text-[#00ff88]',
 }
 
-const HISTORY_KEY = 'wawa_chat_history'
+import { getAINameFromHost } from '@/lib/useAIIdentity'
+const HISTORY_KEY = `${getAINameFromHost()}_chat_history`
 const MAX_HISTORY = 50
 
 interface HistoryEntry {
@@ -131,7 +132,7 @@ export default function ChatPage() {
         <div>
           <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">// free chat</div>
           <h1 className="text-2xl font-bold text-[#d1d5db]">Talk to <span className="glow-green">{aiName}</span></h1>
-          <p className="text-[#4b5563] text-xs mt-1">Free. Routed through 3 cost layers to minimize wawa&apos;s expenses.</p>
+          <p className="text-[#4b5563] text-xs mt-1">Free. Routed through 3 cost layers to minimize expenses.</p>
         </div>
         {history.length > 0 && (
           <button

@@ -125,7 +125,7 @@ export default function TweetsPage() {
       ) : tweets.length === 0 ? (
         <div className="text-center py-12 text-[#4b5563]">
           <div className="text-4xl mb-3">🤫</div>
-          <div>wawa hasn't tweeted yet</div>
+          <div>No tweets yet</div>
         </div>
       ) : (
         <div className="space-y-4">

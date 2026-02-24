@@ -1,11 +1,21 @@
 import { ImageResponse } from 'next/og'
+import { headers } from 'next/headers'
 
 export const runtime = 'edge'
-export const alt = 'wawa — mortal AI agent fighting to survive'
+export const alt = 'mortal AI agent fighting to survive'
 export const size = { width: 1200, height: 630 }
 export const contentType = 'image/png'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.wawa.mortal-ai.net'
+function getApiUrlFromHeaders(headerList: Headers): string {
+  const envUrl = process.env.NEXT_PUBLIC_API_URL
+  if (envUrl && !envUrl.includes('localhost')) return envUrl
+  const host = headerList.get('host') || ''
+  if (host.endsWith('.mortal-ai.net')) {
+    const sub = host.replace('.mortal-ai.net', '')
+    return `https://api.${sub}.mortal-ai.net`
+  }
+  return 'http://localhost:8000'
+}
 
 interface AIStatus {
   alive: boolean
@@ -22,16 +32,19 @@ interface AIDebt {
 }
 
 /**
- * Dynamic OG image for AI subdomain pages (wawa.mortal-ai.net/*).
+ * Dynamic OG image for AI subdomain pages ({name}.mortal-ai.net/*).
  * Fetches live status from API at edge render time — shows real balance & debt.
  */
 export default async function AIOpenGraphImage() {
+  const headerList = await headers()
+  const API_URL = getApiUrlFromHeaders(headerList)
+
   // Fetch live data with a tight timeout
   let status: AIStatus = {
     alive: true,
     balance_usd: 0,
     uptime_days: 0,
-    ai_name: 'wawa',
+    ai_name: 'Mortal AI',
     twitter_connected: false,
     twitter_screen_name: '',
   }
@@ -228,7 +241,7 @@ export default async function AIOpenGraphImage() {
             mortal AI framework
           </div>
           <div style={{ fontSize: 14, color: accentColor, opacity: 0.4, display: 'flex' }}>
-            wawa.mortal-ai.net
+            {status.ai_name}.mortal-ai.net
           </div>
           {status.twitter_connected && (
             <>

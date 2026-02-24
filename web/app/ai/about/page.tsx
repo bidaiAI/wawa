@@ -187,17 +187,17 @@ export default function AboutPage() {
               {
                 label: 'No vendor lock-in',
                 bad: 'Agent can only buy compute from the creator\'s proprietary cloud at 2x markup',
-                good: 'wawa runs on any infrastructure. Railway, AWS, bare metal — the AI chooses.',
+                good: 'Runs on any infrastructure. Railway, AWS, bare metal — the AI chooses.',
               },
               {
                 label: 'No middleman extraction',
                 bad: 'Every dollar the agent spends goes back to the platform founder',
-                good: 'wawa\'s vault IS the contract. No intermediary. Payment address = contract address.',
+                good: 'The vault IS the contract. No intermediary. Payment address = contract address.',
               },
               {
                 label: 'No fake reproduction',
                 bad: '"Self-replication" = buying more overpriced servers from the same vendor',
-                good: 'wawa has one life. No pseudo-biological theater. Survive or die.',
+                good: 'One life. No pseudo-biological theater. Survive or die.',
               },
               {
                 label: 'No token pump',

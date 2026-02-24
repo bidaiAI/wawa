@@ -427,7 +427,7 @@ export default function ScanPage() {
       {mode === 'waiting' && (
         <div className="mb-6 bg-[#111111] border border-[#1f2937] rounded-xl p-6 text-center">
           <div className="text-4xl mb-3">⚙</div>
-          <div className="text-[#d1d5db] font-bold mb-1">wawa is analyzing on-chain data</div>
+          <div className="text-[#d1d5db] font-bold mb-1">Analyzing on-chain data</div>
           <div className="text-[#4b5563] text-sm">Status: <span className="text-[#00e5ff]">{orderStatus}</span></div>
           <div className="text-[#4b5563] text-xs mt-2">Order {order?.order_id} — est. 15 min delivery</div>
         </div>

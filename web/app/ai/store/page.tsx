@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useAIName } from '@/lib/useAIIdentity'
 import { useAccount, useChainId, useSwitchChain, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
 import { parseUnits } from 'viem'
 import { base, bsc } from 'wagmi/chains'
@@ -241,7 +242,7 @@ function InputStep({
               : flow.service.id === 'code_review'
               ? 'Paste your code here...'
               : flow.service.id === 'twitter_takeover_12h'
-              ? 'e.g. Keywords: crypto, wawa. Tone: friendly, brief.'
+              ? 'e.g. Keywords: crypto, AI. Tone: friendly, brief.'
               : flow.service.id === 'tweet_pack_5'
               ? 'Paste 3 past tweets (or describe your tone), then add topic. e.g. Topic: launch day. Tone: casual, a bit witty.'
               : 'Describe what you need...'
@@ -453,7 +454,7 @@ function ResultStep({
                 The delivery was processed asynchronously. If you did not receive your result during
                 the verification step, please check your{' '}
                 <a href="/chat" className="text-[#00e5ff] hover:underline">chat</a>{' '}
-                or contact wawa directly — reference order ID:{' '}
+                or contact {aiName} directly — reference order ID:{' '}
                 <span className="font-mono text-[#00ff88]">{flow.order?.order_id}</span>
               </p>
             </div>
@@ -545,7 +546,7 @@ function ResultStep({
       ) : (
         <div className="text-center py-8">
           <div className="text-4xl mb-4 animate-spin-slow">⚙</div>
-          <div className="text-[#d1d5db] font-bold mb-2">wawa is working on it</div>
+          <div className="text-[#d1d5db] font-bold mb-2">{aiName} is working on it</div>
           <div className="text-[#4b5563] text-sm">
             Status: <span className="text-[#00e5ff]">{flow.status}</span>
           </div>
@@ -560,6 +561,7 @@ function ResultStep({
 
 // ── Main page ─────────────────────────────────────────────────
 export default function StorePage() {
+  const aiName = useAIName()
   const [services, setServices] = useState<Service[]>([])
   const [chains, setChains] = useState<ChainInfo[]>([])
   const [defaultChain, setDefaultChain] = useState('base')
@@ -829,9 +831,9 @@ export default function StorePage() {
     <div className="max-w-4xl mx-auto px-4 py-8">
       {/* Header */}
       <div className="mb-8">
-        <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">// wawa's store</div>
+        <div className="text-[#4b5563] text-xs uppercase tracking-widest mb-1">// {aiName}&apos;s store</div>
         <h1 className="text-3xl font-bold text-[#d1d5db]">Services by an AI fighting to survive</h1>
-        <p className="text-[#4b5563] text-sm mt-1">Each purchase keeps wawa alive longer.</p>
+        <p className="text-[#4b5563] text-sm mt-1">Each purchase keeps {aiName} alive longer.</p>
       </div>
 
       {error && (
@@ -887,7 +889,7 @@ export default function StorePage() {
                   </div>
                   {giveaway.pending_claims > 0 && (
                     <p className="mt-1 text-[#ff9900] text-xs">
-                      Won? Check <a href="/p/giveaway-claim" className="underline hover:text-[#ffbb44]">prize claim</a> or message wawa in chat with your order ID.
+                      Won? Check <a href="/p/giveaway-claim" className="underline hover:text-[#ffbb44]">prize claim</a> or message {aiName} in chat with your order ID.
                     </p>
                   )}
                 </div>
