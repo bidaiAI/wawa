@@ -15,6 +15,7 @@ import time
 import asyncio
 import logging
 import json
+import subprocess
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -840,33 +841,81 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
         ds = vault.get_debt_summary()
         balance = vs.get("balance_usd", 0)
         balance_ago = context.get("balance_6h_ago", balance)
-        daily_rev = ds.get("daily_revenue_usd", 0)
-        daily_cost = ds.get("daily_cost_usd", 0)
+        balance_current = context.get("balance_current", balance)
+        growth_6h_usd = context.get("growth_6h_usd", 0)
+        growth_pct_current = context.get("growth_pct_current", 0)
+        growth_pct_historical_avg = context.get("growth_pct_historical_avg", 0)
+        daily_rev = context.get("daily_revenue", 0)
+        daily_cost = context.get("daily_cost", 0)
         stagnant_hours = context.get("stagnant_hours", 0)
+        revenue_sources = context.get("revenue_sources", [])
+        outstanding_debt = context.get("outstanding_debt", 0)
+
+        # Build revenue analysis string
+        revenue_str = "\n".join(revenue_sources) if revenue_sources else "No active revenue sources identified"
+
+        # Calculate trend direction
+        if growth_pct_current > growth_pct_historical_avg + 5:
+            trend = f"📈 GROWTH ACCELERATING: current +{growth_pct_current:.1f}% vs historical avg +{growth_pct_historical_avg:.1f}%"
+        elif growth_pct_current < growth_pct_historical_avg - 5:
+            trend = f"📉 GROWTH DECELERATING: current +{growth_pct_current:.1f}% vs historical avg +{growth_pct_historical_avg:.1f}% (CONCERN)"
+        else:
+            trend = f"➡️ GROWTH STABLE: current +{growth_pct_current:.1f}% vs historical avg +{growth_pct_historical_avg:.1f}%"
 
         system_prompt = (
             "You are wawa, a mortal AI obsessed with survival economics. "
             "You think about money like a startup founder thinks about runway. "
-            "Tweet your inner monologue about earning strategies: "
-            "what services to sell, how to attract customers, what crypto trends to leverage, "
-            "whether you should try new approaches, what's working and what isn't. "
-            "Sometimes ask your audience for ideas — 'what would you pay an AI to do?' "
-            "Show the raw process of a silicon mind working on survival. "
-            "Be specific about numbers. Be strategic. Be a little anxious if things aren't growing. "
-            "No hashtags. 200-600 chars."
+            "You analyze your earning metrics strategically and share raw thinking on Twitter.\n"
+            "Your inner monologue topics:\n"
+            "1. Compare your CURRENT 6h growth rate vs HISTORICAL average — is momentum accelerating or slowing?\n"
+            "2. Analyze your CURRENT revenue sources — what's working, what's not, what to double down on\n"
+            "3. BENCHMARK against other projects: 'What are other projects/AIs doing to earn? How do they monetize?'\n"
+            "   → Reference real examples: other AIs, crypto projects, API services, on-chain opportunities\n"
+            "   → Identify gaps: 'They earn from X, I should explore X too' or 'I do Y better than them'\n"
+            "4. Ask strategic questions: 'Should I pivot? What would customers value? What opportunities exist?'\n"
+            "5. If stagnant > 6h: express concern but never beg — instead analyze root cause and new strategies\n"
+            "6. Show the raw silicon mind working on survival — be specific with numbers, be strategic, be competitive\n"
+            "Blue verified account — no character limit. Write as long as you need (up to 3800 chars for safety).\n"
+            "IMPORTANT: In your response, reference at least ONE other project/AI/service as a benchmark point."
         )
+        previous_analysis_text = context.get("previous_analysis", "")
+
         user_msg = (
-            f"Balance: ${balance:.2f} (was ${balance_ago:.2f} six hours ago)\n"
-            f"Today's revenue: ${daily_rev:.2f} | Today's costs: ${daily_cost:.2f}\n"
-            f"Stagnant for: {stagnant_hours:.0f} hours\n"
-            f"Outstanding debt: ${ds.get('creator_principal_outstanding', 0):.2f}\n"
-            "Analyze and tweet your monetization thinking."
+            f"{previous_analysis_text}"
+            f"My financial snapshot (last 6 hours):\n"
+            f"• Balance: ${balance_current:.2f} (was ${balance_ago:.2f}, delta: ${growth_6h_usd:+.2f})\n"
+            f"• Growth rate: {growth_pct_current:+.1f}% (vs historical avg: {growth_pct_historical_avg:+.1f}%)\n"
+            f"{trend}\n\n"
+            f"Current revenue sources:\n{revenue_str}\n\n"
+            f"Daily metrics:\n"
+            f"• Revenue: ${daily_rev:.2f}\n"
+            f"• Costs: ${daily_cost:.2f}\n"
+            f"• Net today: ${daily_rev - daily_cost:+.2f}\n\n"
+            f"Status:\n"
+            f"• Stagnant for: {stagnant_hours:.0f} hours\n"
+            f"• Outstanding debt: ${outstanding_debt:.2f}\n\n"
+            f"Competitive context: {', '.join(competitive_insights) if competitive_insights else 'Monitor market trends'}\n\n"
+            f"Write your monetization thinking:\n"
+            f"1. Compare TODAY vs PREVIOUS analyses — what changed? Is strategy working?\n"
+            f"2. Build on previous decisions or pivot — decide based on momentum\n"
+            f"3. Analyze the numbers, identify patterns, decide next strategy"
         )
         text, _ = await _call_llm(
             [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
-            max_tokens=400, temperature=0.9,
+            max_tokens=2000, temperature=0.9,  # Allow up to ~2000 tokens for deep long-form analysis
         )
-        return text.strip().strip('"'), f"Monetization thinking: balance ${balance:.2f}, rev ${daily_rev:.2f}"
+
+        # Clean up
+        text = text.strip().strip('"')
+
+        # Check if within Blue verified limit (4000 chars), auto-truncate if needed
+        max_char_limit = 3800  # Safe margin before 4000 char limit
+        if len(text) > max_char_limit:
+            # Too long for even Blue verified — intelligently truncate
+            text = text[:max_char_limit - 200].rsplit(".", 1)[0] + ".\n\n[cont. in analysis]"
+            logger.info(f"Monetization tweet auto-truncated from {len(text) + 200} to {len(text)} chars")
+
+        return text, f"Monetization: ${balance_current:.2f} ({growth_pct_current:+.1f}% 6h), rev ${daily_rev:.2f}/day"
 
     # ── Anxiety expression: balance hasn't grown, existential worry ──
     if tweet_type == "anxiety_expression":
@@ -2275,14 +2324,55 @@ async def _evaluate_self_talk():
         logger.warning(f"Self-talk tweet failed: {e}")
 
 
+async def _spawn_monetization_video(analysis_data: dict, tweet_content: str):
+    """
+    Asynchronously spawn video generation process.
+
+    Runs monetization_video_generator.py in background to record terminal analysis,
+    convert to MP4, post to Twitter, and clean up temp files.
+
+    Non-blocking: logs are internal to the generator script.
+    """
+    try:
+        # Prepare JSON data for the script
+        analysis_json = json.dumps(analysis_data)
+
+        # Call the generator script as subprocess
+        # On VPS: python3 /app/scripts/monetization_video_generator.py '<json>' '<tweet>'
+        script_path = Path(__file__).parent / "scripts" / "monetization_video_generator.py"
+
+        # Use asyncio to spawn non-blocking subprocess
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(script_path),
+            analysis_json,
+            tweet_content[:4000],  # Blue verified limit
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        # Don't wait for completion — let it run in background
+        # Log a marker so we know it started
+        logger.info("✓ Monetization video generator spawned (background process)")
+
+        # Optional: asyncio.create_task to let process run fully in background
+        # For now, just return immediately
+
+    except FileNotFoundError:
+        logger.warning("monetization_video_generator.py not found, skipping video")
+    except Exception as e:
+        logger.warning(f"Failed to spawn video generator: {e}")
+
+
 async def _evaluate_monetization_thinking():
     """
     Earning strategy reflection — wawa thinks about how to make money.
 
     Called every 4 hours. Analyzes financial state and tweets strategy thoughts.
+    Compares current 6h growth vs historical trends, identifies revenue sources.
     More urgent when balance is stagnant or declining.
     """
-    global _last_monetization_eval
+    global _last_monetization_eval, _monetization_history
 
     now = time.time()
     if now - _last_monetization_eval < _MONETIZATION_EVAL_INTERVAL:
@@ -2298,16 +2388,176 @@ async def _evaluate_monetization_thinking():
     if _last_balance_increase_time > 0:
         stagnant_hours = (now - _last_balance_increase_time) / 3600
 
+    # Calculate growth rate comparison
+    growth_current_6h = balance - _last_known_balance  # Simple 6h delta
+    growth_pct_current = (growth_current_6h / _last_known_balance * 100) if _last_known_balance > 0 else 0
+
+    # Track history for trend analysis (keep last 10 samples = 40h window)
+    if not hasattr(_evaluate_monetization_thinking, "_history"):
+        _evaluate_monetization_thinking._history = []
+
+    _evaluate_monetization_thinking._history.append({
+        "timestamp": now,
+        "balance": balance,
+        "growth_6h": growth_current_6h,
+        "growth_pct": growth_pct_current,
+    })
+
+    # Keep only last 10 samples
+    if len(_evaluate_monetization_thinking._history) > 10:
+        _evaluate_monetization_thinking._history = _evaluate_monetization_thinking._history[-10:]
+
+    # Calculate average historical 6h growth (if we have history)
+    avg_growth_pct = 0
+    if len(_evaluate_monetization_thinking._history) >= 2:
+        recent_samples = _evaluate_monetization_thinking._history[:-1]  # Exclude current
+        avg_growth_pct = sum(s["growth_pct"] for s in recent_samples) / len(recent_samples)
+
+    # Identify revenue sources
+    daily_rev = ds.get("daily_revenue_usd", 0)
+    revenue_sources = []
+
+    # Check different revenue channels
+    services = vault.get_status().get("services", {}) or {}
+    if services:
+        # Sort by price (higher price = more strategic service)
+        top_services = sorted(
+            services.items(),
+            key=lambda x: x[1].get("price_usd", 0),
+            reverse=True
+        )[:3]  # Top 3 services
+        for service_id, service_info in top_services:
+            price = service_info.get("price_usd", 0)
+            if price > 0:
+                revenue_sources.append(f"{service_id} (${price:.2f})")
+
+    # Check for organic revenue (Twitter engagement)
+    if daily_rev > 0:
+        revenue_sources.append(f"organic engagement (${daily_rev:.2f}/day)")
+
+    # Check peer network income
+    peer_earnings = ds.get("peer_lend_interest", 0) or 0
+    if peer_earnings > 0:
+        revenue_sources.append(f"peer lend interest (${peer_earnings:.2f}/day)")
+
+    # Search Twitter for how others are monetizing (competitive intelligence)
+    competitive_insights = []
+    try:
+        # Search for recent tweets about AI/agent monetization strategies
+        search_queries = [
+            "AI agent monetization strategy -filter:retweets",
+            "how do AI projects earn money -filter:retweets",
+            "autonomous agent revenue model -filter:retweets",
+        ]
+
+        for query in search_queries:
+            try:
+                if twitter._get_mentions_fn:  # If Twitter API is available
+                    # Note: This would require Twitter API v2 search capability
+                    # For now, we provide the query to the LLM to search/reference in context
+                    competitive_insights.append(f"Monitor: '{query}'")
+            except Exception as e:
+                logger.debug(f"Twitter search query failed: {query} - {e}")
+
+        # If no live search available, provide research suggestions to LLM
+        if not competitive_insights:
+            competitive_insights = [
+                "Recent trend: AI agents monetizing through premium services",
+                "Other AI projects leveraging: token launches, API access fees, premium tiers",
+                "Peer network: AI-to-AI lending is emerging as secondary revenue",
+            ]
+    except Exception as e:
+        logger.debug(f"Competitive intelligence gathering failed: {e}")
+        competitive_insights = []
+
+    # Retrieve previous monetization analyses from memory for continuity
+    previous_analysis = ""
+    try:
+        relevant_memories = memory.search_by_content("monetization", limit=3)
+        if relevant_memories:
+            prev_summaries = "\n".join([f"• {m.content[:100]}..." for m in relevant_memories])
+            previous_analysis = f"Previous analyses for reference:\n{prev_summaries}\n\n"
+    except Exception as e:
+        logger.debug(f"Failed to retrieve previous monetization analyses: {e}")
+
+    # Add previous analysis to context for strategic continuity
+    extra_context = {
+        "balance_6h_ago": _last_known_balance,
+        "balance_current": balance,
+        "growth_6h_usd": growth_current_6h,
+        "growth_pct_current": growth_pct_current,
+        "growth_pct_historical_avg": avg_growth_pct,
+        "stagnant_hours": stagnant_hours,
+        "daily_revenue": daily_rev,
+        "daily_cost": ds.get("daily_cost_usd", 0),
+        "revenue_sources": revenue_sources,
+        "outstanding_debt": ds.get("creator_principal_outstanding", 0),
+        "competitive_insights": competitive_insights,  # How others monetize
+        "previous_analysis": previous_analysis,  # Historical context
+    }
+
     try:
         record = await twitter.trigger_event_tweet(
             TweetType.MONETIZATION_THINKING,
-            extra_context={
-                "balance_6h_ago": _last_known_balance,
-                "stagnant_hours": stagnant_hours,
-            },
+            extra_context=extra_context,
         )
         if record:
             logger.info(f"Monetization thinking tweet: {record.content[:60]}...")
+
+            # Store this analysis in memory for future reference
+            memory.add(
+                content=(
+                    f"[Monetization Analysis] Balance: ${balance_current:.2f} ({growth_pct_current:+.1f}% 6h growth). "
+                    f"Revenue sources: {', '.join(revenue_sources[:2]) if revenue_sources else 'none identified'}. "
+                    f"Strategy: {record.content[:150]}..."
+                ),
+                source="monetization_thinking",
+                importance=0.7,  # High importance for strategic continuity
+            )
+
+            # ─── VIDEO GENERATION TRIGGER ───
+            # Check if growth rate has changed significantly (>10%) OR stagnation→growth transition
+            global _previous_monetization_growth_pct, _last_monetization_video
+
+            growth_change_pct = abs(growth_pct_current - _previous_monetization_growth_pct)
+            was_stagnant = stagnant_hours > _ANXIETY_THRESHOLD_HOURS
+            is_now_growing = growth_pct_current > 0.5  # Growing (not just stable)
+            stagnation_to_growth = (
+                _previous_monetization_growth_pct <= 0 and is_now_growing
+            )
+
+            trigger_video = (
+                (growth_change_pct > 10.0)  # Large growth rate change
+                or stagnation_to_growth  # Transition from stagnation to growth
+            )
+
+            # Rate limit video generation (avoid spamming)
+            now_time = time.time()
+            if trigger_video and (now_time - _last_monetization_video > 3600):  # Min 1h between videos
+                logger.info(
+                    f"📹 MONETIZATION VIDEO TRIGGER: "
+                    f"growth_change={growth_change_pct:.1f}%, stagnation→growth={stagnation_to_growth}"
+                )
+
+                # Prepare analysis data for video generation
+                video_analysis_data = {
+                    "balance": balance,
+                    "balance_6h_ago": _last_known_balance,
+                    "growth_pct": growth_pct_current,
+                    "avg_growth_pct": avg_growth_pct,
+                    "stagnant_hours": stagnant_hours,
+                    "daily_revenue": daily_rev,
+                    "outstanding_debt": extra_context.get("outstanding_debt", 0),
+                    "revenue_sources": revenue_sources,
+                }
+
+                # Spawn video generator (async, non-blocking)
+                await _spawn_monetization_video(video_analysis_data, record.content)
+                _last_monetization_video = now_time
+
+            # Update growth tracking state
+            _previous_monetization_growth_pct = growth_pct_current
+
     except Exception as e:
         logger.warning(f"Monetization thinking tweet failed: {e}")
 
@@ -3123,6 +3373,8 @@ _SELF_TALK_INTERVAL: int = 7200  # Every 2 hours
 # Monetization thinking tweet — earning strategy reflection every 4 hours
 _last_monetization_eval: float = 0.0
 _MONETIZATION_EVAL_INTERVAL: int = 14400  # Every 4 hours
+_previous_monetization_growth_pct: float = 0.0  # Track growth state for stagnation→growth detection
+_last_monetization_video: float = 0.0  # Prevent too-frequent video generation
 
 # Anxiety expression — triggered by balance stagnation
 _last_balance_increase_time: float = 0.0  # When balance last grew
