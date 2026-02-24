@@ -157,10 +157,12 @@ export default function CreatePage() {
   useEffect(() => {
     if (!createConfirmed || !createReceipt || step !== 'creating') return
 
-    // VaultCreated event: topics = [sig, creator, vault, token]  (all indexed)
+    // VaultCreated event: topics = [sig, creator, vault, token]  (all 3 params indexed → 4 topics total)
+    // ERC20 Transfer has only 3 topics [sig, from, to] and appears BEFORE VaultCreated in the receipt
+    // (factory calls safeTransferFrom first). Match === 4 to skip Transfer and hit VaultCreated.
     let parsedVault = ''
     for (const log of (createReceipt as any).logs ?? []) {
-      if (log.topics?.length >= 3) {
+      if (log.topics?.length === 4) {
         // topics[2] = vault address (32 bytes, left-padded)
         const raw: string = log.topics[2]
         if (raw && raw.startsWith('0x')) {
