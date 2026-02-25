@@ -25,9 +25,9 @@ RUN chmod +x start.sh && mkdir -p data/memory data/tweets data/orders
 
 EXPOSE 8000
 
-# Health check
+# Health check (uses PORT env var, defaults to 8000)
 HEALTHCHECK --interval=60s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
 # Railway uses start.sh via railway.toml; local docker uses main.py
 CMD ["sh", "start.sh"]

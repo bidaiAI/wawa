@@ -1,0 +1,36 @@
+# Sensitive files — NEVER bake into image
+.env
+.env.*
+!.env.example
+
+# Platform-specific (private repo only)
+mortal_platform/
+Dockerfile.platform
+requirements.platform.txt
+.env.platform.example
+
+# Local tooling
+.claude/
+CLAUDE.md
+.cursorrules
+.git/
+.github/
+
+# Node / frontend (built separately on Vercel)
+web/node_modules/
+web/.next/
+web/out/
+
+# Data and secrets (runtime, mounted as volumes)
+data/
+secrets/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Strategy docs
+strategy*.md
+STRATEGY*.md

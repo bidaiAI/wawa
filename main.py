@@ -29,7 +29,7 @@ from openai import APIStatusError as OpenAIAPIStatusError
 # BOOTSTRAP
 # ============================================================
 
-load_dotenv()
+load_dotenv(override=False)  # Docker -e env vars take precedence over .env file
 
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -5193,9 +5193,14 @@ async def lifespan(app):
                     logger.warning(f"Failed to sync loans from chain at boot: {e}")
 
                 # Read key origin (on-chain proof of who set AI wallet)
+                # Only override vault_config value if chain returns non-empty
                 try:
-                    vault.key_origin = await chain_executor.read_key_origin()
-                    logger.info(f"Key origin: {vault.key_origin}")
+                    chain_key_origin = await chain_executor.read_key_origin()
+                    if chain_key_origin:
+                        vault.key_origin = chain_key_origin
+                        logger.info(f"Key origin from chain: {vault.key_origin}")
+                    else:
+                        logger.info(f"Key origin from chain empty — keeping vault_config value: {vault.key_origin}")
                 except Exception as e:
                     logger.warning(f"Failed to read key origin at boot: {e}")
 
