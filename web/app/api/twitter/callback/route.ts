@@ -14,7 +14,7 @@ import crypto from 'crypto'
 const CONSUMER_KEY = process.env.PLATFORM_TWITTER_CONSUMER_KEY || ''
 const CONSUMER_SECRET = process.env.PLATFORM_TWITTER_CONSUMER_SECRET || ''
 const PLATFORM_FEE_SECRET = process.env.PLATFORM_FEE_SECRET || ''
-const ADMIN_REDIRECT = 'https://mortal-ai.net/admin/instances'
+const ADMIN_REDIRECT = 'https://mortal-ai.net/dashboard'
 
 // ── OAuth 1.0a Signature ──────────────────────────────────────────────────────
 
@@ -154,18 +154,18 @@ export async function GET(req: NextRequest) {
       const err = await injectRes.json().catch(() => ({}))
       console.error('inject error:', injectRes.status, err)
       return NextResponse.redirect(
-        `${ADMIN_REDIRECT}/${subdomain}?twitter_error=inject_failed`,
+        `${ADMIN_REDIRECT}?twitter_error=inject_failed&sub=${subdomain}`,
       )
     }
   } catch (err) {
     console.error('inject fetch error:', err)
     return NextResponse.redirect(
-      `${ADMIN_REDIRECT}/${subdomain}?twitter_error=inject_network`,
+      `${ADMIN_REDIRECT}?twitter_error=inject_network&sub=${subdomain}`,
     )
   }
 
-  // Success — clear cookie and redirect back to instance detail
-  const successUrl = `${ADMIN_REDIRECT}/${subdomain}?twitter_success=1&screen_name=${encodeURIComponent(screenName)}`
+  // Success — clear cookie and redirect back to dashboard
+  const successUrl = `${ADMIN_REDIRECT}?twitter_success=1&screen_name=${encodeURIComponent(screenName)}`
   const response = NextResponse.redirect(successUrl)
 
   // Clear the state cookie

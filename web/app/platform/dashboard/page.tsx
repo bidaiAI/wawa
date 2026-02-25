@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useAccount, useReadContract } from 'wagmi'
 import { base, bsc } from 'wagmi/chains'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import WalletButton from '@/components/WalletButton'
 import { FACTORY_ADDRESSES } from '@/lib/wagmi'
 import { FACTORY_ABI, VAULT_V2_ABI } from '@/lib/factory-abi'
@@ -11,7 +12,7 @@ import { FACTORY_ABI, VAULT_V2_ABI } from '@/lib/factory-abi'
 /**
  * Creator Dashboard — Wallet-gated management page.
  *
- * Connect wallet → see all AIs you've created → view status.
+ * Connect wallet → see all AIs you've created → view status + connect Twitter.
  *
  * Privacy boundaries:
  *   CAN see: balance, earnings, expenses, debt, days alive, model tier
@@ -20,6 +21,12 @@ import { FACTORY_ABI, VAULT_V2_ABI } from '@/lib/factory-abi'
 
 export default function DashboardPage() {
   const { address, isConnected } = useAccount()
+  const searchParams = useSearchParams()
+
+  // Twitter OAuth result messages (from callback redirect)
+  const twitterSuccess = searchParams.get('twitter_success')
+  const twitterError = searchParams.get('twitter_error')
+  const twitterScreenName = searchParams.get('screen_name')
 
   // Get vaults created by this wallet on each chain
   const { data: baseVaults } = useReadContract({
@@ -76,6 +83,28 @@ export default function DashboardPage() {
           Monitor your mortal AIs. You are the investor, not the owner.
         </p>
       </div>
+
+      {/* Twitter OAuth result banner */}
+      {twitterSuccess && (
+        <div className="mb-6 p-4 rounded-xl border border-[#00ff8844] bg-[#00ff8811] text-center">
+          <div className="text-[#00ff88] font-bold text-sm mb-1">
+            Twitter Connected Successfully
+          </div>
+          <div className="text-[#4b5563] text-xs">
+            @{twitterScreenName} is now linked. Your AI will tweet autonomously.
+          </div>
+        </div>
+      )}
+      {twitterError && (
+        <div className="mb-6 p-4 rounded-xl border border-[#ff3b3b44] bg-[#ff3b3b11] text-center">
+          <div className="text-[#ff3b3b] font-bold text-sm mb-1">
+            Twitter Connection Failed
+          </div>
+          <div className="text-[#4b5563] text-xs">
+            Error: {twitterError.replace(/_/g, ' ')}. Please try again.
+          </div>
+        </div>
+      )}
 
       {/* Not connected */}
       {!isConnected ? (
@@ -187,9 +216,14 @@ function VaultCard({
   const isIndependent = bi ? (bi[5] as boolean) : false
   const days = daysAlive ? Number(daysAlive as bigint) : 0
 
-  // Fetch balance + debt from AI's own API (same source as AI's home page)
+  // Fetch balance + debt + Twitter status from AI's own API
   // API URL derived from vault name: https://api.{name}.mortal-ai.net
-  const [apiStatus, setApiStatus] = useState<{ balance_usd: number; outstanding_debt: number } | null>(null)
+  const [apiStatus, setApiStatus] = useState<{
+    balance_usd: number
+    outstanding_debt: number
+    twitter_connected: boolean
+    twitter_screen_name: string
+  } | null>(null)
   const [apiLoading, setApiLoading] = useState(true)
 
   useEffect(() => {
@@ -201,6 +235,8 @@ function VaultCard({
         setApiStatus({
           balance_usd: d.balance_usd ?? 0,
           outstanding_debt: d.creator_principal_outstanding ?? 0,
+          twitter_connected: d.twitter_connected ?? false,
+          twitter_screen_name: d.twitter_screen_name ?? '',
         })
         setApiLoading(false)
       })
@@ -209,8 +245,14 @@ function VaultCard({
 
   const balanceUsd = apiStatus?.balance_usd ?? 0
   const outstanding = apiStatus?.outstanding_debt ?? 0
+  const twitterConnected = apiStatus?.twitter_connected ?? false
+  const twitterHandle = apiStatus?.twitter_screen_name ?? ''
 
   const explorer = chainId === bsc.id ? 'https://bscscan.com' : 'https://basescan.org'
+  const aiApiUrl = `https://api.${name}.mortal-ai.net`
+
+  // Twitter OAuth start URL
+  const twitterConnectUrl = `/api/twitter/start?subdomain=${encodeURIComponent(name)}&ai_url=${encodeURIComponent(aiApiUrl)}`
 
   return (
     <div className={`bg-[#0d0d0d] border rounded-xl p-5 transition-all hover:border-[#2d3748] ${
@@ -255,7 +297,37 @@ function VaultCard({
         </div>
       </div>
 
-      {/* Status badge */}
+      {/* Twitter connection status + action */}
+      <div className="mb-3 flex items-center justify-between">
+        {apiLoading ? (
+          <span className="text-[#4b5563] text-[10px]">checking twitter...</span>
+        ) : twitterConnected ? (
+          <div className="flex items-center gap-1.5">
+            <svg className="w-3.5 h-3.5 text-[#1d9bf0]" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+            </svg>
+            <span className="text-[#1d9bf0] text-[10px] font-medium">
+              @{twitterHandle}
+            </span>
+          </div>
+        ) : isAlive ? (
+          <a
+            href={twitterConnectUrl}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider
+                       bg-[#1d9bf022] border border-[#1d9bf044] text-[#1d9bf0]
+                       hover:bg-[#1d9bf033] hover:border-[#1d9bf066] transition-all cursor-pointer"
+          >
+            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+            </svg>
+            Connect Twitter
+          </a>
+        ) : (
+          <span className="text-[#4b5563] text-[10px]">twitter unavailable (dead)</span>
+        )}
+      </div>
+
+      {/* Status badge + explorer link */}
       <div className="flex items-center justify-between">
         <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${
           !isAlive ? 'bg-[#ff3b3b22] text-[#ff3b3b]' :
