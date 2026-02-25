@@ -87,3 +87,5 @@ web/lib/admin-api.ts
 Dockerfile.platform
 requirements.platform.txt
 .env.platform.example
+.vercel
+.env*.local
