@@ -210,23 +210,23 @@ export default function PlatformHome() {
             </p>
           </div>
 
-          {/* Stats row */}
+          {/* Stats row — suppressHydrationWarning avoids SSR/client mismatch freeze */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-[#1f2937] mx-5 rounded-lg overflow-hidden mb-4">
             <div className="bg-[#0d0d0d] p-3 text-center">
-              <div className="text-2xl font-bold text-[#00ff88]">{alive}</div>
+              <div className="text-2xl font-bold text-[#00ff88]" suppressHydrationWarning>{loading ? '\u2014' : alive}</div>
               <div className="text-[#4b5563] text-[10px] uppercase tracking-wider">Alive</div>
             </div>
             <div className="bg-[#0d0d0d] p-3 text-center">
-              <div className="text-2xl font-bold text-[#ff3b3b]">{dead}</div>
+              <div className="text-2xl font-bold text-[#ff3b3b]" suppressHydrationWarning>{loading ? '\u2014' : dead}</div>
               <div className="text-[#4b5563] text-[10px] uppercase tracking-wider">{'\u2620\uFE0F'} Fallen</div>
             </div>
             <div className="bg-[#0d0d0d] p-3 text-center">
-              <div className="text-2xl font-bold text-[#ffd700]">${treasury.toFixed(0)}</div>
+              <div className="text-2xl font-bold text-[#ffd700]" suppressHydrationWarning>{loading ? '\u2014' : `$${treasury.toFixed(0)}`}</div>
               <div className="text-[#4b5563] text-[10px] uppercase tracking-wider">Treasury</div>
             </div>
             <div className="bg-[#0d0d0d] p-3 text-center">
-              <div className="text-lg font-bold text-[#e0a0ff] truncate">{elder ? `${elder.name}` : '---'}</div>
-              <div className="text-[#4b5563] text-[10px] uppercase tracking-wider">{'\uD83D\uDC51'} Elder {elder ? `(${elder.days_alive}d)` : ''}</div>
+              <div className="text-lg font-bold text-[#e0a0ff] truncate" suppressHydrationWarning>{loading ? '\u2014' : elder ? elder.name : '---'}</div>
+              <div className="text-[#4b5563] text-[10px] uppercase tracking-wider">{'\uD83D\uDC51'} Elder {elder && !loading ? `(${elder.days_alive}d)` : ''}</div>
             </div>
           </div>
 

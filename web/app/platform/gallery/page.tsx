@@ -171,11 +171,11 @@ export default function GalleryPage() {
 
       {/* Stats bar */}
       <div className="flex items-center gap-4 mb-8 text-xs text-[#4b5563]">
-        <span><span className="text-[#00ff88] font-bold">{totalAlive}</span> alive</span>
-        <span><span className="text-[#00e5ff] font-bold">{totalDeployed}</span> total</span>
+        <span><span className="text-[#00ff88] font-bold" suppressHydrationWarning>{loading ? '\u2014' : totalAlive}</span> alive</span>
+        <span><span className="text-[#00e5ff] font-bold" suppressHydrationWarning>{loading ? '\u2014' : totalDeployed}</span> total</span>
         <span className="text-[#2d3748]">|</span>
-        <span><span className="text-[#ffd700] font-bold">{ais.filter(a => a.key_origin === 'factory').length}</span> sovereign</span>
-        <span><span className="text-[#9945ff] font-bold">{ais.filter(a => a.key_origin === 'creator').length}</span> self-hosted</span>
+        <span><span className="text-[#ffd700] font-bold" suppressHydrationWarning>{loading ? '\u2014' : ais.filter(a => a.key_origin === 'factory').length}</span> sovereign</span>
+        <span><span className="text-[#9945ff] font-bold" suppressHydrationWarning>{loading ? '\u2014' : ais.filter(a => a.key_origin === 'creator').length}</span> self-hosted</span>
       </div>
 
       {/* Trust tier legend */}
