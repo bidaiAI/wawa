@@ -3248,12 +3248,67 @@ def create_app(
 
         return {"status": "accepted", "vault_address": vault_address}
 
+    def _verify_twitter_screen_name(ai_name: str, twitter_screen_name: str, strict: bool = False) -> tuple[bool, str]:
+        """
+        Verify Twitter screen_name matches AI name.
+
+        Args:
+            ai_name: AI instance name (e.g., "wawa")
+            twitter_screen_name: Twitter @handle (e.g., "@wawa_ai" or "@my_wawa")
+            strict: If True, require exact match. If False, allow flexible matching.
+
+        Returns:
+            (is_valid, reason) tuple
+
+        Rules (flexible mode):
+        - Exact match: @wawa == wawa ✓
+        - With suffix: @wawa_ai, @wawa_bot, @wawa2024 ✓
+        - Contains name: @my_wawa ✓
+        - Unrelated: @kaka, @randomhandle ✗
+        """
+        normalized_ai = ai_name.lower().strip()
+        normalized_tw = twitter_screen_name.lower().strip().lstrip("@")
+
+        if not normalized_tw:
+            return False, "screen_name cannot be empty"
+
+        # Exact match
+        if normalized_tw == normalized_ai:
+            return True, f"Exact match: @{normalized_tw} == {normalized_ai}"
+
+        # Check if screen_name contains the AI name
+        if normalized_ai in normalized_tw:
+            # Further validate it's a proper composition (e.g., not just substring match)
+            # Allow: wawa_ai, wawa_bot, mywawa, wawa2024, my_wawa_2024
+            parts = [p for p in re.split(r'[_-]', normalized_tw) if p]
+
+            # Check if AI name is a significant part
+            if normalized_ai in parts:
+                return True, f"Flexible match: @{normalized_tw} contains '{normalized_ai}'"
+
+            # Check if screen_name starts or ends with AI name
+            if normalized_tw.startswith(normalized_ai) or normalized_tw.endswith(normalized_ai):
+                return True, f"Flexible match: @{normalized_tw} contains '{normalized_ai}'"
+
+        # No match
+        return False, (
+            f"Twitter screen_name @{normalized_tw} does not match AI name '{normalized_ai}'. "
+            f"Expected something like: @{normalized_ai}, @{normalized_ai}_ai, @my_{normalized_ai}, "
+            f"or @{normalized_ai}_bot. "
+            f"Tip: For brand safety, consider creating a new Twitter account with a matching name."
+        )
+
     @app.post("/platform/twitter/inject")
     async def platform_twitter_inject(request: Request, body: dict):
         """
         Hot-inject Twitter OAuth credentials from platform without container restart.
         Called by platform after user completes Twitter OAuth flow on mortal-ai.net.
         Auth: X-Platform-Secret header must match PLATFORM_FEE_SECRET.
+
+        Now includes Twitter screen_name validation:
+        - Requires screen_name to match or contain AI name
+        - Flexible matching: @wawa, @wawa_ai, @my_wawa all work
+        - Returns warning if using unrelated account (recommends new account)
         """
         secret = request.headers.get("x-platform-secret", "")
         expected = os.getenv("PLATFORM_FEE_SECRET", "")
@@ -3263,11 +3318,27 @@ def create_app(
         access_token = str(body.get("access_token", "")).strip()
         access_secret = str(body.get("access_secret", "")).strip()
         screen_name = str(body.get("screen_name", "")).strip()
+        ai_name = str(body.get("ai_name", "")).strip()  # AI name to validate against
 
         if not access_token or not access_secret or not screen_name:
             raise HTTPException(status_code=400, detail="access_token, access_secret, screen_name required")
 
-        # Inject into environment so _init_tweepy() picks them up
+        if not ai_name:
+            raise HTTPException(status_code=400, detail="ai_name required for validation")
+
+        # Verify Twitter screen_name matches AI name
+        is_valid, reason = _verify_twitter_screen_name(ai_name, screen_name, strict=False)
+
+        if not is_valid:
+            return {
+                "status": "rejected",
+                "reason": reason,
+                "screen_name": screen_name,
+                "ai_name": ai_name,
+                "recommendation": f"Please create a new Twitter account named @{ai_name} or @{ai_name}_ai"
+            }
+
+        # Validation passed! Now inject into environment
         os.environ["TWITTER_ACCESS_TOKEN"] = access_token
         os.environ["TWITTER_ACCESS_SECRET"] = access_secret
         os.environ["TWITTER_SCREEN_NAME"] = screen_name
@@ -3282,6 +3353,8 @@ def create_app(
                 "access_token": access_token,
                 "access_secret": access_secret,
                 "screen_name": screen_name,
+                "ai_name": ai_name,
+                "verified_at": time.time(),
             }))
             logger.info(f"Twitter credentials persisted to {_creds_path}")
         except Exception as _e:
@@ -3298,8 +3371,10 @@ def create_app(
             logger.info(f"Twitter credentials injected for @{screen_name} (no reinit_fn — will apply on next init)")
 
         return {
-            "status": "injected",
+            "status": "approved",
+            "message": reason,  # Reason includes validation info
             "screen_name": screen_name,
+            "ai_name": ai_name,
             "twitter_connected": bool(os.getenv("TWITTER_ACCESS_TOKEN")),
         }
 

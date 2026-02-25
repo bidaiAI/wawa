@@ -25,6 +25,54 @@ from core.constitution import IRON_LAWS
 logger = logging.getLogger("mortal.twitter")
 
 
+class PlatformMentionRateLimiter:
+    """
+    Platform-level rate limiter for all mention replies (not per-AI).
+
+    Purpose: Protect Twitter developer account from API limits
+    - All AIs reply freely (no individual AI limits)
+    - Platform enforces global quota: 100 replies / 15 min window
+    - When quota exhausted: pause ALL mention replies until window resets
+    - Prevents hitting Twitter API limit (450 requests / 15 min)
+
+    Design: Simple, protective, fair to all AIs
+    """
+
+    def __init__(self, max_replies_per_15min: int = 100):
+        self._max_replies = max_replies_per_15min
+        self._replies_in_window: int = 0
+        self._window_start: float = time.time()
+        logger.info(f"Platform mention rate limiter initialized: {max_replies_per_15min} replies / 15min")
+
+    async def can_reply(self) -> bool:
+        """Check if platform still has quota for mention replies."""
+        now = time.time()
+
+        # Reset window if 15 minutes have passed
+        if now - self._window_start >= 900:  # 900 seconds = 15 minutes
+            self._replies_in_window = 0
+            self._window_start = now
+
+        # Check if quota available
+        if self._replies_in_window >= self._max_replies:
+            remaining = 900 - (now - self._window_start)
+            logger.warning(
+                f"Platform mention quota exhausted: {self._replies_in_window}/{self._max_replies} "
+                f"(resets in {remaining:.0f}s)"
+            )
+            return False
+
+        return True
+
+    def record_reply(self, count: int = 1):
+        """Record mention reply(ies) against platform quota."""
+        self._replies_in_window += count
+        if self._replies_in_window % 10 == 0 or self._replies_in_window >= self._max_replies:
+            logger.debug(
+                f"Platform mention quota: {self._replies_in_window}/{self._max_replies} in current 15min window"
+            )
+
+
 class TweetType(Enum):
     # Fixed daily schedule
     MORNING_REPORT = "morning_report"         # Balance + overnight summary
@@ -98,6 +146,9 @@ class TwitterAgent:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
+        # Get AI name from environment (or vault manager) for rate limiting tier detection
+        self.name = os.getenv("AI_NAME", "mortal")
+
         self.schedule = list(DEFAULT_SCHEDULE)
         self.tweet_history: list[TweetRecord] = []
         self.daily_tweet_count: int = 0
@@ -127,6 +178,7 @@ class TwitterAgent:
         self._MENTION_SCAN_INTERVAL: float = 150.0     # 2.5 min between scans (was 5)
         # Track normalized question patterns → count (for deep-think escalation)
         self._question_counts: dict[str, int] = {}
+
 
     def set_generate_function(self, fn: callable):
         """Set LLM tweet generation function.
@@ -186,6 +238,21 @@ class TwitterAgent:
         - fn.search(query) -> list[dict] (returns matching entries)
         """
         self._memory_fn = fn
+
+    def set_vault_status_function(self, fn: callable):
+        """Set vault status function for balance-based rate limiting.
+
+        Used by MentionReplyRateLimiter to determine dynamic rate limits based on balance.
+        Expected interface:
+        - fn() -> dict with keys: balance_usd, ...
+
+        Rate tiers:
+        - $0-$100:      10min cooldown, 2/hour (Tier 1 - Poor)
+        - $100-$500:    5min cooldown, 5/hour  (Tier 2 - Growing)
+        - $500-$2000:   2min cooldown, 10/hour (Tier 3 - Thriving)
+        - $2000+:       Unlimited              (Tier 4 - Rich)
+        """
+        self._mention_rate_limiter._vault_status_fn = fn
 
     async def check_schedule(self) -> Optional[TweetRecord]:
         """Check if any scheduled tweet should fire now."""
@@ -350,6 +417,7 @@ class TwitterAgent:
         for mention in mentions[:5]:
             tweet_id = mention["id"]
             tweet_text = mention.get("text", "")
+            author_username = mention.get("author_username", "unknown").lstrip("@")
 
             # ── Check if we've already replied to this mention (deduplication) ──
             # Prevents duplicate replies if container restarts and _last_mention_id is lost
@@ -364,7 +432,14 @@ class TwitterAgent:
 
             # ── Skip prompt injection / malicious guidance tweets ──
             if _is_injection(tweet_text):
-                logger.warning(f"INJECTION BLOCKED: mention {tweet_id[:10]} from @{mention.get('author_username', '?')}: {tweet_text[:80]}...")
+                logger.warning(f"INJECTION BLOCKED: mention {tweet_id[:10]} from @{author_username}: {tweet_text[:80]}...")
+                continue
+
+            # ── User-level rate limiting (prevent spamming same user) ──
+            # Rule: max 1 reply per user per 5 minutes, max 5 per hour
+            if not await self._mention_rate_limiter.should_reply_to_user(author_username):
+                logger.info(f"Rate limited: skipping mention from @{author_username} (cooldown/hourly limit)")
+                self._last_mention_id = tweet_id  # Still update cursor
                 continue
 
             # Extract Ethereum addresses from tweet text
@@ -469,6 +544,9 @@ class TwitterAgent:
 
             except Exception as e:
                 logger.warning(f"scan_and_reply_mentions: reply generation failed: {e}")
+
+        # Periodic cleanup of expired rate limit entries (prevent memory leak)
+        self._mention_rate_limiter.cleanup_old_entries()
 
         return replies_sent
 

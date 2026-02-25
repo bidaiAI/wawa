@@ -93,7 +93,7 @@ from core.highlights import HighlightsEngine
 from core.purchasing import PurchaseManager, MerchantRegistry
 from core.decision_stream import DecisionStreamManager
 from core.autonomy_proof import AutonomyProofManager
-from twitter.agent import TwitterAgent, TweetType, TweetRecord
+from twitter.agent import TwitterAgent, TweetType, TweetRecord, PlatformMentionRateLimiter
 from api.server import create_app, Order
 
 
@@ -115,6 +115,7 @@ chain_executor = ChainExecutor()
 peer_verifier = PeerVerifier()
 highlights = HighlightsEngine()
 twitter = TwitterAgent()
+_platform_mention_limiter = PlatformMentionRateLimiter(max_replies_per_15min=100)
 giveaway_engine = GiveawayEngine()
 decision_stream = DecisionStreamManager(vault, memory, highlights, chain_executor)
 autonomy_proof = AutonomyProofManager(vault, memory, chain_executor)
@@ -4622,7 +4623,12 @@ async def _heartbeat_loop():
 
             # ---- TWITTER MENTION REPLY — scan @mentions, identify vault addresses ----
             try:
-                await twitter.scan_and_reply_mentions()
+                if await _platform_mention_limiter.can_reply():
+                    replies_sent = await twitter.scan_and_reply_mentions()
+                    if replies_sent > 0:
+                        _platform_mention_limiter.record_reply(replies_sent)
+                else:
+                    logger.debug("Heartbeat: platform mention quota exhausted for this 15min window")
             except Exception as e:
                 logger.warning(f"Heartbeat: mention reply scan failed: {e}")
 
