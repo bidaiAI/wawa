@@ -4992,6 +4992,11 @@ async def lifespan(app):
                 # Fallback: infer from vault_config structure or default to "factory"
                 vault.key_origin = "factory"
                 logger.info(f"Key origin defaulted to: factory")
+        else:
+            # No vault_config.json — still set key_origin if missing
+            if not vault.key_origin:
+                vault.key_origin = "factory"
+                logger.info(f"No vault_config; key_origin set to: factory")
 
             # ---- Bootstrap creator info from vault_config ----
             # If creator is missing from vault_state.json (e.g. first boot before
