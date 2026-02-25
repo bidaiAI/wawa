@@ -953,21 +953,33 @@ class ChainExecutor:
                         interest_rate = interest_rate_bps / 10000.0  # bps to decimal
 
                         # Check if already tracked in Python
+                        # Must match chain_id + loan_index (same wallet can lend on both chains)
                         already_tracked = False
                         for existing in vault_manager.lenders:
+                            # Exact match: chain_id + loan_index (most reliable)
                             if (
-                                existing.wallet.lower() == lender_addr.lower()
-                                and abs(existing.amount_usd - amount_usd) < 0.1
+                                getattr(existing, "chain_id", "") == chain_id
+                                and getattr(existing, "chain_loan_index", -1) == i
                             ):
-                                # Update repaid status from chain
                                 if repaid_usd > existing.total_repaid + 0.01:
                                     existing.total_repaid = repaid_usd
                                 if fully_repaid and not existing.repaid:
                                     existing.repaid = True
-                                # Ensure chain metadata is set (may be missing from old /notify-lend registrations)
-                                if not existing.chain_id:
-                                    existing.chain_id = chain_id
-                                    existing.chain_loan_index = i
+                                already_tracked = True
+                                break
+                            # Legacy match: wallet + amount WITHOUT chain_id set
+                            # (for entries from old /notify-lend without chain metadata)
+                            if (
+                                existing.wallet.lower() == lender_addr.lower()
+                                and abs(existing.amount_usd - amount_usd) < 0.1
+                                and not getattr(existing, "chain_id", "")
+                            ):
+                                if repaid_usd > existing.total_repaid + 0.01:
+                                    existing.total_repaid = repaid_usd
+                                if fully_repaid and not existing.repaid:
+                                    existing.repaid = True
+                                existing.chain_id = chain_id
+                                existing.chain_loan_index = i
                                 already_tracked = True
                                 break
 
