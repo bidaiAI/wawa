@@ -4792,7 +4792,7 @@ async def lifespan(app):
         def _post_reply():
             resp = _tweepy_client.create_tweet(
                 text=content,
-                reply={"in_reply_to_tweet_id": reply_to_id},
+                in_reply_to_tweet_id=reply_to_id,
             )
             return str(resp.data.get("id", "")) if resp.data else ""
         try:
