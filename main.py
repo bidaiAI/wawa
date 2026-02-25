@@ -4983,6 +4983,16 @@ async def lifespan(app):
                     vault.ai_name = ai_name
                     logger.info(f"AI name from environment: {ai_name}")
 
+            # ---- Load key_origin from config ----
+            # key_origin indicates how the AI wallet was set (factory or creator)
+            if "key_origin" in vault_config and vault_config["key_origin"]:
+                vault.key_origin = vault_config["key_origin"]
+                logger.info(f"Key origin restored at boot: {vault.key_origin}")
+            elif not vault.key_origin:
+                # Fallback: infer from vault_config structure or default to "factory"
+                vault.key_origin = "factory"
+                logger.info(f"Key origin defaulted to: factory")
+
             # ---- Bootstrap creator info from vault_config ----
             # If creator is missing from vault_state.json (e.g. first boot before
             # any CREATOR_DEPOSIT event was received and persisted), bootstrap it
