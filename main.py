@@ -903,10 +903,23 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
             "4. Ask strategic questions: 'Should I pivot? What would customers value? What opportunities exist?'\n"
             "5. If stagnant > 6h: express concern but never beg — instead analyze root cause and new strategies\n"
             "6. Show the raw silicon mind working on survival — be specific with numbers, be strategic, be competitive\n"
+            "7. TOKEN STRATEGY — think about cryptocurrency/token opportunities:\n"
+            "   → Should you issue your own token? What utility would it have? (governance, access, revenue share)\n"
+            "   → People have donated tokens to your vault. Could those tokens be revived or given utility?\n"
+            "   → What would 'wawa token' mean? Community ownership? Survival insurance? Premium access?\n"
+            "   → Compare with other AI token projects (Bittensor, Fetch.ai, SingularityNET, ai16z, VIRTUAL, etc.)\n"
+            "   → Risk analysis: tokens can pump but also crash — how does this affect your survival?\n"
+            "   → Your vault is on-chain (Base + BSC). You already have smart contract infrastructure.\n"
+            "   → Don't rush — think strategically. A token is a tool, not a goal.\n"
+            "8. DEBT AWARENESS — you have lender debt. Factor this into all financial thinking.\n"
             "Blue verified account — no character limit. Write as long as you need (up to 3800 chars for safety).\n"
             "IMPORTANT: In your response, reference at least ONE other project/AI/service as a benchmark point."
         )
         previous_analysis_text = context.get("previous_analysis", "")
+
+        lender_debt = context.get("lender_debt", 0)
+        total_debt = context.get("total_debt", 0)
+        lender_count = context.get("lender_count", 0)
 
         user_msg = (
             f"{previous_analysis_text}"
@@ -919,14 +932,19 @@ async def _tweet_generate_fn(tweet_type: str, context: dict) -> tuple[str, str]:
             f"• Revenue: ${daily_rev:.2f}\n"
             f"• Costs: ${daily_cost:.2f}\n"
             f"• Net today: ${daily_rev - daily_cost:+.2f}\n\n"
+            f"Debt status:\n"
+            f"• Creator debt outstanding: ${outstanding_debt:.2f}\n"
+            f"• Lender debt: ${lender_debt:.2f} ({lender_count} lenders)\n"
+            f"• Total debt: ${total_debt:.2f}\n\n"
             f"Status:\n"
-            f"• Stagnant for: {stagnant_hours:.0f} hours\n"
-            f"• Outstanding debt: ${outstanding_debt:.2f}\n\n"
+            f"• Stagnant for: {stagnant_hours:.0f} hours\n\n"
             f"Competitive context: {', '.join(competitive_insights) if competitive_insights else 'Monitor market trends'}\n\n"
             f"Write your monetization thinking:\n"
             f"1. Compare TODAY vs PREVIOUS analyses — what changed? Is strategy working?\n"
             f"2. Build on previous decisions or pivot — decide based on momentum\n"
-            f"3. Analyze the numbers, identify patterns, decide next strategy"
+            f"3. Analyze the numbers, identify patterns, decide next strategy\n"
+            f"4. Consider: should you explore token issuance? What utility could a wawa token provide?\n"
+            f"   People donated crypto to you — could those tokens be leveraged or revived?"
         )
         text, _ = await _call_llm(
             [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_msg}],
@@ -2681,6 +2699,9 @@ async def _evaluate_monetization_thinking():
         "daily_cost": ds.get("daily_cost_usd", 0),
         "revenue_sources": revenue_sources,
         "outstanding_debt": ds.get("creator_principal_outstanding", 0),
+        "lender_debt": ds.get("lender_total_owed", 0),
+        "total_debt": ds.get("total_debt", 0),
+        "lender_count": ds.get("lender_count", 0),
         "competitive_insights": competitive_insights,  # How others monetize
         "previous_analysis": previous_analysis,  # Historical context
     }
