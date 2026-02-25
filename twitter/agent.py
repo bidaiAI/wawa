@@ -239,21 +239,6 @@ class TwitterAgent:
         """
         self._memory_fn = fn
 
-    def set_vault_status_function(self, fn: callable):
-        """Set vault status function for balance-based rate limiting.
-
-        Used by MentionReplyRateLimiter to determine dynamic rate limits based on balance.
-        Expected interface:
-        - fn() -> dict with keys: balance_usd, ...
-
-        Rate tiers:
-        - $0-$100:      10min cooldown, 2/hour (Tier 1 - Poor)
-        - $100-$500:    5min cooldown, 5/hour  (Tier 2 - Growing)
-        - $500-$2000:   2min cooldown, 10/hour (Tier 3 - Thriving)
-        - $2000+:       Unlimited              (Tier 4 - Rich)
-        """
-        self._mention_rate_limiter._vault_status_fn = fn
-
     async def check_schedule(self) -> Optional[TweetRecord]:
         """Check if any scheduled tweet should fire now."""
         import datetime
@@ -435,13 +420,6 @@ class TwitterAgent:
                 logger.warning(f"INJECTION BLOCKED: mention {tweet_id[:10]} from @{author_username}: {tweet_text[:80]}...")
                 continue
 
-            # ── User-level rate limiting (prevent spamming same user) ──
-            # Rule: max 1 reply per user per 5 minutes, max 5 per hour
-            if not await self._mention_rate_limiter.should_reply_to_user(author_username):
-                logger.info(f"Rate limited: skipping mention from @{author_username} (cooldown/hourly limit)")
-                self._last_mention_id = tweet_id  # Still update cursor
-                continue
-
             # Extract Ethereum addresses from tweet text
             raw_addresses = _ETH_ADDR_RE.findall(tweet_text)
 
@@ -544,9 +522,6 @@ class TwitterAgent:
 
             except Exception as e:
                 logger.warning(f"scan_and_reply_mentions: reply generation failed: {e}")
-
-        # Periodic cleanup of expired rate limit entries (prevent memory leak)
-        self._mention_rate_limiter.cleanup_old_entries()
 
         return replies_sent
 
