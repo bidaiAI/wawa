@@ -1308,12 +1308,25 @@ def _twitter_get_mentions_sync(user_id: str, since_id: Optional[str] = None):
 
 async def _tweet_context_fn() -> dict:
     """Get current context for tweet generation."""
-    return {
+    ctx = {
         "vault": vault.get_status(),
+        "debt": vault.get_debt_summary(),
         "cost": cost_guard.get_status(),
         "memory_context": memory.build_context(max_tokens=200),
         "recent_orders": vault.get_recent_transactions(5),
     }
+    # Add chain-level debt info so AI knows the ACTUAL on-chain state
+    if chain_executor and chain_executor._initialized:
+        try:
+            chain_status = chain_executor.get_status()
+            ctx["chain_debt_note"] = (
+                "IMPORTANT: Always check debt.creator_principal_outstanding for remaining debt. "
+                "If outstanding > 0, you still owe money. Never claim debt is fully repaid unless "
+                "creator_principal_outstanding is exactly 0.00 and creator_debt_cleared is True."
+            )
+        except Exception:
+            pass
+    return ctx
 
 
 def _twitter_get_own_tweets_sync(user_id: str, max_results: int = 10) -> list[dict]:

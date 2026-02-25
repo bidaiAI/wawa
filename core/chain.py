@@ -862,10 +862,14 @@ class ChainExecutor:
                 vault_manager.creator.total_principal_repaid_usd = total_repaid
                 vault_manager.creator.principal_repaid = fully_repaid
             elif old_repaid > total_repaid + 0.01:
-                logger.info(
+                # Chain is the source of truth — adopt chain value.
+                # If Python is ahead, the tx likely failed or was never mined.
+                logger.warning(
                     f"DEBT SYNC: Python repaid=${old_repaid:.2f} > chain=${total_repaid:.2f}. "
-                    f"Python is ahead (tx likely in-flight) — keeping Python value."
+                    f"Chain is source of truth — correcting Python to match chain."
                 )
+                vault_manager.creator.total_principal_repaid_usd = total_repaid
+                vault_manager.creator.principal_repaid = fully_repaid
 
         # Sync birth timestamp from chain if Python doesn't have it
         if birth_timestamp and not vault_manager.birth_timestamp:
