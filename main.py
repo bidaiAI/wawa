@@ -2443,7 +2443,7 @@ async def _evaluate_autonomy_video() -> None:
       5. Growth spike >15% vs previous sample
       6. 6-hour periodic fallback (if <2 videos posted today)
 
-    Hard limits: max 4 per day, min 2 hours between videos, balance >= $200.
+    Hard limits: max 3 per day, min 2 hours between videos, balance >= $200.
     """
     global _last_autonomy_video, _daily_autonomy_video_count, _daily_autonomy_video_date
     global _last_known_days_alive_milestone, _last_known_balance_milestone
@@ -2455,7 +2455,7 @@ async def _evaluate_autonomy_video() -> None:
         _daily_autonomy_video_count = 0
         _daily_autonomy_video_date = today
 
-    # Hard cap: 4 per day
+    # Hard cap: 3 per day
     if _daily_autonomy_video_count >= _AUTONOMY_VIDEO_MAX_PER_DAY:
         return
 
@@ -5163,8 +5163,9 @@ async def lifespan(app):
             vault.ai_name = ai_name
             logger.info(f"AI name from environment (no vault_config): {ai_name}")
 
-    # Initialize autonomy video milestones to current state (prevent re-trigger on restart)
+    # Initialize autonomy video state to prevent re-trigger on restart
     global _last_known_days_alive_milestone, _last_known_balance_milestone
+    global _last_autonomy_video, _daily_autonomy_video_count, _daily_autonomy_video_date
     try:
         _boot_ds = vault.get_debt_summary()
         _boot_days = int(_boot_ds.get("days_alive", 0))
@@ -5176,11 +5177,21 @@ async def lifespan(app):
         for _m in [500, 1000, 2000, 5000, 10000]:
             if _boot_bal >= _m:
                 _last_known_balance_milestone = float(_m)
+        # CRITICAL: Initialize _last_autonomy_video to NOW so periodic_6h
+        # doesn't fire immediately on restart (needs 6h to elapse first).
+        # Also set daily date so counter doesn't reset mid-day on restart.
+        _last_autonomy_video = time.time()
+        _daily_autonomy_video_date = time.strftime("%Y-%m-%d", time.gmtime())
         logger.info(
-            f"Autonomy video milestones initialized: "
-            f"day={_last_known_days_alive_milestone}, balance=${_last_known_balance_milestone:.0f}"
+            f"Autonomy video state initialized: "
+            f"day_milestone={_last_known_days_alive_milestone}, "
+            f"balance_milestone=${_last_known_balance_milestone:.0f}, "
+            f"last_video=NOW (cooldown active), date={_daily_autonomy_video_date}"
         )
     except Exception as _e:
+        # Even on failure, set _last_autonomy_video to prevent immediate trigger
+        _last_autonomy_video = time.time()
+        _daily_autonomy_video_date = time.strftime("%Y-%m-%d", time.gmtime())
         logger.warning(f"Failed to initialize autonomy milestones: {_e}")
 
     # Start background tasks
