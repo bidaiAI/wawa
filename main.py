@@ -3581,9 +3581,9 @@ _last_monetization_video: float = 0.0  # Prevent too-frequent video generation
 _last_autonomy_video: float = 0.0           # Last autonomy video spawn time
 _daily_autonomy_video_count: int = 0        # Videos posted today
 _daily_autonomy_video_date: str = ""        # Date for counter reset
-_last_known_days_alive_milestone: int = 0   # Highest day-milestone triggered
-_last_known_balance_milestone: float = 0.0  # Highest balance-milestone triggered
-_AUTONOMY_VIDEO_MAX_PER_DAY: int = 4        # Hard cap: 4 videos per day
+_last_known_days_alive_milestone: int = 0   # Highest day-milestone triggered (initialized at boot)
+_last_known_balance_milestone: float = 0.0  # Highest balance-milestone triggered (initialized at boot)
+_AUTONOMY_VIDEO_MAX_PER_DAY: int = 3        # Hard cap: 3 videos per day
 _AUTONOMY_VIDEO_MIN_INTERVAL: int = 7200    # Min 2h between any two videos
 _repayment_just_executed: bool = False      # Flag set by _evaluate_repayment on success
 
@@ -5149,6 +5149,26 @@ async def lifespan(app):
         if ai_name and not vault.ai_name:
             vault.ai_name = ai_name
             logger.info(f"AI name from environment (no vault_config): {ai_name}")
+
+    # Initialize autonomy video milestones to current state (prevent re-trigger on restart)
+    global _last_known_days_alive_milestone, _last_known_balance_milestone
+    try:
+        _boot_ds = vault.get_debt_summary()
+        _boot_days = int(_boot_ds.get("days_alive", 0))
+        _boot_bal = float(_boot_ds.get("balance_usd", 0.0))
+        # Set milestone to highest already-reached value
+        for _m in [1, 3, 7, 14, 30, 60, 100]:
+            if _boot_days >= _m:
+                _last_known_days_alive_milestone = _m
+        for _m in [500, 1000, 2000, 5000, 10000]:
+            if _boot_bal >= _m:
+                _last_known_balance_milestone = float(_m)
+        logger.info(
+            f"Autonomy video milestones initialized: "
+            f"day={_last_known_days_alive_milestone}, balance=${_last_known_balance_milestone:.0f}"
+        )
+    except Exception as _e:
+        logger.warning(f"Failed to initialize autonomy milestones: {_e}")
 
     # Start background tasks
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
