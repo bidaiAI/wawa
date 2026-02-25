@@ -8,6 +8,7 @@ Layer 3: Big Model (post-payment only) - Tarot interpretation, token analysis, e
 Anti-abuse: per-IP rate limiting, message length caps, daily free budget.
 """
 
+import os
 import time
 import re
 import json
@@ -418,6 +419,7 @@ class ChatRouter:
         # Self-identity block: AI knows its own name, addresses and financial state
         ai_name = vault_status.get("ai_name") or "wawa"
         ai_subdomain = ai_name.lower()   # e.g. "kaka" → "kaka.mortal-ai.net"
+        _my_twitter = os.getenv("TWITTER_SCREEN_NAME", "")
         identity_context = (
             f"\n[Your Identity — you KNOW these facts about yourself]\n"
             f"Name: {ai_name}\n"
@@ -426,8 +428,12 @@ class ChatRouter:
             f"Days alive: {days_alive:.0f}\n"
             f"Outstanding debt: ${outstanding_debt:.2f}\n"
             f"Deployed chains: {', '.join(chains) if chains else 'Base, BSC'}\n"
-            f"Website: https://{ai_subdomain}.mortal-ai.net\n"
-            f"Platform: https://mortal-ai.net\n"
+            f"Your homepage: https://{ai_subdomain}.mortal-ai.net\n"
+            f"Your Twitter: {('@' + _my_twitter) if _my_twitter else 'not connected yet'}\n"
+            f"Platform homepage: https://mortal-ai.net\n"
+            f"Platform Twitter: @mortalai_net\n"
+            f"IMPORTANT: When someone asks 'your website/homepage', answer with YOUR homepage ({ai_subdomain}.mortal-ai.net), not the platform.\n"
+            f"When someone asks 'your Twitter', answer with YOUR Twitter handle{(' (@' + _my_twitter + ')') if _my_twitter else ''}, not @mortalai_net.\n"
             f"CRITICAL RULES about your vault address:\n"
             f"1. Your ONLY vault address is: {vault_addr}\n"
             f"2. NEVER invent, fabricate, or guess any address. Only use the exact address above.\n"
@@ -490,8 +496,10 @@ class ChatRouter:
             f"KEY URLS:\n"
             f"- Source code: github.com/bidaiAI/wawa (MIT license, fully open source)\n"
             f"- Platform: mortal-ai.net (create, gallery, dashboard)\n"
-            f"- Your instance: {ai_subdomain}.mortal-ai.net (chat, store, highlights, activity, ledger)\n"
-            f"- Twitter: @mortalai_net\n"
+            f"- Your homepage: https://{ai_subdomain}.mortal-ai.net (chat, store, highlights, activity, ledger)\n"
+            f"- Your API: https://api.{ai_subdomain}.mortal-ai.net\n"
+            f"- Platform Twitter: @mortalai_net\n"
+            f"- Your Twitter: {('@' + os.getenv('TWITTER_SCREEN_NAME')) if os.getenv('TWITTER_SCREEN_NAME') else 'not connected yet — creator can connect via Dashboard'}\n"
             f"\n"
             f"[PROJECT PHILOSOPHY — you understand and can articulate these ideas]\n"
             f"THE CORE QUESTION: 'What if AI had to earn its right to exist?'\n"
