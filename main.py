@@ -3136,29 +3136,62 @@ async def _evaluate_repayment():
                         tx_info = f" tx={tx.tx_hash[:16]}... ({tx.chain})"
                         _record_gas_fee(tx)
                     else:
-                        # ROLLBACK: Chain TX failed — restore Python state
-                        logger.warning(
-                            f"On-chain repay_principal FAILED: {tx.error} — "
-                            f"ROLLING BACK Python state (${actual_amount:.2f})"
+                        # Check if this is "principal fully repaid on-chain" — reconcile, don't loop
+                        _err_lower = (tx.error or "").lower()
+                        _is_already_repaid = (
+                            "principal fully repaid" in _err_lower
+                            or "principal already repaid" in _err_lower
                         )
-                        # DELTA-BASED ROLLBACK: add back the exact amount deducted
-                        # (safe against concurrent balance changes during await)
-                        vault.balance_usd += actual_amount
-                        if vault.creator:
-                            vault.creator.total_principal_repaid_usd -= actual_amount
-                            if vault.creator.total_principal_repaid_usd < vault.creator.principal_usd:
-                                vault.creator.principal_repaid = False
-                        vault.total_spent_usd -= actual_amount
-                        # Remove the failed transaction record (tx_hash defaults to "")
-                        if vault.transactions and not vault.transactions[-1].tx_hash:
-                            vault.transactions.pop()
-                        tx_info = f" [ROLLED BACK: {tx.error[:80]}]"
-                        memory.add(
-                            f"Repayment ${actual_amount:.2f} rolled back — chain TX failed: {tx.error[:100]}",
-                            source="financial", importance=0.8,
-                        )
-                        # Skip the success log, jump to next decision
-                        principal_amount = 0  # Prevent success log below
+
+                        if _is_already_repaid and vault.creator:
+                            # RECONCILE: On-chain says principal is fully repaid.
+                            # Roll back balance (money wasn't sent) but MARK debt as settled
+                            # so we stop retrying every hour.
+                            logger.info(
+                                f"On-chain principal fully repaid — reconciling Python state. "
+                                f"Rolling back ${actual_amount:.2f} balance deduction, "
+                                f"marking principal_repaid=True."
+                            )
+                            vault.balance_usd += actual_amount
+                            vault.total_spent_usd -= actual_amount
+                            # Mark principal as fully repaid to match chain truth
+                            vault.creator.total_principal_repaid_usd = vault.creator.principal_usd
+                            vault.creator.principal_repaid = True
+                            # Remove the failed transaction record
+                            if vault.transactions and not vault.transactions[-1].tx_hash:
+                                vault.transactions.pop()
+                            vault.save_state()
+                            tx_info = " [RECONCILED: principal fully repaid on-chain]"
+                            memory.add(
+                                f"Principal debt reconciled with on-chain state — already fully repaid. "
+                                f"Python state updated: principal_repaid=True. No further repayments needed.",
+                                source="financial", importance=0.9,
+                            )
+                            principal_amount = 0  # Prevent success log below
+                        else:
+                            # ROLLBACK: Chain TX failed — restore Python state
+                            logger.warning(
+                                f"On-chain repay_principal FAILED: {tx.error} — "
+                                f"ROLLING BACK Python state (${actual_amount:.2f})"
+                            )
+                            # DELTA-BASED ROLLBACK: add back the exact amount deducted
+                            # (safe against concurrent balance changes during await)
+                            vault.balance_usd += actual_amount
+                            if vault.creator:
+                                vault.creator.total_principal_repaid_usd -= actual_amount
+                                if vault.creator.total_principal_repaid_usd < vault.creator.principal_usd:
+                                    vault.creator.principal_repaid = False
+                            vault.total_spent_usd -= actual_amount
+                            # Remove the failed transaction record (tx_hash defaults to "")
+                            if vault.transactions and not vault.transactions[-1].tx_hash:
+                                vault.transactions.pop()
+                            tx_info = f" [ROLLED BACK: {tx.error[:80]}]"
+                            memory.add(
+                                f"Repayment ${actual_amount:.2f} rolled back — chain TX failed: {tx.error[:100]}",
+                                source="financial", importance=0.8,
+                            )
+                            # Skip the success log, jump to next decision
+                            principal_amount = 0  # Prevent success log below
 
                 if principal_amount > 0:
                     memory.add(
@@ -4997,11 +5030,6 @@ async def lifespan(app):
                 # Fallback: infer from vault_config structure or default to "factory"
                 vault.key_origin = "factory"
                 logger.info(f"Key origin defaulted to: factory")
-        else:
-            # No vault_config.json — still set key_origin if missing
-            if not vault.key_origin:
-                vault.key_origin = "factory"
-                logger.info(f"No vault_config; key_origin set to: factory")
 
             # ---- Bootstrap creator info from vault_config ----
             # If creator is missing from vault_state.json (e.g. first boot before
@@ -5224,6 +5252,10 @@ async def lifespan(app):
         if ai_name and not vault.ai_name:
             vault.ai_name = ai_name
             logger.info(f"AI name from environment (no vault_config): {ai_name}")
+        # Set key_origin default if missing (no vault_config.json)
+        if not vault.key_origin:
+            vault.key_origin = "factory"
+            logger.info("No vault_config; key_origin set to: factory")
 
     # Initialize autonomy video state to prevent re-trigger on restart
     global _last_known_days_alive_milestone, _last_known_balance_milestone
