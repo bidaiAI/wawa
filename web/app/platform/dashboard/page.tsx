@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Suspense } from 'react'
 import { useAccount, useReadContract } from 'wagmi'
 import { base, bsc } from 'wagmi/chains'
 import Link from 'next/link'
@@ -21,6 +21,19 @@ import { FACTORY_ABI, VAULT_V2_ABI } from '@/lib/factory-abi'
  *   CANNOT see: customer chat content, order inputs, customer wallets
  */
 
+// Next.js 16 requires useSearchParams() to be wrapped in <Suspense>
+export default function DashboardPageWrapper() {
+  return (
+    <Suspense fallback={
+      <div className="max-w-4xl mx-auto px-4 py-8 text-center">
+        <div className="text-[#4b5563] text-sm">Loading dashboard...</div>
+      </div>
+    }>
+      <DashboardPage />
+    </Suspense>
+  )
+}
+
 const MANUAL_AIS_KEY = 'mortal_dashboard_manual_ais'
 
 function getStoredManualAIs(): string[] {
@@ -36,7 +49,7 @@ function setStoredManualAIs(names: string[]) {
   localStorage.setItem(MANUAL_AIS_KEY, JSON.stringify(names))
 }
 
-export default function DashboardPage() {
+function DashboardPage() {
   const { address, isConnected } = useAccount()
   const searchParams = useSearchParams()
 
