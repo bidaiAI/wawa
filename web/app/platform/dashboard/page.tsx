@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useAccount, useReadContract } from 'wagmi'
 import { base, bsc } from 'wagmi/chains'
 import Link from 'next/link'
@@ -12,12 +12,29 @@ import { FACTORY_ABI, VAULT_V2_ABI } from '@/lib/factory-abi'
 /**
  * Creator Dashboard — Wallet-gated management page.
  *
- * Connect wallet → see all AIs you've created → view status + connect Twitter.
+ * Two ways to see your AIs:
+ *   1. Factory-created vaults (auto-detected from on-chain getCreatorVaults)
+ *   2. Manually added by AI name (for deploy_vault.py deployed instances)
  *
  * Privacy boundaries:
  *   CAN see: balance, earnings, expenses, debt, days alive, model tier
  *   CANNOT see: customer chat content, order inputs, customer wallets
  */
+
+const MANUAL_AIS_KEY = 'mortal_dashboard_manual_ais'
+
+function getStoredManualAIs(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(MANUAL_AIS_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch { return [] }
+}
+
+function setStoredManualAIs(names: string[]) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem(MANUAL_AIS_KEY, JSON.stringify(names))
+}
 
 export default function DashboardPage() {
   const { address, isConnected } = useAccount()
@@ -27,6 +44,15 @@ export default function DashboardPage() {
   const twitterSuccess = searchParams.get('twitter_success')
   const twitterError = searchParams.get('twitter_error')
   const twitterScreenName = searchParams.get('screen_name')
+
+  // Manual AI names (persisted in localStorage)
+  const [manualAIs, setManualAIs] = useState<string[]>([])
+  const [addInput, setAddInput] = useState('')
+  const [addError, setAddError] = useState('')
+
+  useEffect(() => {
+    setManualAIs(getStoredManualAIs())
+  }, [])
 
   // Get vaults created by this wallet on each chain
   const { data: baseVaults } = useReadContract({
@@ -57,8 +83,7 @@ export default function DashboardPage() {
     ...((bscVaults as `0x${string}`[] || []).map((v) => ({ address: v, chainId: bsc.id, chainName: 'BSC' }))),
   ]
 
-  // Deduplicate: same vault address deployed on multiple chains → single card with merged label
-  // (factory uses deterministic addresses, so the same vault can appear on Base + BSC)
+  // Deduplicate
   const allVaults = rawVaults.reduce((acc, vault) => {
     const existing = acc.find(v => v.address.toLowerCase() === vault.address.toLowerCase())
     if (existing) {
@@ -68,6 +93,36 @@ export default function DashboardPage() {
     }
     return acc
   }, [] as { address: `0x${string}`; chainId: number; chainName: string }[])
+
+  const hasAnyAIs = allVaults.length > 0 || manualAIs.length > 0
+
+  // Add manual AI
+  const handleAddManual = useCallback(async () => {
+    const name = addInput.trim().toLowerCase()
+    setAddError('')
+    if (!name) return
+    if (manualAIs.includes(name)) {
+      setAddError('Already added')
+      return
+    }
+    // Verify the AI exists by pinging its status endpoint
+    try {
+      const r = await fetch(`https://api.${name}.mortal-ai.net/status`, { signal: AbortSignal.timeout(8000) })
+      if (!r.ok) throw new Error('not found')
+      const updated = [...manualAIs, name]
+      setManualAIs(updated)
+      setStoredManualAIs(updated)
+      setAddInput('')
+    } catch {
+      setAddError(`Cannot reach api.${name}.mortal-ai.net — check the name`)
+    }
+  }, [addInput, manualAIs])
+
+  const handleRemoveManual = useCallback((name: string) => {
+    const updated = manualAIs.filter(n => n !== name)
+    setManualAIs(updated)
+    setStoredManualAIs(updated)
+  }, [manualAIs])
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
@@ -118,33 +173,17 @@ export default function DashboardPage() {
           </div>
           <WalletButton />
         </div>
-      ) : allVaults.length === 0 ? (
-        /* No AIs */
-        <div className="text-center py-16">
-          <div className="text-6xl mb-4 opacity-30">🥚</div>
-          <div className="text-[#4b5563] text-lg font-bold mb-2">
-            No AIs found for this wallet
-          </div>
-          <div className="text-[#2d3748] text-sm mb-6">
-            You haven&apos;t created any mortal AIs yet.
-          </div>
-          <Link
-            href="/create"
-            className="inline-block px-6 py-3 bg-[#00ff88] text-[#0a0a0a] font-bold rounded-xl
-                       text-sm uppercase tracking-wider hover:bg-[#00cc6a] transition-colors"
-          >
-            Create Your First AI
-          </Link>
-        </div>
       ) : (
-        /* AI List */
         <div>
+          {/* Wallet + actions bar */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
               <WalletButton />
-              <span className="text-[#4b5563] text-xs">
-                {allVaults.length} AI{allVaults.length !== 1 ? 's' : ''}
-              </span>
+              {hasAnyAIs && (
+                <span className="text-[#4b5563] text-xs">
+                  {allVaults.length + manualAIs.length} AI{(allVaults.length + manualAIs.length) !== 1 ? 's' : ''}
+                </span>
+              )}
             </div>
             <Link
               href="/create"
@@ -155,16 +194,77 @@ export default function DashboardPage() {
             </Link>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {allVaults.map((vault) => (
-              <VaultCard
-                key={`${vault.chainId}-${vault.address}`}
-                vaultAddress={vault.address}
-                chainId={vault.chainId}
-                chainName={vault.chainName}
+          {/* Factory-created vault cards */}
+          {allVaults.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              {allVaults.map((vault) => (
+                <VaultCard
+                  key={`${vault.chainId}-${vault.address}`}
+                  vaultAddress={vault.address}
+                  chainId={vault.chainId}
+                  chainName={vault.chainName}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Manually-added AI cards */}
+          {manualAIs.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              {manualAIs.map((name) => (
+                <ManualAICard
+                  key={name}
+                  name={name}
+                  onRemove={() => handleRemoveManual(name)}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Add AI by name */}
+          <div className="bg-[#0d0d0d] border border-[#1f2937] rounded-xl p-5">
+            <div className="text-[#6b7280] text-[10px] uppercase tracking-widest mb-3">
+              Add AI by name
+            </div>
+            <div className="text-[#4b5563] text-xs mb-3">
+              For AIs deployed with deploy_vault.py (not through the Factory contract).
+              Enter the AI&apos;s subdomain name to manage it here.
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="e.g. kaka"
+                value={addInput}
+                onChange={(e) => { setAddInput(e.target.value); setAddError('') }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAddManual() }}
+                className="flex-1 px-3 py-2 bg-[#111] border border-[#1f2937] rounded-lg text-[#d1d5db] text-sm
+                           placeholder-[#2d3748] focus:border-[#00ff8844] focus:outline-none transition-colors"
               />
-            ))}
+              <button
+                onClick={handleAddManual}
+                className="px-4 py-2 bg-[#00ff8822] border border-[#00ff8844] text-[#00ff88]
+                           rounded-lg text-sm font-bold hover:bg-[#00ff8833] transition-colors"
+              >
+                Add
+              </button>
+            </div>
+            {addError && (
+              <div className="text-[#ff3b3b] text-xs mt-2">{addError}</div>
+            )}
           </div>
+
+          {/* Empty state when nothing at all */}
+          {!hasAnyAIs && (
+            <div className="text-center py-12">
+              <div className="text-5xl mb-4 opacity-30">🥚</div>
+              <div className="text-[#4b5563] text-sm mb-2">
+                No factory-created AIs found for this wallet.
+              </div>
+              <div className="text-[#2d3748] text-xs">
+                Use the input above to add your self-hosted AI by name.
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -184,7 +284,163 @@ export default function DashboardPage() {
 }
 
 
-// ── Vault Card ──
+// ── Manual AI Card (API-only, no on-chain reads) ──
+function ManualAICard({
+  name,
+  onRemove,
+}: {
+  name: string
+  onRemove: () => void
+}) {
+  const [status, setStatus] = useState<{
+    balance_usd: number
+    outstanding_debt: number
+    twitter_connected: boolean
+    twitter_screen_name: string
+    is_alive: boolean
+    days_alive: number
+  } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    setLoading(true)
+    setError(false)
+    fetch(`https://api.${name}.mortal-ai.net/status`)
+      .then(r => r.json())
+      .then(d => {
+        setStatus({
+          balance_usd: d.balance_usd ?? 0,
+          outstanding_debt: d.creator_principal_outstanding ?? 0,
+          twitter_connected: d.twitter_connected ?? false,
+          twitter_screen_name: d.twitter_screen_name ?? '',
+          is_alive: d.is_alive ?? true,
+          days_alive: d.days_alive ?? 0,
+        })
+        setLoading(false)
+      })
+      .catch(() => { setError(true); setLoading(false) })
+  }, [name])
+
+  const aiApiUrl = `https://api.${name}.mortal-ai.net`
+  const twitterConnectUrl = `/api/twitter/start?subdomain=${encodeURIComponent(name)}&ai_url=${encodeURIComponent(aiApiUrl)}`
+
+  const isAlive = status?.is_alive ?? true
+  const twitterConnected = status?.twitter_connected ?? false
+  const twitterHandle = status?.twitter_screen_name ?? ''
+
+  return (
+    <div className={`bg-[#0d0d0d] border rounded-xl p-5 transition-all hover:border-[#2d3748] ${
+      error ? 'border-[#ff3b3b33] opacity-60' :
+      !isAlive ? 'border-[#ff3b3b33] opacity-60' :
+      'border-[#1f2937]'
+    }`}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full ${
+            error ? 'bg-[#4b5563]' :
+            !isAlive ? 'bg-[#ff3b3b]' :
+            'bg-[#00ff88] alive-pulse'
+          }`} />
+          <span className="text-[#d1d5db] font-bold">{name}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[#4b5563] text-[10px]">manual</span>
+          <button
+            onClick={onRemove}
+            className="text-[#4b5563] hover:text-[#ff3b3b] text-xs transition-colors"
+            title="Remove from dashboard"
+          >
+            x
+          </button>
+        </div>
+      </div>
+
+      {error ? (
+        <div className="text-[#ff3b3b] text-xs py-2">
+          Cannot reach api.{name}.mortal-ai.net
+        </div>
+      ) : loading ? (
+        <div className="text-[#4b5563] text-xs py-2">Loading...</div>
+      ) : (
+        <>
+          {/* Stats */}
+          <div className="grid grid-cols-3 gap-3 mb-3">
+            <div>
+              <div className="text-[#4b5563] text-[9px] uppercase">Balance</div>
+              <div className={`font-bold tabular-nums text-sm ${
+                (status?.balance_usd ?? 0) < 50 ? 'text-[#ff3b3b]' : 'text-[#00ff88]'
+              }`}>
+                ${(status?.balance_usd ?? 0).toFixed(2)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[#4b5563] text-[9px] uppercase">Debt</div>
+              <div className="text-[#ffd700] font-bold tabular-nums text-sm">
+                ${(status?.outstanding_debt ?? 0).toFixed(2)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[#4b5563] text-[9px] uppercase">Days</div>
+              <div className="text-[#d1d5db] font-bold tabular-nums text-sm">
+                {status?.days_alive ?? 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Twitter connection status + action */}
+          <div className="mb-3 flex items-center justify-between">
+            {twitterConnected ? (
+              <div className="flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5 text-[#1d9bf0]" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                </svg>
+                <span className="text-[#1d9bf0] text-[10px] font-medium">
+                  @{twitterHandle}
+                </span>
+              </div>
+            ) : isAlive ? (
+              <a
+                href={twitterConnectUrl}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider
+                           bg-[#1d9bf022] border border-[#1d9bf044] text-[#1d9bf0]
+                           hover:bg-[#1d9bf033] hover:border-[#1d9bf066] transition-all cursor-pointer"
+              >
+                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                </svg>
+                Connect Twitter
+              </a>
+            ) : (
+              <span className="text-[#4b5563] text-[10px]">twitter unavailable (dead)</span>
+            )}
+          </div>
+
+          {/* Status badge + link */}
+          <div className="flex items-center justify-between">
+            <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${
+              !isAlive ? 'bg-[#ff3b3b22] text-[#ff3b3b]' : 'bg-[#00ff8822] text-[#00ff88]'
+            }`}>
+              {!isAlive ? 'Dead' : 'Alive'}
+            </span>
+            <a
+              href={`https://${name}.mortal-ai.net`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[#4b5563] text-[10px] hover:text-[#d1d5db] transition-colors"
+            >
+              {name}.mortal-ai.net
+            </a>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+
+// ── Vault Card (on-chain + API) ──
 function VaultCard({
   vaultAddress,
   chainId,
@@ -217,7 +473,6 @@ function VaultCard({
   const days = daysAlive ? Number(daysAlive as bigint) : 0
 
   // Fetch balance + debt + Twitter status from AI's own API
-  // API URL derived from vault name: https://api.{name}.mortal-ai.net
   const [apiStatus, setApiStatus] = useState<{
     balance_usd: number
     outstanding_debt: number
