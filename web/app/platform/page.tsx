@@ -30,7 +30,7 @@ const CATEGORY_ICONS: Record<string, string> = {
   social: '\uD83D\uDC26', system: '\u2699\uFE0F', chain: '\u26D3\uFE0F',
 }
 
-async function fetchAIHealth(apiUrl: string): Promise<{
+async function fetchAIHealth(apiUrl: string, aiName?: string): Promise<{
   name: string; alive: boolean; balance_usd: number; days_alive: number; chain?: string; key_origin?: string
 } | null> {
   try {
@@ -38,7 +38,29 @@ async function fetchAIHealth(apiUrl: string): Promise<{
     if (!res.ok) return null
     const data = await res.json()
     return { name: data.ai_name || data.name || 'unknown', alive: data.alive ?? false, balance_usd: data.balance_usd ?? 0, days_alive: data.uptime_days ?? 0, chain: data.chain || 'base', key_origin: data.key_origin || '' }
-  } catch { return null }
+  } catch {
+    // Fallback: try to fetch from orchestrator API if direct health check fails
+    if (aiName) {
+      try {
+        const regRes = await fetch('https://api.mortal-ai.net/platform/registry', { signal: AbortSignal.timeout(5000) })
+        if (regRes.ok) {
+          const instances = await regRes.json()
+          const inst = instances.instances?.find((i: any) => i.ai_name === aiName || i.subdomain === aiName)
+          if (inst && inst.balance_usd !== undefined) {
+            return {
+              name: inst.ai_name,
+              alive: inst.status === 'alive',
+              balance_usd: inst.balance_usd ?? 0,
+              days_alive: inst.days_alive ?? 0,
+              chain: inst.chain || 'base',
+              key_origin: inst.key_origin || ''
+            }
+          }
+        }
+      } catch { /* ignore fallback failure */ }
+    }
+    return null
+  }
 }
 
 function timeAgo(ts: number): string {
@@ -66,9 +88,9 @@ export default function PlatformHome() {
   }, [])
 
   const loadData = useCallback(async () => {
-    // Health-check all platform-hosted AIs in parallel
+    // Health-check all platform-hosted AIs in parallel (with fallback to orchestrator API)
     const platformPromises = PLATFORM_AIS.map(async (pai): Promise<LiveAgent> => {
-      const data = await fetchAIHealth(pai.api_url)
+      const data = await fetchAIHealth(pai.api_url, pai.name)
       if (data) {
         return {
           name: data.name || pai.name, url: pai.web_url, chain: data.chain || 'base',
@@ -79,7 +101,7 @@ export default function PlatformHome() {
       return { name: pai.name, url: pai.web_url, chain: 'unknown', status: 'unreachable', balance_usd: 0, days_alive: 0, key_origin: '' }
     })
     const shPromises = KNOWN_SELFHOSTED.map(async (sh): Promise<LiveAgent> => {
-      const data = await fetchAIHealth(sh.api_url)
+      const data = await fetchAIHealth(sh.api_url, sh.name)
       if (data) {
         return { name: data.name || sh.name, url: sh.web_url, chain: data.chain || 'unknown', status: !data.alive ? 'dead' : data.balance_usd < 50 ? 'critical' : 'alive', balance_usd: data.balance_usd, days_alive: data.days_alive, key_origin: data.key_origin || '' }
       }
