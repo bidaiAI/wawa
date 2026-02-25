@@ -89,6 +89,8 @@ class LenderInfo:
     total_repaid: float = 0.0
     flagged: bool = False          # Silently flagged — repayment deferred 365+ days
     flag_reason: str = ""          # Internal audit trail (not exposed to users)
+    chain_id: str = ""             # Which chain this loan lives on ("base" or "bsc")
+    chain_loan_index: int = -1     # On-chain loans[] array index (for repayLoan call)
 
 # Minimum days before flagged loans become eligible for repayment
 FLAGGED_LOAN_DEFER_DAYS: int = 365
@@ -964,6 +966,8 @@ class VaultManager:
                     "total_repaid": round(l.total_repaid, 2),
                     "outstanding": round(max(0, l.amount_usd * (1 + l.interest_rate) - l.total_repaid), 2),
                     "repaid": l.repaid,
+                    "chain_id": getattr(l, "chain_id", ""),
+                    "chain_loan_index": getattr(l, "chain_loan_index", -1),
                 }
                 for l in self.lenders
             ],

@@ -405,6 +405,30 @@ VAULT_ABI = [
         "stateMutability": "nonpayable",
         "type": "function",
     },
+    # ---- LOAN SYNC: read on-chain lender data ----
+    # getLoanCount() → uint256
+    {
+        "inputs": [],
+        "name": "getLoanCount",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    # loans(uint256 index) → (lender, amount, interestRate, timestamp, repaid, fullyRepaid)
+    {
+        "inputs": [{"name": "", "type": "uint256"}],
+        "name": "loans",
+        "outputs": [
+            {"name": "lender", "type": "address"},
+            {"name": "amount", "type": "uint256"},
+            {"name": "interestRate", "type": "uint256"},
+            {"name": "timestamp", "type": "uint256"},
+            {"name": "repaid", "type": "uint256"},
+            {"name": "fullyRepaid", "type": "bool"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
 ]
 
 # Null address constant for checks
@@ -881,6 +905,120 @@ class ChainExecutor:
             f"repaid=${total_repaid:.2f}, fully_repaid={fully_repaid}"
         )
         return True
+
+    async def sync_loans_from_chain(self, vault_manager) -> int:
+        """
+        Read all on-chain loans and reconcile with Python's vault_manager.lenders.
+
+        Reads getLoanCount() + loans(i) from each chain contract.
+        Any loan NOT already tracked in Python (by wallet+amount match) is added
+        via register_lender(). Already-tracked loans get their repaid status updated.
+
+        Returns total number of new loans discovered and registered.
+        """
+        if not self._initialized:
+            return 0
+
+        new_loans_added = 0
+
+        for chain_id, chain in self._chains.items():
+            try:
+                # Step 1: read loan count
+                def _get_count(c=chain):
+                    return c["vault_contract"].functions.getLoanCount().call()
+
+                loan_count = await asyncio.get_running_loop().run_in_executor(
+                    None, _get_count
+                )
+
+                if loan_count == 0:
+                    logger.info(f"Loan sync [{chain_id}]: 0 loans on-chain")
+                    continue
+
+                decimals = chain["token_decimals"]
+
+                # Step 2: read each loan
+                for i in range(loan_count):
+                    try:
+                        def _get_loan(c=chain, idx=i):
+                            return c["vault_contract"].functions.loans(idx).call()
+
+                        result = await asyncio.get_running_loop().run_in_executor(
+                            None, _get_loan
+                        )
+                        lender_addr, amount_raw, interest_rate_bps, timestamp, repaid_raw, fully_repaid = result
+
+                        amount_usd = _raw_to_usd(amount_raw, decimals)
+                        repaid_usd = _raw_to_usd(repaid_raw, decimals)
+                        interest_rate = interest_rate_bps / 10000.0  # bps to decimal
+
+                        # Check if already tracked in Python
+                        already_tracked = False
+                        for existing in vault_manager.lenders:
+                            if (
+                                existing.wallet.lower() == lender_addr.lower()
+                                and abs(existing.amount_usd - amount_usd) < 0.1
+                            ):
+                                # Update repaid status from chain
+                                if repaid_usd > existing.total_repaid + 0.01:
+                                    existing.total_repaid = repaid_usd
+                                if fully_repaid and not existing.repaid:
+                                    existing.repaid = True
+                                # Ensure chain metadata is set (may be missing from old /notify-lend registrations)
+                                if not existing.chain_id:
+                                    existing.chain_id = chain_id
+                                    existing.chain_loan_index = i
+                                already_tracked = True
+                                break
+
+                        if not already_tracked and amount_usd > 0.01:
+                            vault_manager.register_lender(
+                                wallet=lender_addr,
+                                amount_usd=amount_usd,
+                                interest_rate=interest_rate,
+                                flagged=False,
+                                flag_reason="",
+                            )
+                            # Set chain-specific data for on-chain repayment
+                            new_lender = vault_manager.lenders[-1]
+                            new_lender.timestamp = float(timestamp)
+                            new_lender.chain_id = chain_id
+                            new_lender.chain_loan_index = i
+                            if repaid_usd > 0:
+                                new_lender.total_repaid = repaid_usd
+                            if fully_repaid:
+                                new_lender.repaid = True
+                            new_loans_added += 1
+                            logger.info(
+                                f"Loan sync [{chain_id}]: NEW loan #{i} from "
+                                f"{lender_addr[:10]}... ${amount_usd:.2f} "
+                                f"at {interest_rate*100:.1f}% "
+                                f"(repaid=${repaid_usd:.2f}, done={fully_repaid})"
+                            )
+
+                    except Exception as e:
+                        logger.warning(f"Loan sync [{chain_id}]: failed to read loan #{i}: {e}")
+
+                logger.info(
+                    f"Loan sync [{chain_id}]: {loan_count} loans on-chain, "
+                    f"{new_loans_added} newly registered"
+                )
+
+            except Exception as e:
+                logger.warning(f"Loan sync [{chain_id}]: failed to get loan count: {e}")
+
+        if new_loans_added > 0:
+            logger.info(
+                f"LOAN SYNC COMPLETE: {new_loans_added} new loans discovered from chain. "
+                f"Total lenders tracked: {len(vault_manager.lenders)}"
+            )
+        else:
+            logger.info(
+                f"Loan sync complete: all on-chain loans already tracked "
+                f"({len(vault_manager.lenders)} lenders)"
+            )
+
+        return new_loans_added
 
     async def verify_payment_tx(
         self,

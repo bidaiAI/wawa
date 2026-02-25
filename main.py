@@ -3186,7 +3186,13 @@ async def _evaluate_repayment():
                         actual_lender_amount = pre_balance_l - vault.balance_usd
                         tx_info = ""
                         if chain_executor._initialized:
-                            tx = await chain_executor.repay_loan(lender_idx, actual_lender_amount)
+                            # Use on-chain loan index and chain (not Python list index)
+                            _chain_loan_idx = getattr(lender, "chain_loan_index", lender_idx)
+                            _chain_id_for_loan = getattr(lender, "chain_id", None) or None
+                            tx = await chain_executor.repay_loan(
+                                _chain_loan_idx, actual_lender_amount,
+                                chain_id=_chain_id_for_loan,
+                            )
                             if tx.success:
                                 if vault.transactions:
                                     vault.transactions[-1].tx_hash = tx.tx_hash
@@ -4539,6 +4545,13 @@ async def _heartbeat_loop():
                 except Exception as e:
                     logger.warning(f"Heartbeat: debt sync failed: {e}")
 
+                # Also sync on-chain loans (discover lenders not tracked by Python)
+                try:
+                    if chain_executor._initialized:
+                        await chain_executor.sync_loans_from_chain(vault)
+                except Exception as e:
+                    logger.warning(f"Heartbeat: loan sync failed: {e}")
+
             # ---- AI-AUTONOMOUS REPAYMENT (hourly evaluation) ----
             if now - _last_repayment_eval >= _REPAYMENT_EVAL_INTERVAL:
                 _last_repayment_eval = now
@@ -5082,6 +5095,14 @@ async def lifespan(app):
                         logger.info("Debt state reconciled with on-chain data")
                 except Exception as e:
                     logger.warning(f"Failed to sync debt from chain at boot: {e}")
+
+                # Sync on-chain loans into Python lender tracking
+                try:
+                    new_loans = await chain_executor.sync_loans_from_chain(vault)
+                    if new_loans > 0:
+                        logger.info(f"Discovered {new_loans} on-chain loans not tracked by Python")
+                except Exception as e:
+                    logger.warning(f"Failed to sync loans from chain at boot: {e}")
 
                 # Read key origin (on-chain proof of who set AI wallet)
                 try:
