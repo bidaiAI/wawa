@@ -3078,12 +3078,31 @@ async def _evaluate_repayment():
                 actual_amount = pre_balance - vault.balance_usd
 
                 # Execute on-chain transaction.
-                # CHAIN-AWARE: pick the chain with the best solvency ratio
-                # to avoid pushing a borderline chain below the liquidation
-                # threshold (BUG-NEW-1 fix). Falls back to highest-balance
-                # chain if solvency data is unavailable.
+                # CRITICAL: If chain executor is not initialized, ROLLBACK immediately.
+                # Without on-chain execution, the repayment is a phantom (Python deducts
+                # but no USDT moves, creator never receives funds).
                 tx_info = ""
-                if chain_executor._initialized:
+                if not chain_executor._initialized:
+                    # ROLLBACK: chain executor not ready — phantom repayment prevention
+                    logger.warning(
+                        f"ChainExecutor NOT initialized — ROLLING BACK phantom repayment "
+                        f"of ${actual_amount:.2f}. No on-chain TX possible."
+                    )
+                    vault.balance_usd += actual_amount
+                    if vault.creator:
+                        vault.creator.total_principal_repaid_usd -= actual_amount
+                        if vault.creator.total_principal_repaid_usd < vault.creator.principal_usd:
+                            vault.creator.principal_repaid = False
+                    vault.total_spent_usd -= actual_amount
+                    if vault.transactions and not vault.transactions[-1].tx_hash:
+                        vault.transactions.pop()
+                    memory.add(
+                        f"Repayment ${actual_amount:.2f} blocked — chain executor not initialized. "
+                        f"Cannot send on-chain TX. Will retry when chain executor is ready.",
+                        source="financial", importance=0.9,
+                    )
+                    principal_amount = 0  # Skip success log
+                elif chain_executor._initialized:
                     target_chain_id = None
                     try:
                         chain_states = await chain_executor.get_per_chain_solvency()
