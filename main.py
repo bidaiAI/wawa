@@ -4815,6 +4815,9 @@ async def lifespan(app):
     # Wire model tier getter (for tracking which tier was used per reply)
     twitter.set_get_model_tier_function(lambda: cost_guard.get_current_tier().level)
 
+    # Wire memory system for mention deduplication (prevents duplicate replies on restart)
+    twitter.set_memory_function(memory)
+
     # Wire highlights engine
     async def _highlights_llm_fn(system_prompt: str, user_prompt: str) -> str:
         """LLM call for highlight evaluation."""

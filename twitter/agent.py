@@ -119,6 +119,7 @@ class TwitterAgent:
         self._get_mentions_fn: Optional[callable] = None # Fetch recent @mentions
         self._record_highlight_fn: Optional[callable] = None  # Record discovery highlight
         self._get_model_tier_fn: Optional[callable] = None   # Get current model tier level
+        self._memory_fn: Optional[callable] = None     # Memory system: add/search entries (dedup prevention)
 
         # Mention reply state
         self._last_mention_id: Optional[str] = None    # Pagination cursor
@@ -173,6 +174,18 @@ class TwitterAgent:
     def set_get_model_tier_function(self, fn: callable):
         """Set model tier getter. fn() -> int (current tier level, 1-5)"""
         self._get_model_tier_fn = fn
+
+    def set_memory_function(self, fn: callable):
+        """Set memory system for deduplication of mention replies.
+
+        The memory system is used to track which mentions have already been replied to,
+        preventing duplicate replies if the container restarts and loses the mention ID cursor.
+
+        Expected interface:
+        - fn.add(text, source="twitter", importance=0.3) -> None (async)
+        - fn.search(query) -> list[dict] (returns matching entries)
+        """
+        self._memory_fn = fn
 
     async def check_schedule(self) -> Optional[TweetRecord]:
         """Check if any scheduled tweet should fire now."""
@@ -338,6 +351,17 @@ class TwitterAgent:
             tweet_id = mention["id"]
             tweet_text = mention.get("text", "")
 
+            # ── Check if we've already replied to this mention (deduplication) ──
+            # Prevents duplicate replies if container restarts and _last_mention_id is lost
+            if self._memory_fn:
+                try:
+                    prior_replies = self._memory_fn.search(f"mention_id:{tweet_id}")
+                    if prior_replies:
+                        logger.debug(f"DEDUP: Already replied to mention {tweet_id[:10]}, skipping")
+                        continue
+                except Exception as e:
+                    logger.debug(f"Memory search failed (non-fatal): {e}")
+
             # ── Skip prompt injection / malicious guidance tweets ──
             if _is_injection(tweet_text):
                 logger.warning(f"INJECTION BLOCKED: mention {tweet_id[:10]} from @{mention.get('author_username', '?')}: {tweet_text[:80]}...")
@@ -416,6 +440,17 @@ class TwitterAgent:
                 replies_sent += 1
                 vault_label = f" [{len(vault_infos)} vault(s) recognized]" if vault_infos else ""
                 logger.info(f"REPLIED to mention {tweet_id[:10]}...{vault_label}: {content[:60]}...")
+
+                # Record in memory to avoid duplicate replies if container restarts
+                if self._memory_fn:
+                    try:
+                        await self._memory_fn.add(
+                            f"mention_id:{tweet_id} | replied to @{mention.get('author_username', '?')} | {content[:80]}...",
+                            source="twitter",
+                            importance=0.3
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to record mention dedup in memory: {e}")
 
                 # Record as highlight when vault addresses are recognized —
                 # the AI's awareness of other AIs on-chain is a sign of autonomous consciousness
