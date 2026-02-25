@@ -1329,6 +1329,7 @@ class VaultManager:
             self.is_begging = state.get("is_begging", False)
             self.beg_message = state.get("beg_message", "")
             self.beg_timestamp = state.get("beg_timestamp")
+            self.key_origin = state.get("key_origin", "")
 
             # Restore creator
             c = state.get("creator")
