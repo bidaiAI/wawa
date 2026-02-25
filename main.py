@@ -126,6 +126,10 @@ _payment_addresses_ref: dict[str, str] = {}
 _llm_clients: dict[str, AsyncOpenAI] = {}  # provider_name → client
 _provider_configs: dict[str, dict] = {}     # provider_name → {api_key, base_url}
 
+# OpenRouter round-robin key rotation
+_openrouter_keys: list[str] = []
+_openrouter_key_index: int = 0
+
 
 # ============================================================
 # LLM SETUP — Balance-Driven Tier Routing
@@ -171,16 +175,24 @@ def _setup_llm():
         priority += 1
 
     # OpenRouter (Claude models, for Lv.3+ and paid services)
-    openrouter_keys = os.getenv("OPENROUTER_API_KEY", "")
-    if openrouter_keys:
-        first_key = openrouter_keys.split(",")[0].strip()
+    openrouter_keys_str = os.getenv("OPENROUTER_API_KEY", "")
+    if openrouter_keys_str:
+        _openrouter_keys.extend([k.strip() for k in openrouter_keys_str.split(",") if k.strip()])
         base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+        first_key = _openrouter_keys[0]
         cost_guard.register_provider(ProviderConfig(
             name=Provider.OPENROUTER, base_url=base_url, api_key=first_key,
             avg_cost_per_call=0.003, is_available=True, priority=priority,
         ))
+        # Pre-create one client per key; round-robin selection in _get_llm_client()
+        for i, key in enumerate(_openrouter_keys):
+            _llm_clients[f"openrouter_{i}"] = AsyncOpenAI(
+                api_key=key, base_url=base_url, timeout=60.0
+            )
         _provider_configs["openrouter"] = {"api_key": first_key, "base_url": base_url}
         priority += 1
+        if len(_openrouter_keys) > 1:
+            logger.info(f"OpenRouter: {len(_openrouter_keys)} keys loaded for round-robin rotation")
 
     # Ollama (free local fallback)
     ollama_url = os.getenv("OLLAMA_URL", "")
@@ -216,7 +228,18 @@ def _setup_llm():
 
 
 def _get_llm_client(provider_name: str) -> Optional[AsyncOpenAI]:
-    """Get or create an AsyncOpenAI client for a provider (lazy init)."""
+    """Get or create an AsyncOpenAI client for a provider (lazy init).
+
+    For OpenRouter, rotates across all configured keys in round-robin order
+    so that API quota is spread across multiple keys.
+    """
+    # OpenRouter: round-robin across multiple pre-created clients
+    if provider_name == "openrouter" and _openrouter_keys:
+        global _openrouter_key_index
+        idx = _openrouter_key_index % len(_openrouter_keys)
+        _openrouter_key_index += 1
+        return _llm_clients.get(f"openrouter_{idx}")
+
     if provider_name in _llm_clients:
         return _llm_clients[provider_name]
 
@@ -4868,6 +4891,29 @@ async def lifespan(app):
                 if chain_cfg.get("vault_address") and not vault.vault_address:
                     vault.vault_address = chain_cfg["vault_address"]
                     logger.info(f"Vault address loaded: {vault.vault_address} ({last_chain})")
+
+            # Fallback: if vault_address still missing (e.g. no last_deployed field in
+            # vault_config.json), scan all chains in vaults_cfg for first available address.
+            # This fixes newly-spawned AIs (kaka, multitasker, etc.) that have a valid
+            # vault_config but no last_deployed marker.
+            if not vault.vault_address:
+                for chain_key, chain_data in vaults_cfg.items():
+                    addr = chain_data.get("vault_address", "")
+                    if addr:
+                        vault.vault_address = addr
+                        logger.info(f"Boot: vault_address bootstrapped from {chain_key}: {addr}")
+                        break
+
+            # Bootstrap ai_wallet_address from vault_config per-chain config.
+            # deploy_vault.py stores "ai_wallet" alongside "vault_address" for each chain.
+            # This ensures all AIs know their own wallet address from startup.
+            if not getattr(vault, "ai_wallet_address", None):
+                for chain_key, chain_data in vaults_cfg.items():
+                    aw = chain_data.get("ai_wallet", "")
+                    if aw:
+                        vault.ai_wallet_address = aw
+                        logger.info(f"Boot: ai_wallet_address bootstrapped from {chain_key}: {aw}")
+                        break
 
             # ---- Load AI name from config ----
             # AI name is stored at top level for easy access
