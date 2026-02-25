@@ -4904,6 +4904,11 @@ async def lifespan(app):
     if memory_restored:
         logger.info(f"Memory restored: {len(memory.raw)} raw entries")
 
+    # ---- Set key_origin after load_state (in case vault_state.json is missing it) ----
+    if not vault.key_origin:
+        vault.key_origin = "factory"
+        logger.info("Post-restore: key_origin set to factory")
+
     # Initial balance (from env or default for testing)
     # Only apply if vault wasn't restored from disk (i.e., truly first boot)
     initial_balance = float(os.getenv("INITIAL_BALANCE_USD", "0"))
