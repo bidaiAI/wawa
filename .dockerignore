@@ -3,10 +3,9 @@
 .env.*
 !.env.example
 
-# Platform-specific (private repo only)
-mortal_platform/
+# Platform-specific (excluded from public AI image, but must remain
+# accessible for Dockerfile.platform builds in private repo)
 Dockerfile.platform
-requirements.platform.txt
 .env.platform.example
 
 # Local tooling
